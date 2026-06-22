@@ -32,17 +32,19 @@
 #include <cstdlib>
 #include <cmath>
 #include <limits>
+#include <random>
 #include <vector>
 #include <algorithm>
 
 namespace {
 
-const double eps = std::numeric_limits<double>::epsilon();
-
-/* Byte alignment requested from mkl_malloc for the compact buffers. */
-const int compact_align = 64;
-
-double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
+/* Deterministic uniform reals in [-1, 1), seeded once for reproducibility. */
+std::mt19937_64 rng(42);
+double frand()
+{
+    static std::uniform_real_distribution<double> dist(-1.0, 1.0);
+    return dist(rng);
+}
 
 /* Report and abort on the spot if cond is false. */
 void check(bool cond, const char *what)
@@ -66,7 +68,10 @@ public:
     Matrix(int rows, int cols)
         : rows_(rows), cols_(cols), a_(rows * cols) {}
 
-    /* value semantics: copyable and movable via the defaults */
+    /* Plain value type (rule of five, all defaulted): std::vector already
+     * manages the storage, so no destructor is needed -- but once we spell
+     * out the copy operations we also spell out the moves, otherwise declaring
+     * the copies would suppress the implicit move members. */
     Matrix(const Matrix &)            = default;
     Matrix(Matrix &&)                 = default;
     Matrix &operator=(const Matrix &) = default;
@@ -111,7 +116,7 @@ std::vector<double *> base_ptrs(std::vector<Matrix> &batch)
     return p;
 }
 
-void solve(int nm, int n, int nrhs)
+void batch_solve(int nm, int n, int nrhs)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
 
@@ -138,6 +143,7 @@ void solve(int nm, int n, int nrhs)
     /* ===== Path 1: compact batch pipeline ============================== *
      * geqrf_compact -> dormqr_compact -> dtrsm_compact, all on the         *
      * interleaved buffers ap / taup / bp.                                  */
+    const int compact_align = 64;   /* byte alignment for the compact buffers */
     double *ap   = (double *)mkl_malloc(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
     double *taup = (double *)mkl_malloc(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
     double *bp   = (double *)mkl_malloc(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
@@ -145,14 +151,15 @@ void solve(int nm, int n, int nrhs)
     /* pack the dense batches into compact (interleaved) layout */
     {
         auto Aptr = base_ptrs(A);
-        auto Bptr = base_ptrs(B);
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n,    Aptr.data(), n, ap, n, fmt, nm);
+        auto Bptr = base_ptrs(B);
         mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, nm);
     }
 
     std::vector<MKL_INT> info(nm);
 
-    /* 1. compact QR: ap <- (H, R), taup <- tau   (workspace query first) */
+    /* 1. compact QR: ap <- (H, R), taup <- tau. geqrf needs real workspace,
+     *    so query the optimal size (lwork = -1) and allocate it. */
     double wq;
     mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info.data(), fmt, nm);
     MKL_INT lwork = (MKL_INT)wq;
@@ -160,11 +167,13 @@ void solve(int nm, int n, int nrhs)
     mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info.data(), fmt, nm);
     check_info(info, "mkl_dgeqrf_compact");
 
-    /* 2. apply Q^T to the RHS: bp <- Q^T B   (this repo's extension) */
+    /* 2. apply Q^T to the RHS: bp <- Q^T B   (this repo's extension). The
+     *    apply-Q kernel needs no workspace, so its minimum (and optimal)
+     *    lwork is 1 -- the same quick-return value reference LAPACK dormqr
+     *    reports -- and no query is required. */
+    double dummy;
     ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           ap, n, taup, bp, n, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           ap, n, taup, bp, n, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+                           ap, n, taup, bp, n, &dummy, 1, info.data(), fmt, nm);
     check_info(info, "ext_mkl_dormqr_compact");
 
     /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat */
@@ -197,6 +206,7 @@ void solve(int nm, int n, int nrhs)
         fwd_dgels   = std::max(fwd_dgels,   rel_diff(Xd[v], X));
     }
 
+    const double eps  = std::numeric_limits<double>::epsilon();
     const double rtol = 100.0 * n * eps;
     bool ok = (fwd_compact <= rtol && fwd_dgels <= rtol);
     std::printf("  nm=%-3d n=%-4d nrhs=%d | compact fwd %.2e  dgels fwd %.2e  "
@@ -209,15 +219,14 @@ void solve(int nm, int n, int nrhs)
 
 int main()
 {
-    std::srand(42);
     std::printf("Compact batch QR solve: mkl_dgeqrf_compact -> ext_mkl_dormqr_compact "
                 "-> mkl_dtrsm_compact  vs  per-matrix LAPACKE_dgels\n");
     std::printf("(compact format = %d)\n", (int)mkl_get_format_compact());
 
-    solve(8,  32,  5);
-    solve(16, 64,  4);
-    solve(7,  128, 3);    /* nm not a multiple of the SIMD width: padded last pack */
-    solve(4,  256, 1);
+    batch_solve(8,  32,  5);
+    batch_solve(16, 64,  4);
+    batch_solve(7,  128, 3);   /* nm not a multiple of the SIMD width: padded last pack */
+    batch_solve(4,  256, 1);
 
     std::printf("\nall checks passed\n");
     return 0;
