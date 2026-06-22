@@ -81,58 +81,81 @@ std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
     return p;
 }
 
-/* ---------------- Suite 1: isolated Q^T B (section 7.1) ---------------- */
+/* ---------------- Suite 1: isolated op(Q) C (section 7.1) -------------- */
 
-int suite1(int nm, int m, int n, int k)
+/* L1 (max column sum) norm of an m x n matrix in the given layout. */
+double norm1_layout(const double *M, int m, int n, bool rowmajor, int ld)
+{
+    double mx = 0;
+    for (int j = 0; j < n; ++j) {
+        double s = 0;
+        for (int i = 0; i < m; ++i)
+            s += std::abs(M[rowmajor ? (size_t)i * ld + j : i + (size_t)j * ld]);
+        mx = std::max(mx, s);
+    }
+    return mx;
+}
+
+/* Generalized Suite 1: validate ext_mkl_dormqr_compact's op(Q) application
+ * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x k
+ * reflector batch with s = m (side='L') or n (side='R'); C is m x n. */
+int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int  V = vlen(fmt);
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool left = (side == 'L' || side == 'l');
+    const int  s = left ? m : n;                    /* A is s x k, Q is s x s */
+    const int  lap = rowmajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR;
+    const int  ldH = rowmajor ? k : s;              /* dense leading dims */
+    const int  ldC = rowmajor ? n : m;
 
-    /* per-matrix dense data, each batch in one contiguous column-major buffer
-     * (matrix v at offset v*stride) */
-    const size_t sH = (size_t)m * k, sT = (size_t)k, sB = (size_t)m * n;
+    const size_t sH = (size_t)s * k, sT = (size_t)k, sB = (size_t)m * n;
     std::vector<double> H(nm * sH), tau(nm * sT), B(nm * sB), Bref(nm * sB), Bout(nm * sB);
 
     for (int v = 0; v < nm; ++v) {
         double *Hv = H.data() + v * sH, *tv = tau.data() + v * sT;
         double *Bv = B.data() + v * sB, *Rv = Bref.data() + v * sB;
         for (size_t i = 0; i < sH; ++i) Hv[i] = frand();
-        for (int i = 0; i < std::min(m, k); ++i) Hv[i + (size_t)i * m] += 2.0;
+        /* boost the (i,i) diagonal (same offset in both layouts) */
+        for (int i = 0; i < std::min(s, k); ++i) Hv[(size_t)i * ldH + i] += 2.0;
         /* turn H into a real Householder representation via dense QR */
-        LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, k, Hv, m, tv);
+        LAPACKE_dgeqrf(lap, s, k, Hv, ldH, tv);
         for (size_t i = 0; i < sB; ++i) Bv[i] = frand();
         std::copy(Bv, Bv + sB, Rv);
-        /* dense reference: Q^T B */
-        LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, n, k, Hv, m, tv, Rv, m);
+        /* dense reference: op(Q) C */
+        LAPACKE_dormqr(lap, side, trans, m, n, k, Hv, ldH, tv, Rv, ldC);
     }
 
-    /* pack into MKL Compact format */
+    /* pack into MKL Compact format (tau is a vector: layout-agnostic) */
     auto Hp = batch_ptrs<const double>(H.data(), nm, sH);
     auto Tp = batch_ptrs<const double>(tau.data(), nm, sT);
     auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
 
-    MKL_INT sz_a = mkl_dget_size_compact(m, k, fmt, nm);
+    MKL_INT sz_a = mkl_dget_size_compact(s, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
     double *ap   = (double *)mkl_malloc(sz_a, 64);
     double *taup = (double *)mkl_malloc(sz_t, 64);
     double *cp   = (double *)mkl_malloc(sz_c, 64);
 
-    mkl_dgepack_compact(MKL_COL_MAJOR, m, k, Hp.data(), m, ap, m, fmt, nm);
+    const MKL_INT ldap = rowmajor ? k : s;          /* compact leading dims */
+    const MKL_INT ldcp = rowmajor ? n : m;
+    mkl_dgepack_compact(layout, s, k, Hp.data(), ldH, ap, ldap, fmt, nm);
     mkl_dgepack_compact(MKL_COL_MAJOR, k, 1, Tp.data(), k, taup, k, fmt, nm);
-    mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Bp.data(), m, cp, m, fmt, nm);
+    mkl_dgepack_compact(layout, m, n, Bp.data(), ldC, cp, ldcp, fmt, nm);
 
-    /* routine under test */
+    /* routine under test (workspace query, then compute) */
     std::vector<MKL_INT> info(nm, 99);
     double wq;
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, n, k,
-                           ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, n, k,
-                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
+                           ap, ldap, taup, cp, ldcp, &wq, -1, info.data(), fmt, nm);
+    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
+                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, info.data(), fmt, nm);
 
     /* unpack and compare against the dense reference */
     auto Op = batch_ptrs<double>(Bout.data(), nm, sB);
-    mkl_dgeunpack_compact(MKL_COL_MAJOR, m, n, Op.data(), m, cp, m, fmt, nm);
+    mkl_dgeunpack_compact(layout, m, n, Op.data(), ldC, cp, ldcp, fmt, nm);
 
     int fails = 0;
     double worst = 0;
@@ -140,14 +163,15 @@ int suite1(int nm, int m, int n, int k)
         if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
         const double *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
         double resid = maxdiff(Bo, Rv, sB);
-        double rel = resid / std::max(norm1(Rv, m, n), 1e-300);
+        double rel = resid / std::max(norm1_layout(Rv, m, n, rowmajor, ldC), 1e-300);
         worst = std::max(worst, rel);
     }
-    const double rtol = 20.0 * n * eps;
+    const double rtol = 20.0 * s * eps;
     bool ok = (worst <= rtol);
     fails += !ok;
-    std::printf("  [suite1] V=%-2d nm=%-2d m=%-3d n=%d k=%-3d | QtB rel resid %.2e (rtol %.2e) %s\n",
-                V, nm, m, n, k, worst, rtol, ok ? "OK" : "FAIL");
+    std::printf("  [suite1] %s side=%c trans=%c V=%-2d nm=%-2d m=%-3d n=%-3d k=%-3d | rel resid %.2e (rtol %.2e) %s\n",
+                rowmajor ? "row" : "col", side, trans, V, nm, m, n, k,
+                worst, rtol, ok ? "OK" : "FAIL");
 
     mkl_free(ap); mkl_free(taup); mkl_free(cp);
     return fails;
@@ -256,10 +280,17 @@ int main()
                 (int)mkl_get_format_compact(), vlen(mkl_get_format_compact()));
 
     int fails = 0;
-    /* Suite 1: isolated Q^T B across batch sizes / shapes */
-    fails += suite1(8,  43, 5, 43);
-    fails += suite1(16, 64, 8, 64);
-    fails += suite1(11, 32, 4, 20);   /* k < m, padded partial last group */
+    /* Suite 1: isolated op(Q) C over the full feature matrix
+     * (layout x side x trans), across batch sizes / shapes. */
+    for (MKL_LAYOUT lay : {MKL_COL_MAJOR, MKL_ROW_MAJOR})
+        for (char side : {'L', 'R'})
+            for (char tr : {'N', 'T'}) {
+                /* side='L': A,Q are m x m (k<=m); side='R': n x n (k<=n) */
+                fails += suite1(lay, side, tr, 8,  43, 5, side == 'L' ? 43 : 5);
+                fails += suite1(lay, side, tr, 16, 32, 8, side == 'L' ? 32 : 8);
+                /* k < dim, padded partial last group */
+                fails += suite1(lay, side, tr, 11, 32, 6, side == 'L' ? 20 : 4);
+            }
 
     /* Suite 2: end-to-end solver, shapes from section 7.3 (32..512) */
     fails += suite2(8,  32, 5);

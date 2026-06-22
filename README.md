@@ -42,15 +42,19 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
   (SSE/AVX/AVX-512 → 2/4/8 for FP64, 4/8/16 for FP32) and dispatches to the
   templated kernel.
 * **Validation (§7):** `test_ext_mkl_ormqr_compact` runs Suite 1 (isolated
-  `Qᵀ B` vs dense LAPACK, gate `20·n·ε`) and Suite 2 (end-to-end `AX=B`:
-  `mkl_dgeqrf_compact → ext_mkl_dormqr_compact → mkl_dtrsm_compact`, gates on
-  forward error and system residual at `100·n·ε`) against real MKL.
+  `op(Q)·C` vs dense LAPACK, gate `20·s·ε`) over the full feature matrix —
+  `side ∈ {L,R} × layout ∈ {col,row} × trans ∈ {N,T}` — and Suite 2 (end-to-end
+  `AX=B`: `mkl_dgeqrf_compact → ext_mkl_dormqr_compact → mkl_dtrsm_compact`,
+  gates on forward error and system residual at `100·n·ε`) against real MKL.
 * **Padding (§6.4):** padded slots of the last compact pack carry identity
   factorizations (`τ=0`), so applying them is a no-op; exercised by the
   partial-group test cases.
 
-**Phase-1 scope / limitations (honest):** the kernel implements `side='L'`,
-`layout=MKL_COL_MAJOR`, `trans ∈ {N,T}` for FP64/FP32 — the Compact-format
-solver case the document validates. `side='R'` and `MKL_ROW_MAJOR` are reported
-as an illegal argument through `info[]` (never silently miscomputed) pending a
-future phase, consistent with LAPACK error conventions.
+**Feature coverage:** `side ∈ {'L','R'}`, `layout ∈ {MKL_COL_MAJOR,
+MKL_ROW_MAJOR}`, `trans ∈ {N,T}` (`C` folds to `T` for the real types) in
+FP64/FP32. The tuned contiguous kernel serves the `side='L'`, column-major
+solver path; the other three side/layout combinations run through a
+stride-generalized kernel (same unblocked `dorm2r` math, correctness-first —
+the non-contiguous inner sweep is not yet SIMD-tuned). Real types only
+(`d`/`s`); complex (`c`/`z`) is out of scope. Unsupported argument values are
+reported through `info[]` (never silently miscomputed), per LAPACK convention.

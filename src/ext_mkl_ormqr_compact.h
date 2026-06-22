@@ -23,9 +23,10 @@
  * length-`nm` array info[]: info[i] = 0 on success, or -j if the j-th argument
  * had an illegal value (LAPACK convention).
  *
- * Supported arguments: layout = MKL_COL_MAJOR, side = 'L'/'l',
- * trans = 'N'/'n' (Q) or 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32. Values
- * outside this set are reported through info[] rather than miscomputed.
+ * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
+ * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
+ * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32. Values outside this set are
+ * reported through info[] rather than miscomputed.
  */
 
 #include "mkl_types.h"
