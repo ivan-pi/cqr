@@ -44,7 +44,19 @@ namespace ormqr {
 /* pack<T,V>::type : the V-wide SIMD element                          */
 /* ------------------------------------------------------------------ */
 
-#if defined(__GNUC__) || defined(__clang__)
+/* Gate on the capability (the vector_size + may_alias attributes), not on
+ * compiler identity: any compiler advertising the GNU vector extensions
+ * qualifies -- GCC, Clang, Intel icpx, classic icpc, etc. -- and one that
+ * lacks them fails with a clear message regardless of which __* macros it
+ * happens to define. __has_attribute is itself guarded for old preprocessors
+ * that predate it. */
+#if defined(__has_attribute)
+#  if __has_attribute(vector_size) && __has_attribute(__may_alias__)
+#    define CQR_HAS_GNU_VECTORS 1
+#  endif
+#endif
+
+#if defined(CQR_HAS_GNU_VECTORS)
 
 template <typename T, int V>
 struct pack {
@@ -57,9 +69,10 @@ struct pack {
 };
 
 #else
-#error "ormqr_compact requires GCC/Clang/Intel GNU-vector extensions " \
-       "(__attribute__((vector_size)) with may_alias); compile with one " \
-       "of those compilers in GNU mode (-std=gnu++17)."
+#error "ormqr_compact requires the GNU vector extensions " \
+       "(__attribute__((vector_size)) with may_alias); compile with a " \
+       "compiler that supports them (GCC, Clang, Intel icpx/icpc) in GNU " \
+       "mode (-std=gnu++17)."
 #endif
 
 /* ------------------------------------------------------------------ */
