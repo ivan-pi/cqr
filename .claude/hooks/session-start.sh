@@ -5,15 +5,10 @@
 # The base image already ships CMake, g++/gcc and GNU Make; the project is
 # CXX-only (no Fortran), so gfortran is not required.
 #
-# cqr's MKL "Compact" extension (mkl_*geqrf_compact / the ext_mkl_dormqr_compact
-# routine it complements) is reached through the Intel BLAS link line, so the
-# build is configured with -DBLA_VENDOR=Intel10_64lp_seq and needs the MKL
-# headers + LP64 libraries. Ubuntu's `libmkl-dev` (universe) provides
-# /usr/include/mkl/mkl_compact.h and libmkl_intel_lp64 / libmkl_sequential /
-# libmkl_core, which CMake's FindBLAS + cmake/FindMKLCompact.cmake locate.
-#
-# NOTE: Intel's own apt repo (apt.repos.intel.com) is blocked by the web
-# network policy, so we deliberately use the distro package rather than oneAPI.
+# cqr requires Intel MKL (see the Prerequisites section of README.md); the
+# distro `libmkl-dev` package supplies it. We use the distro package rather
+# than oneAPI because Intel's own apt repo (apt.repos.intel.com) is blocked
+# by the web network policy.
 set -euo pipefail
 
 # Async: let the session start while MKL installs in the background.
