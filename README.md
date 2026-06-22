@@ -15,7 +15,6 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/ext_mkl_ormqr_compact.cpp` / `.h` | **The design-document public API** `ext_mkl_dormqr_compact` (§2): a C-linkage dispatcher that unwraps `MKL_COMPACT_PACK` → `V` and calls the kernel (§8.1). |
 | `src/test_ormqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design §7). |
-| `src/xcheck_armpl_ormqr.cpp` | Cross-check vs ArmPL interleave-batch (real ArmPL or `src/armpl_stub/`). |
 | `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact`→`ext_mkl_dormqr_compact`→`mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
 
 ## Build
@@ -32,8 +31,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
-`-DCQR_WITH_MKL=OFF` (build only the portable kernel + ArmPL cross-check),
-`-DCQR_BUILD_XCHECK=OFF`.
+`-DCQR_WITH_MKL=OFF` (build and test only the portable kernel, no MKL).
 
 ## Example: a batched QR solve with the Compact API
 

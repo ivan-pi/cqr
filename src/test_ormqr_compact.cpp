@@ -58,6 +58,40 @@ static void ref_geqr2(int m, int n, T *A, int lda, T *tau)
     }
 }
 
+/* Column-pivoted Householder QR (dgeqp3-style, greedy max trailing-column
+ * norm). On exit A holds the reflectors below the diagonal and R on/above it
+ * for the *permuted* matrix A(:,jpvt); jpvt[j] is the ORIGINAL (0-based)
+ * column index placed at position j, so A(:,jpvt) = Q R. Used to drive the
+ * kernel from a rank-revealing factorization + back-permutation solve --
+ * the production (RBF-FD) use case the kernel must support. */
+template <class T>
+static void ref_geqp3(int m, int n, T *A, int lda, int *jpvt, T *tau)
+{
+    const int k = std::min(m, n);
+    for (int j = 0; j < n; ++j) jpvt[j] = j;
+
+    for (int kk = 0; kk < k; ++kk) {
+        int piv = kk;
+        T best = -1;
+        for (int j = kk; j < n; ++j) {
+            T s = 0;
+            for (int i = kk; i < m; ++i) s += A[i + (size_t)j * lda] * A[i + (size_t)j * lda];
+            if (s > best) { best = s; piv = j; }
+        }
+        if (piv != kk) {
+            for (int i = 0; i < m; ++i) std::swap(A[i + (size_t)kk * lda], A[i + (size_t)piv * lda]);
+            std::swap(jpvt[kk], jpvt[piv]);
+        }
+        ref_larfg(m - kk, &A[kk + (size_t)kk * lda], &A[(kk + 1) + (size_t)kk * lda], &tau[kk]);
+        for (int j = kk + 1; j < n; ++j) {
+            T w = A[kk + (size_t)j * lda];
+            for (int i = kk + 1; i < m; ++i) w += A[i + (size_t)kk * lda] * A[i + (size_t)j * lda];
+            A[kk + (size_t)j * lda] -= tau[kk] * w;
+            for (int i = kk + 1; i < m; ++i) A[i + (size_t)j * lda] -= tau[kk] * A[i + (size_t)kk * lda] * w;
+        }
+    }
+}
+
 template <class T>
 static void ref_orm2r(char trans, int m, int nrhs, int k,
                       const T *A, int lda, const T *tau, T *B, int ldb)
@@ -213,6 +247,82 @@ static int run_case(int nm, int m, int nrhs)
     return !ok1 + !ok2 + !ok3;
 }
 
+/* ------------------- pivoted-QR + back-permutation solve ------------ */
+/* Salvaged from the former ArmPL cross-check: feed the kernel reflectors
+ * from a column-pivoted (rank-revealing) QR and recover X through a
+ * jpvt back-permutation, i.e. solve A x = b with A(:,jpvt) = Q R:
+ *   R y = Q^T b   (kernel applies Q^T),   x(jpvt(j)) = y(j).
+ * Unpivoted tests never exercise this end-to-end permuted pipeline. */
+template <class T, int V>
+static int run_case_pivoted(int nm, int m, int nrhs)
+{
+    const int k = m;                              /* square, full rank */
+    const T eps = std::numeric_limits<T>::epsilon();
+    const double tol_solve = 1e5 * eps * m;       /* cond(A)-dependent */
+
+    std::vector<T> X((size_t)m * nrhs);
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = 0; i < m; ++i)
+            X[i + (size_t)j * m] = T(j + 1);      /* ones, twos, threes, ... */
+
+    std::vector<std::vector<T>> Afac(nm), B(nm), Bout(nm), tau(nm);
+    std::vector<std::vector<int>> jpvt(nm);
+    for (int kk = 0; kk < nm; ++kk) {
+        std::vector<T> A((size_t)m * m);
+        for (auto &x : A) x = frand<T>();
+        for (int i = 0; i < m; ++i) A[i + (size_t)i * m] += T(2);  /* tame cond */
+
+        B[kk].resize((size_t)m * nrhs);
+        for (int j = 0; j < nrhs; ++j)            /* B = A*X */
+            for (int i = 0; i < m; ++i) {
+                T s = 0;
+                for (int l = 0; l < m; ++l) s += A[i + (size_t)l * m] * X[l + (size_t)j * m];
+                B[kk][i + (size_t)j * m] = s;
+            }
+
+        Afac[kk] = A;
+        tau[kk].resize(m);
+        jpvt[kk].resize(m);
+        ref_geqp3(m, m, Afac[kk].data(), m, jpvt[kk].data(), tau[kk].data());
+        Bout[kk].resize((size_t)m * nrhs);
+    }
+
+    int ng = (nm + V - 1) / V;
+    std::vector<T> ap((size_t)ng * m * m * V), tp((size_t)ng * k * V),
+                   bp((size_t)ng * m * nrhs * V);
+    pack_compact(m, m, Afac, m, ap.data(), m, V, nm);
+    for (int g = 0; g < ng; ++g)
+        for (int v = 0; v < V; ++v) {
+            int idx = g * V + v;
+            for (int kk = 0; kk < k; ++kk)
+                tp[(size_t)g * k * V + (size_t)kk * V + v] =
+                    (idx < nm) ? tau[idx][kk] : T(0);
+        }
+    pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
+
+    /* kernel: c := Q^T b */
+    ormqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+                               bp.data(), m, nm);
+    unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
+
+    /* R y = c, then back-permute x(jpvt(j)) = y(j); compare against X */
+    double e = 0;
+    std::vector<T> x((size_t)m * nrhs);
+    for (int kk = 0; kk < nm; ++kk) {
+        ref_trsm_upper(m, nrhs, Afac[kk].data(), m, Bout[kk].data(), m);
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = 0; i < m; ++i)
+                x[jpvt[kk][i] + (size_t)j * m] = Bout[kk][i + (size_t)j * m];
+        e = std::max<double>(e, max_abs_diff(x, X));
+    }
+
+    bool ok = e <= tol_solve;
+    std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | pivoted solve X: %.2e %s\n",
+                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs,
+                e, ok ? "OK" : "FAIL");
+    return !ok;
+}
+
 /* --------------------------- micro-benchmark ------------------------ */
 
 template <class T>
@@ -265,6 +375,11 @@ int main(int argc, char **)
     fails += run_case<float, 4>(8, m, nrhs);
     fails += run_case<float, 8>(16, m, nrhs);
     fails += run_case<float, 16>(32, m, nrhs);
+
+    /* column-pivoted QR + back-permutation solve (salvaged cross-check) */
+    fails += run_case_pivoted<double, 4>(8, m, nrhs);
+    fails += run_case_pivoted<double, 8>(11, m, nrhs);   /* padded partial group */
+    fails += run_case_pivoted<float, 8>(16, m, nrhs);
 
     if (argc > 1) {  /* run benchmark only when asked (skip under qemu) */
         std::printf("\n-- micro-benchmark (single core) --\n");

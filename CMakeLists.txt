@@ -12,7 +12,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # ---------------------------------------------------------------------------
 option(CQR_WITH_MKL        "Build the Intel MKL compact extension + MKL tests" ON)
 option(CQR_BUILD_TESTS     "Build tests and register them with CTest"          ON)
-option(CQR_BUILD_XCHECK    "Build the ArmPL interleave-batch cross-check"      ON)
 option(CQR_ENABLE_NATIVE   "Compile for the host CPU (-march/-mcpu=native)"    OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -94,30 +93,5 @@ if(CQR_BUILD_TESTS)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
-  endif()
-
-  # ArmPL interleave-batch cross-check (real ArmPL if present, else the
-  # bundled functional stub so the driver logic is still exercised).
-  if(CQR_BUILD_XCHECK)
-    find_path(ARMPL_INCLUDE_DIR armpl.h
-      HINTS $ENV{ARMPL_DIR}/include /opt/arm/*/include)
-    find_library(ARMPL_LIBRARY NAMES armpl_lp64 armpl
-      HINTS $ENV{ARMPL_DIR}/lib /opt/arm/*/lib)
-
-    add_executable(xcheck_armpl_ormqr src/xcheck_armpl_ormqr.cpp)
-    target_link_libraries(xcheck_armpl_ormqr PRIVATE ormqr_compact cqr_flags)
-
-    if(ARMPL_INCLUDE_DIR AND ARMPL_LIBRARY)
-      message(STATUS "xcheck: using real ArmPL (${ARMPL_LIBRARY})")
-      target_include_directories(xcheck_armpl_ormqr PRIVATE "${ARMPL_INCLUDE_DIR}")
-      target_link_libraries(xcheck_armpl_ormqr PRIVATE "${ARMPL_LIBRARY}" m)
-    else()
-      message(STATUS "xcheck: ArmPL not found, using bundled stub headers "
-                     "(logic-only cross-check)")
-      target_include_directories(xcheck_armpl_ormqr
-        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/armpl_stub")
-      target_link_libraries(xcheck_armpl_ormqr PRIVATE m)
-    endif()
-    add_test(NAME xcheck_armpl COMMAND xcheck_armpl_ormqr)
   endif()
 endif()
