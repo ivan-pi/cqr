@@ -107,9 +107,10 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     {
         /* Per-thread compact buffers, sized for a full group of V. */
         const int align = 64;
-        double *ap   = (double *)mkl_malloc(mkl_dget_size_compact(n, n,    fmt, V), align);
-        double *taup = (double *)mkl_malloc(mkl_dget_size_compact(n, 1,    fmt, V), align);
-        double *bp   = (double *)mkl_malloc(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, V), align);
+        auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, V), align);
+        auto bp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
         std::vector<MKL_INT> info(V);
         double wq;
@@ -147,8 +148,7 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
             for (int s = 0; s < cnt; ++s)
                 maxerr = std::max(maxerr, sol_error(Xptr[s], n));
         }
-
-        mkl_free(ap); mkl_free(taup); mkl_free(bp);
+        /* ap/taup/bp freed by their RAII owners at end of the parallel region. */
     }
     return maxerr;
 }

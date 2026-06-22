@@ -144,9 +144,10 @@ void batch_solve(int nm, int n, int nrhs)
      * geqrf_compact -> dormqr_compact -> dtrsm_compact, all on the         *
      * interleaved buffers ap / taup / bp.                                  */
     const int compact_align = 64;   /* byte alignment for the compact buffers */
-    double *ap   = (double *)mkl_malloc(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
-    double *taup = (double *)mkl_malloc(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
-    double *bp   = (double *)mkl_malloc(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
+    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
+    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
+    auto bp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
     /* pack the dense batches into compact (interleaved) layout */
     {
@@ -186,7 +187,8 @@ void batch_solve(int nm, int n, int nrhs)
         mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xcptr.data(), n, bp, n, fmt, nm);
     }
 
-    mkl_free(ap); mkl_free(taup); mkl_free(bp);
+    /* ap/taup/bp stay live until their RAII owners go out of scope when
+     * batch_solve returns; no manual mkl_free needed. */
 
     /* ===== Path 2: naive per-matrix forward driver LAPACKE_dgels =======
      * Xd starts as a copy of the RHS, which dgels overwrites in place. */

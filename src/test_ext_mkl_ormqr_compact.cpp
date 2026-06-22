@@ -129,9 +129,10 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     MKL_INT sz_a = mkl_dget_size_compact(s, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
-    double *ap   = (double *)mkl_malloc(sz_a, 64);
-    double *taup = (double *)mkl_malloc(sz_t, 64);
-    double *cp   = (double *)mkl_malloc(sz_c, 64);
+    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_c);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     const MKL_INT ldap = rowmajor ? k : s;          /* compact leading dims */
     const MKL_INT ldcp = rowmajor ? n : m;
@@ -167,7 +168,6 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
                 rowmajor ? "row" : "col", side, trans, V, nm, m, n, k,
                 worst, rtol, ok ? "OK" : "FAIL");
 
-    mkl_free(ap); mkl_free(taup); mkl_free(cp);
     return fails;
 }
 
@@ -204,9 +204,10 @@ int suite2(int nm, int n, int nrhs)
     MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, nrhs, fmt, nm);
-    double *ap   = (double *)mkl_malloc(sz_a, 64);
-    double *taup = (double *)mkl_malloc(sz_t, 64);
-    double *cp   = (double *)mkl_malloc(sz_c, 64);
+    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_c);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap, m, fmt, nm);
     mkl_dgepack_compact(MKL_COL_MAJOR, m, nrhs, Bp.data(), m, cp, m, fmt, nm);
@@ -261,7 +262,6 @@ int suite2(int nm, int n, int nrhs)
     std::printf("  [suite2] V=%-2d nm=%-2d n=%-3d nrhs=%d | fwd err %.2e res %.2e (rtol %.2e) %s\n",
                 V, nm, n, nrhs, worst_fwd, worst_res, rtol, ok ? "OK" : "FAIL");
 
-    mkl_free(ap); mkl_free(taup); mkl_free(cp);
     return fails;
 }
 
