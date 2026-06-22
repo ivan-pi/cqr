@@ -105,7 +105,11 @@ if(CQR_BUILD_TESTS)
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
 
     # The benchmark carries a correctness gate (both paths must recover the
-    # known solution); run a small, quick pool of it under CTest.
-    add_test(NAME bench_qr_compact_smoke COMMAND bench_qr_compact 64 1)
+    # known solution), so it doubles as an end-to-end integration test of the
+    # compact pipeline against per-matrix LAPACK. Run a small, quick pool
+    # (few matrices, a single rep) to keep CTest fast. 33 is not a multiple of
+    # the SIMD vector length, so the partial last group is exercised too.
+    add_test(NAME bench_qr_compact_integration COMMAND bench_qr_compact 33 1)
+    set_tests_properties(bench_qr_compact_integration PROPERTIES LABELS "integration")
   endif()
 endif()

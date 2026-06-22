@@ -22,8 +22,11 @@
  *     alongside the timing).
  *   * The batched path compacts/uncompacts each group of `V` on the fly inside
  *     the timed loop (the pool itself stays dense), matching the application.
- *   * The non-batched path turns LAPACKE NaN-checking off (LAPACKE_set_nancheck)
- *     so the per-matrix driver is timed without that overhead.
+ *   * The non-batched path factors in place (the application does not reuse the
+ *     matrix), so no per-matrix copy is timed; a destroyable working copy of
+ *     the pool is refreshed before each pass, outside the timed region. It also
+ *     turns LAPACKE NaN-checking off (LAPACKE_set_nancheck) so the per-matrix
+ *     driver is timed without that overhead.
  *   * The outer loop over the pool is parallelised with OpenMP; MKL's own
  *     threading is pinned to 1 so the outer loop is the only parallelism.
  *   * Each size is timed `reps` times and the best (minimum) wall time is kept.
@@ -175,44 +178,50 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
 }
 
 /* ===== non-batched path: conventional per-matrix LAPACK ================ *
- * One dense matrix at a time: dgeqrf -> dormqr -> dtrsm. Returns max error. */
-double run_unbatched(const Pool &P)
+ * One dense matrix at a time: dgeqrf -> dormqr -> dtrsm, factoring in place
+ * (no per-matrix copy in the hot loop -- the application does not reuse the
+ * matrix afterwards). The caller refreshes `a`/`b` from the pristine pool
+ * outside the timed region, since the factorization destroys them. `a` holds
+ * the matrices (n*n each), `b` the right-hand sides (n each, overwritten with
+ * the solutions). Returns the max solution error. */
+double run_unbatched(int n, int nmat, double *a, double *b)
 {
-    const int n = P.n, nmat = P.nmat, nrhs = 1;
+    const int nrhs = 1;
     double maxerr = 0.0;
 
 #pragma omp parallel reduction(max : maxerr)
     {
-        std::vector<double> Acopy((size_t)n * n), Bcopy((size_t)n), tau(n);
+        std::vector<double> tau(n);
 
 #pragma omp for schedule(static)
         for (int v = 0; v < nmat; ++v) {
-            const double *A = P.a.data() + (size_t)v * n * n;
-            const double *B = P.b.data() + (size_t)v * n;
-            std::copy(A, A + (size_t)n * n, Acopy.begin());   /* dgeqrf overwrites */
-            std::copy(B, B + (size_t)n,     Bcopy.begin());
+            double *A = a + (size_t)v * n * n;     /* dgeqrf overwrites A */
+            double *B = b + (size_t)v * n;         /* dormqr/dtrsm overwrite B */
 
-            LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, Acopy.data(), n, tau.data());
+            LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, A, n, tau.data());
             LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           Acopy.data(), n, tau.data(), Bcopy.data(), n);
+                           A, n, tau.data(), B, n);
             cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasNoTrans, CblasNonUnit,
-                        n, nrhs, 1.0, Acopy.data(), n, Bcopy.data(), n);
+                        n, nrhs, 1.0, A, n, B, n);
 
-            maxerr = std::max(maxerr, sol_error(Bcopy.data(), n));
+            maxerr = std::max(maxerr, sol_error(B, n));
         }
     }
     return maxerr;
 }
 
-/* Best (minimum) wall time over `reps` timed passes, in seconds. */
-template <typename F>
-double best_time(int reps, F &&pass)
+/* Best (minimum) wall time over `reps` timed passes, in seconds. `reset` runs
+ * untimed before every pass (e.g. to restore input the timed work destroys);
+ * only `timed` is clocked. */
+template <typename Reset, typename Timed>
+double best_time(int reps, Reset &&reset, Timed &&timed)
 {
-    pass();                                   /* warm-up (untimed) */
+    reset(); timed();                         /* warm-up (untimed) */
     double best = std::numeric_limits<double>::infinity();
     for (int r = 0; r < reps; ++r) {
+        reset();                              /* not clocked */
         auto t0 = clk::now();
-        pass();
+        timed();
         auto t1 = clk::now();
         best = std::min(best, std::chrono::duration<double>(t1 - t0).count());
     }
@@ -261,9 +270,20 @@ int main(int argc, char **argv)
         const int n = sizes[si];
         Pool P(n, nmat);
 
+        /* The batched path reads the pool read-only (pack copies into the
+         * interleaved buffers), so it needs no reset. The non-batched path
+         * factors in place, so refresh a destroyable working copy of the pool
+         * before each pass -- untimed, mirroring an application that consumes
+         * the matrix rather than copying it inside the solve. */
+        std::vector<double> wa, wb;   /* filled by the reset step below */
+
         double err_b = 0.0, err_u = 0.0;
-        const double tb = best_time(reps, [&] { err_b = run_batched(P, fmt, V); });
-        const double tu = best_time(reps, [&] { err_u = run_unbatched(P); });
+        const double tb = best_time(reps,
+            [] {},
+            [&] { err_b = run_batched(P, fmt, V); });
+        const double tu = best_time(reps,
+            [&] { wa = P.a; wb = P.b; },
+            [&] { err_u = run_unbatched(n, nmat, wa.data(), wb.data()); });
 
         const double rtol  = 100.0 * n * eps;
         const double maxerr = std::max(err_b, err_u);
