@@ -1,32 +1,31 @@
 #ifndef EXT_MKL_ORMQR_COMPACT_H
 #define EXT_MKL_ORMQR_COMPACT_H
 
-/* ext_mkl_?ormqr_compact
+/* ext_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *
- * The missing mkl_?ormqr_compact: apply Q or Q^T from a Compact-format QR
- * factorization (mkl_?geqrf_compact) to a Compact-format batch of general
- * matrices C, filling the gap between mkl_?geqrf_compact and the
- * application of the resulting orthogonal transformations.
+ * This is the missing mkl_?ormqr_compact. It multiplies a Compact-format
+ * batch of general matrices C by the orthogonal factor Q (or Q^T) produced by
+ * mkl_?geqrf_compact, filling the gap between the compact QR factorization and
+ * the application of its reflectors. The API mirrors MKL's native compact
+ * ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference
+ * in ext_mkl_dormqr_compact_design.md.
  *
- * The API mirrors MKL's native compact ecosystem exactly (MKL_LAYOUT +
- * MKL_COMPACT_PACK), per the design document ext_mkl_dormqr_compact_design.md.
- * It is a thin C-linkage dispatcher (section 8.1): it unwraps the
- * MKL_COMPACT_PACK opaque format to recover the interleave width V, then
- * dispatches to the templated kernel in ormqr_compact.hpp.
+ * Typical use -- the batched AX = B solver:
+ *     mkl_dgeqrf_compact (..., A -> H, tau);          // A = Q R
+ *     ext_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
+ *     mkl_dtrsm_compact  (..., U, R, B);              // B := R^{-1} Q^T B = X
  *
- * The numerical engine is the unblocked, branch-free dorm2r/dorm2l applied
- * across the V interleaved matrices of each compact pack; see
- * ormqr_compact.hpp.
+ * The matrices are passed in the same Compact buffers used elsewhere in the
+ * MKL compact API: pack with mkl_?gepack_compact, query/obtain the opaque
+ * `format` from mkl_get_format_compact(), and pass the total batch size `nm`.
+ * C is overwritten with op(Q)*C. With lwork = -1 the call is a workspace query
+ * returning the optimal lwork in work[0]. Per-matrix status is reported in the
+ * length-`nm` array info[]: info[i] = 0 on success, or -j if the j-th argument
+ * had an illegal value (LAPACK convention).
  *
- * Implemented scope (Phase 1 baseline of the design document):
- *   layout : MKL_COL_MAJOR    (the Compact-format convention assumed by
- *                              mkl_?geqrf_compact and the AX=B solver)
- *   side   : 'L' / 'l'        (op(Q) * C, the solve case)
- *   trans  : 'N','n' (Q)  or  'T','t','C','c' (Q^T; C==T for real data)
- *
- * Parameter values outside this scope are reported as an illegal argument
- * value through info[] (LAPACK convention, info[i] = -j), never silently
- * miscomputed.
+ * Supported arguments: layout = MKL_COL_MAJOR, side = 'L'/'l',
+ * trans = 'N'/'n' (Q) or 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32. Values
+ * outside this set are reported through info[] rather than miscomputed.
  */
 
 #include "mkl_types.h"
