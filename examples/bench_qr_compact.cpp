@@ -2,42 +2,25 @@
  *
  * Throughput benchmark: solving many small square systems A_v X_v = B_v with
  * the QR pipeline, comparing the Intel MKL Compact (interleaved, batched) path
- * against the conventional per-matrix LAPACK path.
+ * against the conventional per-matrix LAPACK path. Same math (X = R^-1 Q^T B),
+ * different data layout:
  *
  *   batched      mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact
  *   non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
  *
- * Both paths run the identical math (A = Q R; X = R^{-1} Q^T B); only the data
- * layout differs. The compact path packs `V` matrices (the SIMD vector length
- * of the active compact format) into interleaved storage and factors them with
- * one SIMD sweep; the conventional path walks one dense matrix at a time. This
- * mirrors the intended application, where matrices arrive on the fly and are
- * processed in groups of the vector length -- except that here a fixed pool of
- * matrices is built up front so the two paths factor exactly the same data.
- *
- * Methodology
- *   * A pool of `nmat` matrices is generated once per size (square, diagonally
- *     dominant so the solve is well conditioned), with a known exact solution
- *     X == 1 so B_v = A_v 1; each path must recover 1 (a correctness gate runs
- *     alongside the timing).
- *   * The batched path compacts/uncompacts each group of `V` on the fly inside
- *     the timed loop (the pool itself stays dense), matching the application.
- *   * The non-batched path factors in place (the application does not reuse the
- *     matrix), so no per-matrix copy is timed; a destroyable working copy of
- *     the pool is refreshed before each pass, outside the timed region. It also
- *     turns LAPACKE NaN-checking off (LAPACKE_set_nancheck) so the per-matrix
- *     driver is timed without that overhead.
- *   * The outer loop over the pool is parallelised with OpenMP; MKL's own
- *     threading is pinned to 1 so the outer loop is the only parallelism.
- *   * Each size is timed `reps` times and the best (minimum) wall time is kept.
- *   * A geometric mean of the per-size speedups is reported at the end -- the
- *     scale-invariant average that does not let one size dominate.
+ * For each size, a pool of `nmat` well-conditioned matrices with known solution
+ * X == 1 is built once, and both paths solve it -- the batched path packing
+ * each group of `V` (the compact SIMD width) on the fly, the per-matrix path
+ * factoring in place. The outer loop over the pool runs under OpenMP (MKL's own
+ * threading pinned to 1); each size is timed `reps` times keeping the best, both
+ * paths are accuracy-gated against X == 1, and a geometric-mean speedup across
+ * sizes is printed at the end. (Details on the timing harness and the in-place
+ * working copy are at best_time() and run_unbatched().)
  *
  * Usage:  bench_qr_compact [nmat] [reps]      (defaults: 1000 matrices, 3 reps)
  *
- * Build: needs Intel MKL (the compact API is an MKL extension) plus this repo's
- * ext_mkl_ormqr_compact; wired up by CMakeLists.txt as the `bench_qr_compact`
- * target. OpenMP is used when available.
+ * Build: needs Intel MKL plus this repo's ext_mkl_ormqr_compact; wired up by
+ * CMakeLists.txt as the `bench_qr_compact` target. OpenMP is used when available.
  */
 
 #include <mkl.h>
