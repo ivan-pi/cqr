@@ -69,6 +69,18 @@ double maxdiff(const double *a, const double *b, size_t n)
     return d;
 }
 
+/* Each matrix batch lives in one contiguous buffer, matrix v at offset
+ * v*stride. Collect the per-matrix base pointers MKL's pack/unpack routines
+ * expect; the stride encodes the storage layout in use. Instantiated with
+ * T = const double for packing (inputs) and T = double for unpacking. */
+template <class T>
+std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
+{
+    std::vector<T *> p(nm);
+    for (int v = 0; v < nm; ++v) p[v] = base + (size_t)v * stride;
+    return p;
+}
+
 /* ---------------- Suite 1: isolated Q^T B (section 7.1) ---------------- */
 
 int suite1(int nm, int m, int n, int k)
@@ -76,27 +88,28 @@ int suite1(int nm, int m, int n, int k)
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = vlen(fmt);
 
-    /* per-matrix dense buffers (column-major) */
-    std::vector<std::vector<double>> H(nm, std::vector<double>((size_t)m * k));
-    std::vector<std::vector<double>> tau(nm, std::vector<double>(k));
-    std::vector<std::vector<double>> B(nm, std::vector<double>((size_t)m * n));
-    std::vector<std::vector<double>> Bref(nm), Bout(nm, std::vector<double>((size_t)m * n));
+    /* per-matrix dense data, each batch in one contiguous column-major buffer
+     * (matrix v at offset v*stride) */
+    const size_t sH = (size_t)m * k, sT = (size_t)k, sB = (size_t)m * n;
+    std::vector<double> H(nm * sH), tau(nm * sT), B(nm * sB), Bref(nm * sB), Bout(nm * sB);
 
     for (int v = 0; v < nm; ++v) {
-        for (auto &x : H[v]) x = frand();
-        for (int i = 0; i < std::min(m, k); ++i) H[v][i + (size_t)i * m] += 2.0;
+        double *Hv = H.data() + v * sH, *tv = tau.data() + v * sT;
+        double *Bv = B.data() + v * sB, *Rv = Bref.data() + v * sB;
+        for (size_t i = 0; i < sH; ++i) Hv[i] = frand();
+        for (int i = 0; i < std::min(m, k); ++i) Hv[i + (size_t)i * m] += 2.0;
         /* turn H into a real Householder representation via dense QR */
-        LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, k, H[v].data(), m, tau[v].data());
-        for (auto &x : B[v]) x = frand();
-        Bref[v] = B[v];
+        LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, k, Hv, m, tv);
+        for (size_t i = 0; i < sB; ++i) Bv[i] = frand();
+        std::copy(Bv, Bv + sB, Rv);
         /* dense reference: Q^T B */
-        LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, n, k,
-                       H[v].data(), m, tau[v].data(), Bref[v].data(), m);
+        LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, n, k, Hv, m, tv, Rv, m);
     }
 
     /* pack into MKL Compact format */
-    std::vector<const double *> Hp(nm), Bp(nm), Tp(nm);
-    for (int v = 0; v < nm; ++v) { Hp[v] = H[v].data(); Bp[v] = B[v].data(); Tp[v] = tau[v].data(); }
+    auto Hp = batch_ptrs<const double>(H.data(), nm, sH);
+    auto Tp = batch_ptrs<const double>(tau.data(), nm, sT);
+    auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
 
     MKL_INT sz_a = mkl_dget_size_compact(m, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
@@ -118,16 +131,16 @@ int suite1(int nm, int m, int n, int k)
                            ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
 
     /* unpack and compare against the dense reference */
-    std::vector<double *> Op(nm);
-    for (int v = 0; v < nm; ++v) Op[v] = Bout[v].data();
+    auto Op = batch_ptrs<double>(Bout.data(), nm, sB);
     mkl_dgeunpack_compact(MKL_COL_MAJOR, m, n, Op.data(), m, cp, m, fmt, nm);
 
     int fails = 0;
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
         if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
-        double resid = maxdiff(Bout[v].data(), Bref[v].data(), (size_t)m * n);
-        double rel = resid / std::max(norm1(Bref[v].data(), m, n), 1e-300);
+        const double *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
+        double resid = maxdiff(Bo, Rv, sB);
+        double rel = resid / std::max(norm1(Rv, m, n), 1e-300);
         worst = std::max(worst, rel);
     }
     const double rtol = 20.0 * n * eps;
@@ -152,21 +165,23 @@ int suite2(int nm, int n, int nrhs)
     for (int j = 0; j < nrhs; ++j)
         for (int i = 0; i < n; ++i) X[i + (size_t)j * n] = double(j + 1);
 
-    std::vector<std::vector<double>> A(nm, std::vector<double>((size_t)n * n));
-    std::vector<std::vector<double>> B(nm, std::vector<double>((size_t)n * nrhs));
+    /* each batch in one contiguous column-major buffer, matrix v at v*stride */
+    const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
+    std::vector<double> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        for (auto &x : A[v]) x = frand();
-        for (int i = 0; i < n; ++i) A[v][i + (size_t)i * n] += 2.0; /* tame cond */
-        for (int j = 0; j < nrhs; ++j)                              /* B = A X */
+        double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
+        for (size_t i = 0; i < sA; ++i) Av[i] = frand();
+        for (int i = 0; i < n; ++i) Av[i + (size_t)i * n] += 2.0; /* tame cond */
+        for (int j = 0; j < nrhs; ++j)                            /* B = A X */
             for (int i = 0; i < n; ++i) {
                 double s = 0;
-                for (int l = 0; l < n; ++l) s += A[v][i + (size_t)l * n] * X[l + (size_t)j * n];
-                B[v][i + (size_t)j * n] = s;
+                for (int l = 0; l < n; ++l) s += Av[i + (size_t)l * n] * X[l + (size_t)j * n];
+                Bv[i + (size_t)j * n] = s;
             }
     }
 
-    std::vector<const double *> Ap(nm), Bp(nm);
-    for (int v = 0; v < nm; ++v) { Ap[v] = A[v].data(); Bp[v] = B[v].data(); }
+    auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
+    auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
 
     MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
@@ -197,28 +212,29 @@ int suite2(int nm, int n, int nrhs)
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
                       n, nrhs, 1.0, ap, m, cp, m, fmt, nm);
 
-    std::vector<std::vector<double>> Xhat(nm, std::vector<double>((size_t)n * nrhs));
-    std::vector<double *> Op(nm);
-    for (int v = 0; v < nm; ++v) Op[v] = Xhat[v].data();
+    std::vector<double> Xhat(nm * sB);
+    auto Op = batch_ptrs<double>(Xhat.data(), nm, sB);
     mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Op.data(), n, cp, m, fmt, nm);
 
     int fails = 0;
     double worst_fwd = 0, worst_res = 0;
-    std::vector<double> AX((size_t)n * nrhs);
+    std::vector<double> AX(sB);
     for (int v = 0; v < nm; ++v) {
         if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
-        double fwd = maxdiff(Xhat[v].data(), X.data(), (size_t)n * nrhs) /
+        const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
+        const double *Xv = Xhat.data() + v * sB;
+        double fwd = maxdiff(Xv, X.data(), sB) /
                      std::max(norm1(X.data(), n, nrhs), 1e-300);
         worst_fwd = std::max(worst_fwd, fwd);
 
         for (int j = 0; j < nrhs; ++j)                /* AX = A Xhat */
             for (int i = 0; i < n; ++i) {
                 double s = 0;
-                for (int l = 0; l < n; ++l) s += A[v][i + (size_t)l * n] * Xhat[v][l + (size_t)j * n];
+                for (int l = 0; l < n; ++l) s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
                 AX[i + (size_t)j * n] = s;
             }
-        double res = maxdiff(AX.data(), B[v].data(), (size_t)n * nrhs) /
-                     std::max(norm1(B[v].data(), n, nrhs), 1e-300);
+        double res = maxdiff(AX.data(), Bv, sB) /
+                     std::max(norm1(Bv, n, nrhs), 1e-300);
         worst_res = std::max(worst_res, res);
     }
     const double rtol = 100.0 * n * eps;
