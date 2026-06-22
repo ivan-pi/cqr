@@ -16,6 +16,7 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/test_ormqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design section 7). |
 | `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact` -> `ext_mkl_dormqr_compact` -> `mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
+| `examples/bench_qr_compact.cpp` | Throughput benchmark over a pool of small matrices (order 20-100): compact batched pipeline vs per-matrix LAPACK (`LAPACKE_dgeqrf`/`dormqr` + `cblas_dtrsm`), OpenMP over the pool, geometric-mean speedup. |
 
 ## Prerequisites
 
@@ -67,6 +68,31 @@ target and registered as the `example_solve_qr_compact` CTest:
 ```sh
 ./build/solve_qr_compact
 ```
+
+## Benchmark: batched vs. per-matrix throughput
+
+[`examples/bench_qr_compact.cpp`](examples/bench_qr_compact.cpp) measures how
+much the Compact (batched) pipeline buys over the conventional
+one-matrix-at-a-time LAPACK path. For each order `n in {20, 40, 60, 80, 100}`
+it builds a pool of `nmat` well-conditioned matrices with known solution
+`X == 1` and times both solves of the same data:
+
+```
+batched      mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact
+non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
+```
+
+The outer loop runs under OpenMP (MKL threading pinned to 1); each size is
+timed `reps` times keeping the best, both paths are accuracy-gated against
+`X == 1`, and a geometric-mean speedup across sizes is printed at the end.
+
+```sh
+./build/bench_qr_compact [nmat] [reps]    # defaults: 1000 matrices, 3 reps
+```
+
+Because both paths are accuracy-gated, it doubles as an end-to-end integration
+test, registered with CTest as `bench_qr_compact_integration` (label
+`integration`) with a small pool and a single rep.
 
 ## Accordance with the design document
 

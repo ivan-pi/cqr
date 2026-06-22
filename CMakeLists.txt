@@ -71,6 +71,16 @@ if(CQR_WITH_MKL)
   add_executable(solve_qr_compact examples/solve_qr_compact.cpp)
   target_link_libraries(solve_qr_compact
     PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+
+  # Throughput benchmark: compact batched vs per-matrix LAPACK QR solve, with
+  # the outer loop over the matrix pool parallelised by OpenMP when available.
+  add_executable(bench_qr_compact examples/bench_qr_compact.cpp)
+  target_link_libraries(bench_qr_compact
+    PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -93,5 +103,13 @@ if(CQR_BUILD_TESTS)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
+
+    # The benchmark carries a correctness gate (both paths must recover the
+    # known solution), so it doubles as an end-to-end integration test of the
+    # compact pipeline against per-matrix LAPACK. Run a small, quick pool
+    # (few matrices, a single rep) to keep CTest fast. 33 is not a multiple of
+    # the SIMD vector length, so the partial last group is exercised too.
+    add_test(NAME bench_qr_compact_integration COMMAND bench_qr_compact 33 1)
+    set_tests_properties(bench_qr_compact_integration PROPERTIES LABELS "integration")
   endif()
 endif()
