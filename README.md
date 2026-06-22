@@ -17,6 +17,15 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design §7). |
 | `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact`→`ext_mkl_dormqr_compact`→`mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
 
+## Prerequisites
+
+* **CMake ≥ 3.18**, a **C++17 compiler** (GCC/Clang) and a build tool (Make/Ninja).
+* **Intel MKL** — provides the Compact-format extension (`mkl_compact.h`,
+  `mkl_*geqrf_compact`, …) that this project builds on. Any MKL works:
+  * oneAPI MKL — `source /opt/intel/oneapi/setvars.sh` (sets `MKLROOT`), or
+  * Debian/Ubuntu — `sudo apt-get install libmkl-dev` (headers in
+    `/usr/include/mkl`, LP64 libs in the default library path).
+
 ## Build
 
 The compact API is an Intel MKL extension: the `*_compact` symbols are reached
