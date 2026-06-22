@@ -15,6 +15,7 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/ext_mkl_ormqr_compact.cpp` / `.h` | **The design-document public API** `ext_mkl_dormqr_compact` (§2): a C-linkage dispatcher that unwraps `MKL_COMPACT_PACK` → `V` and calls the kernel (§8.1). |
 | `src/test_ormqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design §7). |
+| `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact`→`ext_mkl_dormqr_compact`→`mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
 
 ## Build
 
@@ -31,6 +32,32 @@ ctest --test-dir build --output-on-failure
 
 Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
 `-DCQR_WITH_MKL=OFF` (build and test only the portable kernel, no MKL).
+
+## Example: a batched QR solve with the Compact API
+
+[`examples/solve_qr_compact.cpp`](examples/solve_qr_compact.cpp) solves a batch
+of square systems `Aᵥ Xᵥ = Bᵥ` end to end with the Compact-format (interleaved)
+pipeline — the routine this repo adds (`ext_mkl_dormqr_compact`) is the middle
+step:
+
+```
+mkl_dgeqrf_compact      A = Q R                     factor the batch
+ext_mkl_dormqr_compact  B <- Qᵀ B                   apply Qᵀ   (the added routine)
+mkl_dtrsm_compact       R X = (Qᵀ B)  ->  X = R⁻¹ Qᵀ B   triangular solve
+```
+
+The dense batches are packed with `mkl_dgepack_compact`, run through the three
+compact calls, and unpacked with `mkl_dgeunpack_compact`. It cross-checks the
+result against the naive baseline — `LAPACKE_dgels('N')` on each matrix
+separately (which reduces to the same QR solve when `m == n`) — confirming the
+compact batch agrees with the per-matrix driver and with the known exact
+solution. One batch size is deliberately not a multiple of the SIMD width to
+exercise the padded last pack. Built (with MKL) as the `solve_qr_compact`
+target and registered as the `example_solve_qr_compact` CTest:
+
+```sh
+./build/solve_qr_compact
+```
 
 ## Accordance with the design document
 
