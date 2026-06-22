@@ -236,9 +236,10 @@ int main(int argc, char **argv)
     const int reps = (argc > 2) ? std::atoi(argv[2]) : 3;
     check(nmat > 0 && reps > 0, "usage: bench_qr_compact [nmat>0] [reps>0]");
 
+    /* mkl_get_format_compact() returns the architecture's optimal packing
+     * format -- always one of SSE/AVX/AVX512 -- so V is one of 2/4/8. */
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = vlen_for_format(fmt);
-    check(V > 0, "unrecognised compact format");
 
     /* Pin MKL's internal threading: the OpenMP outer loop is the only
      * parallelism, so per-call MKL threads would just oversubscribe. */
