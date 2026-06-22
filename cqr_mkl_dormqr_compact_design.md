@@ -64,7 +64,7 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
 
 ## 7. Testing and Validation Methodology
 
-Following a rigorous benchmark-driven approach, we define two primary suites of unit tests. The first isolates the `cqr_mkl_dormqr_compact` routine against a known orthogonal transformation, while the second validates its correctness within a full $AX=B$ solver pipeline using MKL's compact operations.
+Two test suites. The first isolates `cqr_mkl_dormqr_compact` against a known orthogonal transformation; the second checks it inside a full $AX=B$ solver pipeline built from MKL's compact operations.
 
 ### 7.1. Test Suite 1: Isolated Q Application ($Q^T B$)
 
