@@ -227,7 +227,7 @@ static int run_case(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* check 1: compact Q^T B vs scalar */
-    cqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e1 = 0;
@@ -241,7 +241,7 @@ static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    cqr::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e3 = 0;
@@ -309,7 +309,7 @@ static int run_case_pivoted(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* kernel: c := Q^T b */
-    cqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
 

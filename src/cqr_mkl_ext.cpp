@@ -5,7 +5,7 @@
  *   1. validates the arguments and reports illegal values through info[],
  *   2. handles the lwork = -1 workspace query,
  *   3. unwraps MKL_COMPACT_PACK + the scalar type to the interleave width V,
- *   4. dispatches to the templated kernel cqr::ormqr_compact_general<T,V>.
+ *   4. dispatches to the templated kernel cqr::detail::ormqr_compact_general<T,V>.
  *
  * Supports side in {L,R} and layout in {MKL_COL_MAJOR, MKL_ROW_MAJOR} for
  * trans in {N,T} (C is folded to T for real types). A is the (s x k) reflector
@@ -81,10 +81,10 @@ int validate_and_dispatch(MKL_LAYOUT layout, char side, char trans,
     /* Instantiate the kernel on MKL_INT so the public (possibly 64-bit ILP64)
      * dimensions are carried through without narrowing to int. */
     switch (V) {
-    case 2:  cqr::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 4:  cqr::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 8:  cqr::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 16: cqr::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
     default: return 15; /* V derived from format unsupported by the kernel */
     }
     return 0;
