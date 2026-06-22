@@ -1,40 +1,25 @@
 /* solve_qr_dense.cpp
  *
- * Worked example: solving a square linear system AX = B with a QR
- * factorization, spelled out as the explicit LAPACK three-step sequence and
- * cross-checked against the one-call LAPACKE_dgels driver.
+ * Worked example: solving a square system AX = B by QR, spelled out as the
+ * explicit LAPACK sequence and cross-checked against the one-call
+ * LAPACKE_dgels driver. This is the dense, single-matrix analogue of the
+ * Compact-format batch pipeline this repository extends (design doc 7.2):
  *
- * This is the *dense, single-matrix* analogue of the Compact-format batch
- * pipeline this repository extends (design doc section 7.2). It exists to
- * document, in ordinary LAPACK, the exact sequence the compact solver mirrors:
+ *     dgeqrf   A -> (H,R,tau)   A = Q R          (mkl_dgeqrf_compact)
+ *     dormqr   B <- Q^T B       R X = Q^T B      (ext_mkl_dormqr_compact)
+ *     dtrsm    R X = (Q^T B)    X = R^{-1}(Q^T B) (mkl_dtrsm_compact)
  *
- *     dense LAPACK            compact pipeline (one matrix per SIMD lane)
- *     -----------            -------------------------------------------
- *     dgeqrf   A -> (H,R,tau)   mkl_dgeqrf_compact
- *     dormqr   B <- Q^T B       ext_mkl_dormqr_compact      <-- the gap filled
- *     dtrsm    R X = (Q^T B)    mkl_dtrsm_compact
+ * LAPACKE_dgels does all three internally (reducing to this QR solve when
+ * m == n, trans = 'N'); we run both and confirm they agree with each other
+ * and with the known exact solution.
  *
- * For a square (m == n), full-rank A, solving AX = B by QR proceeds as:
- *
- *   1. A = Q R                        (dgeqrf: R in the upper triangle of A,
- *                                      Q as Householder reflectors H + tau)
- *   2. multiply both sides by Q^T :   R X = Q^T B
- *                                      (dormqr applies Q^T to B in place)
- *   3. back-substitute :              X = R^{-1} (Q^T B)
- *                                      (dtrsm, R upper-triangular)
- *
- * The "naive" forward path LAPACKE_dgels does all three internally (it reduces
- * to exactly this QR solve when m == n, trans = 'N'). We run both and report
- * that they agree with each other and with the known exact solution.
- *
- * Build: needs LAPACKE + a BLAS (here Intel MKL, the project's BLAS); wired up
- * by CMakeLists.txt as the `solve_qr_dense` target.
+ * Build: needs LAPACKE + a BLAS (here Intel MKL, the project's BLAS); wired
+ * up by CMakeLists.txt as the `solve_qr_dense` target.
  */
 
 #include <mkl.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -46,34 +31,14 @@ const double eps = std::numeric_limits<double>::epsilon();
 
 double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
 
-/* L1 (max column sum) norm of a column-major m x n matrix */
-double norm1(const double *M, int m, int n)
+/* Relative 1-norm difference ||A - B||_1 / ||B||_1, A and B column-major m x n. */
+double rel_diff(const double *A, const double *B, int m, int n)
 {
-    double mx = 0;
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        for (int i = 0; i < m; ++i) s += std::abs(M[i + (size_t)j * m]);
-        mx = std::max(mx, s);
-    }
-    return mx;
-}
-
-double maxdiff(const double *a, const double *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i) d = std::max(d, std::abs(a[i] - b[i]));
-    return d;
-}
-
-/* AX into out, all column-major n x nrhs / n x n */
-void gemm_AX(const double *A, const double *X, double *out, int n, int nrhs)
-{
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i) {
-            double s = 0;
-            for (int l = 0; l < n; ++l) s += A[i + (size_t)l * n] * X[l + (size_t)j * n];
-            out[i + (size_t)j * n] = s;
-        }
+    std::vector<double> D(A, A + (size_t)m * n);
+    cblas_daxpy((size_t)m * n, -1.0, B, 1, D.data(), 1);          /* D <- A - B */
+    double num = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', m, n, D.data(), m);
+    double den = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', m, n, B, m);
+    return num / std::max(den, 1e-300);
 }
 
 int solve(int n, int nrhs)
@@ -86,52 +51,34 @@ int solve(int n, int nrhs)
         for (int i = 0; i < n; ++i) X[i + (size_t)j * n] = double(j + 1);
     for (size_t i = 0; i < sA; ++i) A[i] = frand();
     for (int i = 0; i < n; ++i) A[i + (size_t)i * n] += 2.0;  /* tame conditioning */
-    gemm_AX(A.data(), X.data(), B.data(), n, nrhs);
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n,
+                1.0, A.data(), n, X.data(), n, 0.0, B.data(), n);   /* B = A X */
 
-    /* ================================================================== *
-     * Path 1: explicit QR solve  dgeqrf -> dormqr -> dtrsm               *
-     * ================================================================== */
-    std::vector<double> Aqr(A), Bqr(B), tau(n);
-
-    /* 1. A = Q R. On return the upper triangle of Aqr holds R; the lower
-     *    triangle + tau encode the Householder reflectors defining Q.      */
+    /* --- Path 1: explicit QR solve  dgeqrf -> dormqr -> dtrsm --- */
+    std::vector<double> Aqr(A), Xqr(B), tau(n);
     lapack_int info = LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, Aqr.data(), n, tau.data());
-    if (info != 0) { std::printf("  dgeqrf info=%d\n", (int)info); return 1; }
-
-    /* 2. Bqr <- Q^T B.  side='L', trans='T', k=n reflectors.
-     *    (This is the step the compact API was missing: ext_mkl_dormqr_compact.) */
-    info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                          Aqr.data(), n, tau.data(), Bqr.data(), n);
-    if (info != 0) { std::printf("  dormqr info=%d\n", (int)info); return 1; }
-
-    /* 3. R X = (Q^T B), R upper-triangular non-unit. cblas_dtrsm solves in
-     *    place: Bqr <- R^{-1} Bqr = Xhat. */
+    if (!info)  /* Xqr <- Q^T B  (the step ext_mkl_dormqr_compact fills) */
+        info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
+                              Aqr.data(), n, tau.data(), Xqr.data(), n);
+    if (info) { std::printf("  manual QR info=%d\n", (int)info); return 1; }
     cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasNoTrans, CblasNonUnit,
-                n, nrhs, 1.0, Aqr.data(), n, Bqr.data(), n);
-    /* Bqr now holds Xhat from the manual path. */
+                n, nrhs, 1.0, Aqr.data(), n, Xqr.data(), n);  /* Xqr <- R^{-1} Xqr */
 
-    /* ================================================================== *
-     * Path 2: naive forward driver  LAPACKE_dgels (QR solve when m == n) *
-     * ================================================================== */
-    std::vector<double> Adg(A), Bdg(B);
-    info = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Adg.data(), n, Bdg.data(), n);
-    if (info != 0) { std::printf("  dgels info=%d\n", (int)info); return 1; }
-    /* Bdg now holds Xhat from dgels (first n rows; m == n here). */
+    /* --- Path 2: naive forward driver  LAPACKE_dgels --- */
+    std::vector<double> Adg(A), Xdg(B);
+    info = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Adg.data(), n, Xdg.data(), n);
+    if (info) { std::printf("  dgels info=%d\n", (int)info); return 1; }
 
-    /* ================================================================== *
-     * Compare: each path vs the exact X, and the two paths vs each other *
-     * ================================================================== */
-    const double xnorm = std::max(norm1(X.data(), n, nrhs), 1e-300);
-    const double bnorm = std::max(norm1(B.data(), n, nrhs), 1e-300);
+    /* --- Compare both paths to the exact X and to each other --- */
+    double fwd_qr = rel_diff(Xqr.data(), X.data(), n, nrhs);
+    double fwd_dg = rel_diff(Xdg.data(), X.data(), n, nrhs);
+    double agree  = rel_diff(Xqr.data(), Xdg.data(), n, nrhs);
 
-    double fwd_qr   = maxdiff(Bqr.data(), X.data(), sB) / xnorm;
-    double fwd_dg   = maxdiff(Bdg.data(), X.data(), sB) / xnorm;
-    double agree    = maxdiff(Bqr.data(), Bdg.data(), sB) / xnorm;
-
-    /* system residual A Xhat - B for the manual path */
-    std::vector<double> AX(sB);
-    gemm_AX(A.data(), Bqr.data(), AX.data(), n, nrhs);
-    double res_qr = maxdiff(AX.data(), B.data(), sB) / bnorm;
+    std::vector<double> R(B);                                  /* R <- A Xqr - B */
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n,
+                1.0, A.data(), n, Xqr.data(), n, -1.0, R.data(), n);
+    double res_qr = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', n, nrhs, R.data(), n) /
+                    std::max(LAPACKE_dlange(LAPACK_COL_MAJOR, '1', n, nrhs, B.data(), n), 1e-300);
 
     const double rtol = 100.0 * n * eps;
     bool ok = (fwd_qr <= rtol && fwd_dg <= rtol && agree <= rtol && res_qr <= rtol);
