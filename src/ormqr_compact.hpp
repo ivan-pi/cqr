@@ -33,7 +33,8 @@
  *     B_v(i,j)  = bp [ g*ldbp*nrhs*V   + (j*ldbp + i)*V + v ]
  */
 
-#pragma once
+#ifndef ORMQR_COMPACT_HPP
+#define ORMQR_COMPACT_HPP
 
 #include <cstddef>
 #include <cassert>
@@ -304,3 +305,5 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
 }
 
 } /* namespace ormqr */
+
+#endif /* ORMQR_COMPACT_HPP */
