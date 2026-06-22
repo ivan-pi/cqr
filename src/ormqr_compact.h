@@ -6,8 +6,8 @@
  * factorization (mkl_?geqrf_compact) to a compact-format RHS block,
  * from the left:  B := op(Q) * B.
  *
- * Functionally equivalent to armpl_?ormqr_interleave_batch (side='L')
- * and the missing mkl_?ormqr_compact.
+ * This is the missing mkl_?ormqr_compact (side='L') between
+ * mkl_?geqrf_compact and mkl_?trsm_compact.
  *
  * Compact layout (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncols_a*V + (j*ldap + i)*V + v ]
