@@ -26,6 +26,7 @@
 #include <mkl_compact.h>
 
 #include "ext_mkl_ormqr_compact.h"
+#include "compact_format.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -38,15 +39,8 @@ namespace {
 
 const double eps = std::numeric_limits<double>::epsilon();
 
-int vlen(MKL_COMPACT_PACK fmt)
-{
-    switch (fmt) {
-    case MKL_COMPACT_SSE:    return 16 / (int)sizeof(double);
-    case MKL_COMPACT_AVX:    return 32 / (int)sizeof(double);
-    case MKL_COMPACT_AVX512: return 64 / (int)sizeof(double);
-    default:                 return 0;
-    }
-}
+/* shared interleave-width helper (specialised for double here) */
+int vlen(MKL_COMPACT_PACK fmt) { return ormqr::detail::vlen_for_format<double>(fmt); }
 
 double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
 

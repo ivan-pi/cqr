@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cmath>
 #include <ctime>
+#include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
@@ -155,8 +156,14 @@ static void unpack_compact(int m, int n, std::vector<std::vector<T>> &Mk,
 
 /* ----------------------------- helpers ------------------------------ */
 
+static std::mt19937_64 rng(42);
+
 template <class T>
-static T frand() { return T(2) * T(rand()) / T(RAND_MAX) - T(1); }
+static T frand()
+{
+    std::uniform_real_distribution<double> dist(-1.0, 1.0);
+    return static_cast<T>(dist(rng));
+}
 
 template <class T>
 static T max_abs_diff(const std::vector<T> &a, const std::vector<T> &b)
@@ -363,7 +370,6 @@ static void bench(int V, int nm, int m, int nrhs, int reps)
 
 int main(int argc, char **)
 {
-    srand(42);
     int fails = 0;
 
     const int m = 43, nrhs = 5;  /* nz=28 + npoly=15 */

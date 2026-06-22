@@ -27,6 +27,7 @@
 #include <mkl_compact.h>
 
 #include "ext_mkl_ormqr_compact.h"
+#include "compact_format.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -52,17 +53,9 @@ void check(bool cond, const char *what)
 }
 
 /* Interleave width V for the active compact format (doubles): MKL packs
- * V = (SIMD register bytes) / sizeof(double). Mirrors vlen_for_format() in
- * ext_mkl_ormqr_compact.cpp. */
-int vlen_for_format(MKL_COMPACT_PACK fmt)
-{
-    switch (fmt) {
-    case MKL_COMPACT_SSE:    return 16 / (int)sizeof(double);
-    case MKL_COMPACT_AVX:    return 32 / (int)sizeof(double);
-    case MKL_COMPACT_AVX512: return 64 / (int)sizeof(double);
-    default:                 return 0;
-    }
-}
+ * V = (SIMD register bytes) / sizeof(double). Shared helper, specialised
+ * for double here. */
+using ormqr::detail::vlen_for_format;
 
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
@@ -222,7 +215,7 @@ int main(int argc, char **argv)
     /* mkl_get_format_compact() returns the architecture's optimal packing
      * format -- always one of SSE/AVX/AVX512 -- so V is one of 2/4/8. */
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen_for_format(fmt);
+    const int V = vlen_for_format<double>(fmt);
 
     /* Pin MKL's internal threading: the OpenMP outer loop is the only
      * parallelism, so per-call MKL threads would just oversubscribe. */

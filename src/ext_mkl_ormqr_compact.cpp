@@ -22,27 +22,13 @@
 
 #include "ext_mkl_ormqr_compact.h"
 #include "ormqr_compact.hpp"
+#include "compact_format.hpp"
 
 #include <algorithm>
 
 namespace {
 
-/* Interleave width V for a given compact pack format and scalar size.
- * MKL packs V = (SIMD register bytes) / sizeof(T):
- *   SSE = 16 B, AVX = 32 B, AVX512 = 64 B.
- * Returns 0 for an unrecognised format. */
-template <typename T>
-int vlen_for_format(MKL_COMPACT_PACK format)
-{
-    int bytes;
-    switch (format) {
-    case MKL_COMPACT_SSE:    bytes = 16; break;
-    case MKL_COMPACT_AVX:    bytes = 32; break;
-    case MKL_COMPACT_AVX512: bytes = 64; break;
-    default:                 return 0;
-    }
-    return bytes / static_cast<int>(sizeof(T));
-}
+using ormqr::detail::vlen_for_format;
 
 /* Shared validation + dispatch for both precisions. Returns the 1-based
  * index of the first illegal argument (LAPACK convention), 0 if all valid. */
@@ -93,11 +79,13 @@ int validate_and_dispatch(MKL_LAYOUT layout, char side, char trans,
         return 0;
 
     const char tr = tran ? 'T' : 'N';
+    /* Instantiate the kernel on MKL_INT so the public (possibly 64-bit ILP64)
+     * dimensions are carried through without narrowing to int. */
     switch (V) {
-    case 2:  ormqr::ormqr_compact_general<T, 2>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 4:  ormqr::ormqr_compact_general<T, 4>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 8:  ormqr::ormqr_compact_general<T, 8>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 16: ormqr::ormqr_compact_general<T, 16>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 2:  ormqr::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 4:  ormqr::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 8:  ormqr::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 16: ormqr::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
     default: return 15; /* V derived from format unsupported by the kernel */
     }
     return 0;
