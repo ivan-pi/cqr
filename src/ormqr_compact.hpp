@@ -44,7 +44,18 @@ namespace ormqr {
 /* pack<T,V>::type : the V-wide SIMD element                          */
 /* ------------------------------------------------------------------ */
 
-#if defined(__GNUC__) || defined(__clang__)
+/* Define the V-wide element as a GNU vector type when the compiler provides
+ * the vector_size and may_alias attributes, detected directly via
+ * __has_attribute (itself guarded for preprocessors that predate it). A
+ * compiler that supplies these attributes -- GCC, Clang, Intel icpx/icpc --
+ * uses the vector type; any other stops at the #error below. */
+#if defined(__has_attribute)
+#  if __has_attribute(vector_size) && __has_attribute(__may_alias__)
+#    define CQR_HAS_GNU_VECTORS 1
+#  endif
+#endif
+
+#if defined(CQR_HAS_GNU_VECTORS)
 
 template <typename T, int V>
 struct pack {
@@ -56,27 +67,11 @@ struct pack {
                               aligned(alignof(T)), may_alias)) = T;
 };
 
-#else /* portable fallback (e.g. MSVC): element-wise operator overloads */
-
-template <typename T, int V>
-struct pack {
-    struct type {
-        T v[V];
-        friend type operator+(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] += b.v[i]; return a;
-        }
-        friend type operator-(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] -= b.v[i]; return a;
-        }
-        friend type operator*(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] *= b.v[i]; return a;
-        }
-        type& operator+=(type b) { return *this = *this + b; }
-        type& operator-=(type b) { return *this = *this - b; }
-        type& operator*=(type b) { return *this = *this * b; }
-    };
-};
-
+#else
+#error "ormqr_compact requires the GNU vector extensions " \
+       "(__attribute__((vector_size)) with may_alias); compile with a " \
+       "compiler that supports them (GCC, Clang, Intel icpx/icpc) in GNU " \
+       "mode (-std=gnu++17)."
 #endif
 
 /* ------------------------------------------------------------------ */
