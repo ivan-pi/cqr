@@ -2,8 +2,7 @@
 # SessionStart hook for Claude Code on the web.
 #
 # Installs the one missing prerequisite for building/testing cqr: Intel MKL.
-# The base image already ships CMake, g++/gcc and GNU Make; the project is
-# CXX-only (no Fortran), so gfortran is not required.
+# The base image already ships CMake, g++/gcc and GNU Make.
 #
 # cqr requires Intel MKL (see the Prerequisites section of README.md); the
 # distro `libmkl-dev` package supplies it. We use the distro package rather
