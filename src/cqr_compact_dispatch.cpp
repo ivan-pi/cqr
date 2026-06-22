@@ -4,26 +4,46 @@
  * the runtime interleave width V to a compile-time instantiation.
  */
 
-#include "cqr_compact.hpp"
 #include "cqr_compact.h"
+#include "cqr_compact.hpp"
 
 namespace {
 
-/* Returns 0 on success or -11 if the interleave width V (the 11th argument)
- * is unsupported -- LAPACK sign convention, never aborts the host process. */
+/* Validate the arguments LAPACK-style and dispatch on the interleave width V.
+ * Returns 0 on success, or -j if the j-th argument (1-based, in signature
+ * order) had an illegal value. Pointer arguments are not inspected, matching
+ * LAPACK; never aborts the host process. */
 template <typename T>
 int dispatch(char trans, int m, int nrhs, int k,
              const T *ap, int ldap, int ncols_a,
              const T *taup, T *bp, int ldbp,
              int V, int nm)
 {
+    const bool trans_ok = (trans == 'T' || trans == 't' ||
+                           trans == 'N' || trans == 'n');
+    const int  ldmin    = (m < 1 ? 1 : m);          /* max(1, m) */
+
+    if (!trans_ok)                              return -1;
+    if (m < 0)                                  return -2;
+    if (nrhs < 0)                               return -3;
+    if (k < 0 || k > m)                         return -4;
+    if (ldap < ldmin)                           return -6;
+    if (ncols_a < k)                            return -7;
+    if (ldbp < ldmin)                           return -10;
+    if (V != 2 && V != 4 && V != 8 && V != 16)  return -11;
+    if (nm < 0)                                 return -12;
+
+    /* Nothing to compute for an empty problem (also keeps the kernel's
+     * nm >= 1 / k >= 1 invariants satisfied below). */
+    if (m == 0 || nrhs == 0 || k == 0 || nm == 0) return 0;
+
     switch (V) {
-    case 2:  cqr::detail::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 4:  cqr::detail::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 8:  cqr::detail::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 16: cqr::detail::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    default: return -11;   /* V is the 11th argument */
+    case 2:  cqr::detail::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
+    case 4:  cqr::detail::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
+    case 8:  cqr::detail::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
+    case 16: cqr::detail::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
     }
+    return 0;
 }
 
 } /* anonymous namespace */

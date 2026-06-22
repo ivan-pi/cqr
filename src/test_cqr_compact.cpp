@@ -367,6 +367,44 @@ static void bench(int V, int nm, int m, int nrhs, int reps)
     volatile T sink = bp[0]; (void)sink;
 }
 
+/* --------------------- C API argument validation -------------------- */
+/* The public C entry points must reject illegal arguments LAPACK-style
+ * (return -j for the j-th argument), not assert or miscompute. */
+static int test_validation()
+{
+    const int m = 8, nrhs = 2, k = 8, V = 4, nm = 4, ld = 8, nca = 8;
+    std::vector<double> ap((size_t)ld * nca * V, 0), tau((size_t)k * V, 0),
+                        bp((size_t)ld * nrhs * V, 0);
+    auto call = [&](char tr, int m_, int nrhs_, int k_, int ldap_, int nca_,
+                    int ldbp_, int V_, int nm_) {
+        return dormqr_compact(tr, m_, nrhs_, k_, ap.data(), ldap_, nca_,
+                              tau.data(), bp.data(), ldbp_, V_, nm_);
+    };
+
+    struct { const char *what; int got, want; } t[] = {
+        {"valid",          call('T', m, nrhs, k,   ld,    nca,   ld,    V, nm),   0},
+        {"bad trans",      call('X', m, nrhs, k,   ld,    nca,   ld,    V, nm),  -1},
+        {"m<0",            call('T', -1, nrhs, k,  ld,    nca,   ld,    V, nm),  -2},
+        {"nrhs<0",         call('T', m, -1, k,     ld,    nca,   ld,    V, nm),  -3},
+        {"k>m",            call('T', m, nrhs, m+1, ld,    nca,   ld,    V, nm),  -4},
+        {"ldap<m",         call('T', m, nrhs, k,   m-1,   nca,   ld,    V, nm),  -6},
+        {"ncols_a<k",      call('T', m, nrhs, k,   ld,    k-1,   ld,    V, nm),  -7},
+        {"ldbp<m",         call('T', m, nrhs, k,   ld,    nca,   m-1,   V, nm), -10},
+        {"bad V",          call('T', m, nrhs, k,   ld,    nca,   ld,    3, nm), -11},
+        {"nm<0",           call('T', m, nrhs, k,   ld,    nca,   ld,    V, -1), -12},
+        {"empty m=0",      call('T', 0, nrhs, 0,   1,     0,     1,     V, nm),   0},
+        {"empty nm=0",     call('T', m, nrhs, k,   ld,    nca,   ld,    V, 0),    0},
+    };
+    int bad = 0;
+    for (auto &c : t) bad += (c.got != c.want);
+    std::printf("C API validation: %zu checks | %s\n",
+                sizeof(t) / sizeof(t[0]), bad ? "FAIL" : "OK");
+    for (auto &c : t)
+        if (c.got != c.want)
+            std::printf("  %-12s got=%d want=%d\n", c.what, c.got, c.want);
+    return bad ? 1 : 0;
+}
+
 /* ------------------------------- main -------------------------------- */
 
 int main(int argc, char **)
@@ -374,6 +412,8 @@ int main(int argc, char **)
     int fails = 0;
 
     const int m = 43, nrhs = 5;  /* nz=28 + npoly=15 */
+
+    fails += test_validation();
 
     fails += run_case<double, 2>(4, m, nrhs);
     fails += run_case<double, 4>(8, m, nrhs);

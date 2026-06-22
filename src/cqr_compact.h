@@ -30,9 +30,15 @@
  *             any of these also work on NEON/SVE as unrolled bursts)
  *   nm       total number of matrices (partial last group is padded)
  *
- * Returns 0 on success, or -j (LAPACK sign convention) if the j-th argument
- * had an illegal value; currently -11 for an unsupported interleave width V.
- * The routine never aborts the calling process.
+ * Returns 0 on success, or -j (LAPACK sign convention) if the j-th argument,
+ * counted in signature order, had an illegal value:
+ *   -1 trans (not 'T'/'t'/'N'/'n')   -2 m (<0)        -3 nrhs (<0)
+ *   -4 k (<0 or >m)                  -6 ldap (<max(1,m))
+ *   -7 ncols_a (<k)                  -10 ldbp (<max(1,m))
+ *   -11 V (not 2/4/8/16)             -12 nm (<0)
+ * Pointer arguments are not inspected (LAPACK convention). An empty problem
+ * (m, nrhs, k, or nm == 0) is a valid no-op returning 0. The routine never
+ * aborts the calling process.
  */
 
 #ifdef __cplusplus
