@@ -222,8 +222,8 @@ double best_time(int reps, Reset &&reset, Timed &&timed)
         reset();                              /* not clocked */
         auto t0 = clk::now();
         timed();
-        auto t1 = clk::now();
-        best = std::min(best, std::chrono::duration<double>(t1 - t0).count());
+        const std::chrono::duration<double> elapsed = clk::now() - t0;  /* seconds */
+        best = std::min(best, elapsed.count());
     }
     return best;
 }
