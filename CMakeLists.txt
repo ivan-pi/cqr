@@ -51,7 +51,7 @@ add_library(cqr::ormqr_compact ALIAS ormqr_compact)
 if(CQR_WITH_MKL)
   find_package(MKLCompact REQUIRED)
 
-  add_library(ext_mkl_ormqr_compact src/ext_mkl_ormqr_compact.cpp)
+  add_library(ext_mkl_ormqr_compact src/cqr_mkl_ext.cpp)
   target_include_directories(ext_mkl_ormqr_compact
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_link_libraries(ext_mkl_ormqr_compact

@@ -25,7 +25,7 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 #include "compact_format.hpp"
 
 #include <cstdio>
@@ -40,7 +40,7 @@ namespace {
 const double eps = std::numeric_limits<double>::epsilon();
 
 /* shared interleave-width helper (specialised for double here) */
-int vlen(MKL_COMPACT_PACK fmt) { return ormqr::detail::vlen_for_format<double>(fmt); }
+int vlen(MKL_COMPACT_PACK fmt) { return cqr::detail::vlen_for_format<double>(fmt); }
 
 double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
 
@@ -129,9 +129,9 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     MKL_INT sz_a = mkl_dget_size_compact(s, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
-    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_a);
-    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(sz_t);
-    auto cp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_c);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_c);
     double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     const MKL_INT ldap = rowmajor ? k : s;          /* compact leading dims */
@@ -204,9 +204,9 @@ int suite2(int nm, int n, int nrhs)
     MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, nrhs, fmt, nm);
-    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_a);
-    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(sz_t);
-    auto cp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(sz_c);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_c);
     double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap, m, fmt, nm);

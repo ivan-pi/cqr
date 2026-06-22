@@ -161,8 +161,9 @@ static std::mt19937_64 rng(42);
 template <class T>
 static T frand()
 {
-    std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    return static_cast<T>(dist(rng));
+    /* one distribution per instantiation (T), reused across calls */
+    static std::uniform_real_distribution<T> dist(T(-1), T(1));
+    return dist(rng);
 }
 
 template <class T>
@@ -226,7 +227,7 @@ static int run_case(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* check 1: compact Q^T B vs scalar */
-    ormqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e1 = 0;
@@ -240,7 +241,7 @@ static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    ormqr::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e3 = 0;
@@ -308,7 +309,7 @@ static int run_case_pivoted(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* kernel: c := Q^T b */
-    ormqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
 

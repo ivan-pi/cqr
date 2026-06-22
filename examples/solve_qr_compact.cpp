@@ -26,7 +26,7 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -144,9 +144,9 @@ void batch_solve(int nm, int n, int nrhs)
      * geqrf_compact -> dormqr_compact -> dtrsm_compact, all on the         *
      * interleaved buffers ap / taup / bp.                                  */
     const int compact_align = 64;   /* byte alignment for the compact buffers */
-    auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
-    auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
-    auto bp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
+    auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
     double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
     /* pack the dense batches into compact (interleaved) layout */

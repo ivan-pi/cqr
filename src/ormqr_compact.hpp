@@ -39,7 +39,7 @@
 #include <cstddef>
 #include <cassert>
 
-namespace ormqr {
+namespace cqr {
 
 /* ------------------------------------------------------------------ */
 /* pack<T,V>::type : the V-wide SIMD element                          */
@@ -321,6 +321,6 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     }
 }
 
-} /* namespace ormqr */
+} /* namespace cqr */
 
 #endif /* ORMQR_COMPACT_HPP */

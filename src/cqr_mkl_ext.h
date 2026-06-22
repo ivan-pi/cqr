@@ -1,7 +1,10 @@
-#ifndef EXT_MKL_ORMQR_COMPACT_H
-#define EXT_MKL_ORMQR_COMPACT_H
+#ifndef CQR_MKL_EXT_H
+#define CQR_MKL_EXT_H
 
-/* ext_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+/* cqr_mkl_ext.h -- the MKL Compact routines this project adds that are
+ * missing from Intel MKL's own compact API.
+ *
+ * ext_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *
  * This is the missing mkl_?ormqr_compact. It multiplies a Compact-format
  * batch of general matrices C by the orthogonal factor Q (or Q^T) produced by
@@ -68,7 +71,7 @@ void ext_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
 #include <memory>
 #include <new>
 
-namespace ext_mkl {
+namespace cqr {
 namespace detail {
 
 /* Stateless deleter calling mkl_free -- usable as a zero-size unique_ptr
@@ -94,8 +97,8 @@ mkl_buffer<T> mkl_alloc_bytes(std::size_t bytes, int align = 64)
 }
 
 } /* namespace detail */
-} /* namespace ext_mkl */
+} /* namespace cqr */
 
 #endif /* __cplusplus */
 
-#endif /* EXT_MKL_ORMQR_COMPACT_H */
+#endif /* CQR_MKL_EXT_H */

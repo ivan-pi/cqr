@@ -18,10 +18,10 @@ int dispatch(char trans, int m, int nrhs, int k,
              int V, int nm)
 {
     switch (V) {
-    case 2:  ormqr::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 4:  ormqr::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 8:  ormqr::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
-    case 16: ormqr::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
+    case 2:  cqr::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
+    case 4:  cqr::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
+    case 8:  cqr::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
+    case 16: cqr::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); return 0;
     default: return -11;   /* V is the 11th argument */
     }
 }

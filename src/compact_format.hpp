@@ -3,7 +3,7 @@
 
 /* Internal helpers shared between the ext_mkl_?ormqr_compact implementation
  * and the project's own test / benchmark facilities. This header is NOT part
- * of the public API -- everything lives in namespace ormqr::detail to make
+ * of the public API -- everything lives in namespace cqr::detail to make
  * that explicit, and users should never include it.
  */
 
@@ -11,7 +11,7 @@
 
 #include <cstddef>
 
-namespace ormqr {
+namespace cqr {
 namespace detail {
 
 /* Interleave width V for a given MKL Compact pack format and scalar type T.
@@ -32,6 +32,6 @@ inline int vlen_for_format(MKL_COMPACT_PACK format)
 }
 
 } /* namespace detail */
-} /* namespace ormqr */
+} /* namespace cqr */
 
 #endif /* COMPACT_FORMAT_HPP */

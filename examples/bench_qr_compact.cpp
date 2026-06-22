@@ -26,7 +26,7 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 #include "compact_format.hpp"
 
 #include <chrono>
@@ -55,7 +55,7 @@ void check(bool cond, const char *what)
 /* Interleave width V for the active compact format (doubles): MKL packs
  * V = (SIMD register bytes) / sizeof(double). Shared helper, specialised
  * for double here. */
-using ormqr::detail::vlen_for_format;
+using cqr::detail::vlen_for_format;
 
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
@@ -107,9 +107,9 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     {
         /* Per-thread compact buffers, sized for a full group of V. */
         const int align = 64;
-        auto ap_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, V), align);
-        auto taup_buf = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, V), align);
-        auto bp_buf   = ext_mkl::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, V), align);
+        auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, V), align);
+        auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
         double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
         std::vector<MKL_INT> info(V);
