@@ -57,7 +57,7 @@ set(CMAKE_REQUIRED_LIBRARIES "${_save_lib}")
 
 if(NOT MKLCompact_INCLUDE_DIR OR NOT MKLCompact_HAS_COMPACT_API)
   message(FATAL_ERROR
-    "The compact-format extension (ext_mkl_dormqr_compact) requires Intel MKL, "
+    "The compact-format extension (cqr_mkl_dormqr_compact) requires Intel MKL, "
     "which is the only BLAS that provides the *_compact API "
     "(mkl_get_format_compact, mkl_dgeqrf_compact, ...).\n"
     "  BLA_VENDOR     = '${BLA_VENDOR}'\n"

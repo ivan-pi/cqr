@@ -1,21 +1,21 @@
-/* test_ext_mkl_ormqr_compact.cpp
+/* test_cqr_mkl_ext.cpp
  *
- * Validation of ext_mkl_dormqr_compact against real Intel MKL, implementing
- * the two test suites of ext_mkl_dormqr_compact_design.md section 7 through
+ * Validation of cqr_mkl_dormqr_compact against real Intel MKL, implementing
+ * the two test suites of cqr_mkl_dormqr_compact_design.md section 7 through
  * the genuine MKL Compact pipeline (mkl_dgepack_compact / mkl_dgeqrf_compact /
  * mkl_dtrsm_compact). This is the design document's "hard correctness gate
  * against standard dense LAPACK equivalents" (section 7.4).
  *
  * Suite 1 (section 7.1) -- Isolated Q application (Q^T B):
  *   A generated Householder representation (H, tau) and a target batch B are
- *   packed into MKL Compact format. ext_mkl_dormqr_compact computes Q^T B in
+ *   packed into MKL Compact format. cqr_mkl_dormqr_compact computes Q^T B in
  *   place. The checker materializes the dense reference Q^T B per matrix via
  *   dense LAPACK (LAPACKE_dormqr) and gates the application residual at
  *   rtol = 20 * n * eps (relative to the matrix L1 norm).
  *
  * Suite 2 (section 7.2) -- End-to-end AX = B solver:
  *   A known X (X(:,j) = j+1) defines B = A X. The compact pipeline runs
- *   mkl_dgeqrf_compact -> ext_mkl_dormqr_compact('T') -> mkl_dtrsm_compact and
+ *   mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('T') -> mkl_dtrsm_compact and
  *   the checker gates the forward error (Xhat - X) and the system residual
  *   (A Xhat - B) at rtol = 100 * n * eps (relative to the matrix L1 norm).
  *
@@ -90,7 +90,7 @@ double norm1_layout(const double *M, int m, int n, bool rowmajor, int ld)
     return mx;
 }
 
-/* Generalized Suite 1: validate ext_mkl_dormqr_compact's op(Q) application
+/* Generalized Suite 1: validate cqr_mkl_dormqr_compact's op(Q) application
  * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x k
  * reflector batch with s = m (side='L') or n (side='R'); C is m x n. */
 int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k)
@@ -143,9 +143,9 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     /* routine under test (workspace query, then compute) */
     std::vector<MKL_INT> info(nm, 99);
     double wq;
-    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
+    cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
                            ap, ldap, taup, cp, ldcp, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
+    cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
                            ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, info.data(), fmt, nm);
 
     /* unpack and compare against the dense reference */
@@ -222,9 +222,9 @@ int suite2(int nm, int n, int nrhs)
     mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, info.data(), fmt, nm);
 
     /* 2. routine under test: cp <- Q^T B */
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
                            ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
                            ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
 
     /* 3. compact upper-triangular solve: cp <- R^{-1} (Q^T B) = Xhat */

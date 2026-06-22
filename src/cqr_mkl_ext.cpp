@@ -1,6 +1,6 @@
 /* cqr_mkl_ext.cpp
  *
- * Implementation of ext_mkl_?ormqr_compact (design document section 8.1):
+ * Implementation of cqr_mkl_?ormqr_compact (design document section 8.1):
  * a C-linkage dispatcher that
  *   1. validates the arguments and reports illegal values through info[],
  *   2. handles the lwork = -1 workspace query,
@@ -21,7 +21,7 @@
  */
 
 #include "cqr_mkl_ext.h"
-#include "ormqr_compact.hpp"
+#include "cqr_compact.hpp"
 #include "compact_format.hpp"
 
 #include <algorithm>
@@ -111,7 +111,7 @@ void run(MKL_LAYOUT layout, char side, char trans,
 
 } /* anonymous namespace */
 
-extern "C" void ext_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
+extern "C" void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                                        MKL_INT m, MKL_INT n, MKL_INT k,
                                        const double *ap, MKL_INT ldap,
                                        const double *taup,
@@ -123,7 +123,7 @@ extern "C" void ext_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                 work, lwork, info, format, nm);
 }
 
-extern "C" void ext_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
+extern "C" void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
                                        MKL_INT m, MKL_INT n, MKL_INT k,
                                        const float *ap, MKL_INT ldap,
                                        const float *taup,

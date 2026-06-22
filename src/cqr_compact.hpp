@@ -1,4 +1,4 @@
-/* ormqr_compact.hpp
+/* cqr_compact.hpp
  *
  * Compact (interleaved-batch) application of Householder reflectors,
  * templated on scalar type T and interleave width V:
@@ -33,8 +33,8 @@
  *     B_v(i,j)  = bp [ g*ldbp*nrhs*V   + (j*ldbp + i)*V + v ]
  */
 
-#ifndef ORMQR_COMPACT_HPP
-#define ORMQR_COMPACT_HPP
+#ifndef CQR_COMPACT_HPP
+#define CQR_COMPACT_HPP
 
 #include <cstddef>
 #include <cassert>
@@ -323,4 +323,4 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
 
 } /* namespace cqr */
 
-#endif /* ORMQR_COMPACT_HPP */
+#endif /* CQR_COMPACT_HPP */

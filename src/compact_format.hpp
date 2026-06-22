@@ -1,7 +1,7 @@
 #ifndef COMPACT_FORMAT_HPP
 #define COMPACT_FORMAT_HPP
 
-/* Internal helpers shared between the ext_mkl_?ormqr_compact implementation
+/* Internal helpers shared between the cqr_mkl_?ormqr_compact implementation
  * and the project's own test / benchmark facilities. This header is NOT part
  * of the public API -- everything lives in namespace cqr::detail to make
  * that explicit, and users should never include it.

@@ -4,18 +4,18 @@
 /* cqr_mkl_ext.h -- the MKL Compact routines this project adds that are
  * missing from Intel MKL's own compact API.
  *
- * ext_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+ * cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *
  * This is the missing mkl_?ormqr_compact. It multiplies a Compact-format
  * batch of general matrices C by the orthogonal factor Q (or Q^T) produced by
  * mkl_?geqrf_compact, filling the gap between the compact QR factorization and
  * the application of its reflectors. The API mirrors MKL's native compact
  * ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference
- * in ext_mkl_dormqr_compact_design.md.
+ * in cqr_mkl_dormqr_compact_design.md.
  *
  * Typical use -- the batched AX = B solver:
  *     mkl_dgeqrf_compact (..., A -> H, tau);          // A = Q R
- *     ext_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
+ *     cqr_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
  *     mkl_dtrsm_compact  (..., U, R, B);              // B := R^{-1} Q^T B = X
  *
  * The matrices are passed in the same Compact buffers used elsewhere in the
@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-void ext_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
+void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             MKL_INT m, MKL_INT n, MKL_INT k,
                             const double *ap, MKL_INT ldap,
                             const double *taup,
@@ -46,7 +46,7 @@ void ext_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             double *work, MKL_INT lwork, MKL_INT *info,
                             MKL_COMPACT_PACK format, MKL_INT nm);
 
-void ext_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
+void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             MKL_INT m, MKL_INT n, MKL_INT k,
                             const float *ap, MKL_INT ldap,
                             const float *taup,

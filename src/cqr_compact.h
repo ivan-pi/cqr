@@ -1,8 +1,8 @@
-#ifndef ORMQR_COMPACT_H
-#define ORMQR_COMPACT_H
+#ifndef CQR_COMPACT_H
+#define CQR_COMPACT_H
 
 /* C API (FFI-stable) for the templated C++ implementation in
- * ormqr_compact.hpp. Apply Q or Q^T from a compact-format QR
+ * cqr_compact.hpp. Apply Q or Q^T from a compact-format QR
  * factorization (mkl_?geqrf_compact) to a compact-format RHS block,
  * from the left:  B := op(Q) * B.
  *
@@ -55,4 +55,4 @@ int sormqr_compact(char trans, int m, int nrhs, int k,
 }
 #endif
 
-#endif /* ORMQR_COMPACT_H */
+#endif /* CQR_COMPACT_H */
