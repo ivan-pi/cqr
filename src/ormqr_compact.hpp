@@ -56,27 +56,10 @@ struct pack {
                               aligned(alignof(T)), may_alias)) = T;
 };
 
-#else /* portable fallback (e.g. MSVC): element-wise operator overloads */
-
-template <typename T, int V>
-struct pack {
-    struct type {
-        T v[V];
-        friend type operator+(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] += b.v[i]; return a;
-        }
-        friend type operator-(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] -= b.v[i]; return a;
-        }
-        friend type operator*(type a, type b) {
-            for (int i = 0; i < V; ++i) a.v[i] *= b.v[i]; return a;
-        }
-        type& operator+=(type b) { return *this = *this + b; }
-        type& operator-=(type b) { return *this = *this - b; }
-        type& operator*=(type b) { return *this = *this * b; }
-    };
-};
-
+#else
+#error "ormqr_compact requires GCC/Clang/Intel GNU-vector extensions " \
+       "(__attribute__((vector_size)) with may_alias); compile with one " \
+       "of those compilers in GNU mode (-std=gnu++17)."
 #endif
 
 /* ------------------------------------------------------------------ */
