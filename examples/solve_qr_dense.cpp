@@ -20,6 +20,7 @@
 #include <mkl.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -31,6 +32,12 @@ const double eps = std::numeric_limits<double>::epsilon();
 
 double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
 
+/* Report and abort on the spot if cond is false. */
+void check(bool cond, const char *what)
+{
+    if (!cond) { std::printf("FAILED: %s\n", what); std::exit(1); }
+}
+
 /* Relative 1-norm difference ||A - B||_1 / ||B||_1, A and B column-major m x n. */
 double rel_diff(const double *A, const double *B, int m, int n)
 {
@@ -41,7 +48,7 @@ double rel_diff(const double *A, const double *B, int m, int n)
     return num / std::max(den, 1e-300);
 }
 
-int solve(int n, int nrhs)
+void solve(int n, int nrhs)
 {
     /* Known exact solution X(:,j) = j+1, so B = A X and the solve must
      * recover X (mirrors the compact suite-2 construction). */
@@ -60,14 +67,14 @@ int solve(int n, int nrhs)
     if (!info)  /* Xqr <- Q^T B  (the step ext_mkl_dormqr_compact fills) */
         info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
                               Aqr.data(), n, tau.data(), Xqr.data(), n);
-    if (info) { std::printf("  manual QR info=%d\n", (int)info); return 1; }
+    check(info == 0, "manual QR (dgeqrf/dormqr)");
     cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasNoTrans, CblasNonUnit,
                 n, nrhs, 1.0, Aqr.data(), n, Xqr.data(), n);  /* Xqr <- R^{-1} Xqr */
 
     /* --- Path 2: naive forward driver  LAPACKE_dgels --- */
     std::vector<double> Adg(A), Xdg(B);
     info = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Adg.data(), n, Xdg.data(), n);
-    if (info) { std::printf("  dgels info=%d\n", (int)info); return 1; }
+    check(info == 0, "LAPACKE_dgels");
 
     /* --- Compare both paths to the exact X and to each other --- */
     double fwd_qr = rel_diff(Xqr.data(), X.data(), n, nrhs);
@@ -85,7 +92,7 @@ int solve(int n, int nrhs)
     std::printf("  n=%-4d nrhs=%d | manual fwd %.2e  dgels fwd %.2e  "
                 "paths agree %.2e  manual res %.2e  (rtol %.2e) %s\n",
                 n, nrhs, fwd_qr, fwd_dg, agree, res_qr, rtol, ok ? "OK" : "FAIL");
-    return ok ? 0 : 1;
+    check(ok, "QR solve accuracy within rtol");
 }
 
 } /* anonymous namespace */
@@ -95,13 +102,11 @@ int main()
     std::srand(42);
     std::printf("Dense QR solve example: dgeqrf -> dormqr -> dtrsm  vs  LAPACKE_dgels\n");
 
-    int fails = 0;
-    fails += solve(32,  5);
-    fails += solve(64,  4);
-    fails += solve(128, 3);
-    fails += solve(256, 1);
+    solve(32,  5);
+    solve(64,  4);
+    solve(128, 3);
+    solve(256, 1);
 
-    if (fails) { std::printf("\n%d CHECK(S) FAILED\n", fails); return 1; }
     std::printf("\nall checks passed\n");
     return 0;
 }
