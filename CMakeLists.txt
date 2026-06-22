@@ -64,12 +64,14 @@ endif()
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
-# Dense, single-matrix worked example of the QR solver sequence
-# (dgeqrf -> dormqr -> dtrsm) the compact pipeline mirrors, cross-checked
-# against LAPACKE_dgels. Needs LAPACKE + BLAS, provided here by Intel MKL.
+# Worked example of the Compact-format batch QR solver
+# (mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact),
+# cross-checked against the naive per-matrix LAPACKE_dgels. Needs Intel MKL
+# (the compact API) and this repo's ext_mkl_ormqr_compact.
 if(CQR_WITH_MKL)
-  add_executable(solve_qr_dense examples/solve_qr_dense.cpp)
-  target_link_libraries(solve_qr_dense PRIVATE MKL::Compact cqr_flags)
+  add_executable(solve_qr_compact examples/solve_qr_compact.cpp)
+  target_link_libraries(solve_qr_compact
+    PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -90,8 +92,8 @@ if(CQR_BUILD_TESTS)
       PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
     add_test(NAME mkl_compact_suites COMMAND test_ext_mkl_ormqr_compact)
 
-    # The dense QR-solve example self-validates, so register it too.
-    add_test(NAME example_solve_qr_dense COMMAND solve_qr_dense)
+    # The compact QR-solve example self-validates, so register it too.
+    add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
   endif()
 
   # ArmPL interleave-batch cross-check (real ArmPL if present, else the

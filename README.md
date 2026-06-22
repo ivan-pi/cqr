@@ -16,7 +16,7 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/test_ormqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design §7). |
 | `src/xcheck_armpl_ormqr.cpp` | Cross-check vs ArmPL interleave-batch (real ArmPL or `src/armpl_stub/`). |
-| `examples/solve_qr_dense.cpp` | Worked dense `AX=B` QR solve (`dgeqrf`→`dormqr`→`dtrsm`) cross-checked against `LAPACKE_dgels`; the single-matrix analogue of the compact pipeline. |
+| `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact`→`ext_mkl_dormqr_compact`→`mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
 
 ## Build
 
@@ -35,27 +35,30 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
 `-DCQR_WITH_MKL=OFF` (build only the portable kernel + ArmPL cross-check),
 `-DCQR_BUILD_XCHECK=OFF`.
 
-## Example: a full QR solve in plain LAPACK
+## Example: a batched QR solve with the Compact API
 
-[`examples/solve_qr_dense.cpp`](examples/solve_qr_dense.cpp) shows the complete
-`AX = B` QR solve as the explicit three-call LAPACK sequence — the dense,
-single-matrix analogue of the Compact-format batch pipeline:
+[`examples/solve_qr_compact.cpp`](examples/solve_qr_compact.cpp) solves a batch
+of square systems `Aᵥ Xᵥ = Bᵥ` end to end with the Compact-format (interleaved)
+pipeline — the routine this repo adds (`ext_mkl_dormqr_compact`) is the middle
+step:
 
 ```
-dgeqrf   A -> (H, R, tau)      A = Q R
-dormqr   B <- Qᵀ B             multiply both sides by Qᵀ:  R X = Qᵀ B
-dtrsm    R X = (Qᵀ B)          back-substitute:            X = R⁻¹(Qᵀ B)
+mkl_dgeqrf_compact      A = Q R                     factor the batch
+ext_mkl_dormqr_compact  B <- Qᵀ B                   apply Qᵀ   (the added routine)
+mkl_dtrsm_compact       R X = (Qᵀ B)  ->  X = R⁻¹ Qᵀ B   triangular solve
 ```
 
-It cross-checks this manual path against the one-call `LAPACKE_dgels` "naive
-forward" driver (which performs exactly this QR solve when `m == n`), confirming
-both recover the known exact solution to machine precision. The `dormqr` step is
-the dense counterpart of `ext_mkl_dormqr_compact`, the routine missing from the
-MKL Compact API. Built (with MKL) as the `solve_qr_dense` target and registered
-as the `example_solve_qr_dense` CTest:
+The dense batches are packed with `mkl_dgepack_compact`, run through the three
+compact calls, and unpacked with `mkl_dgeunpack_compact`. It cross-checks the
+result against the naive baseline — `LAPACKE_dgels('N')` on each matrix
+separately (which reduces to the same QR solve when `m == n`) — confirming the
+compact batch agrees with the per-matrix driver and with the known exact
+solution. One batch size is deliberately not a multiple of the SIMD width to
+exercise the padded last pack. Built (with MKL) as the `solve_qr_compact`
+target and registered as the `example_solve_qr_compact` CTest:
 
 ```sh
-./build/solve_qr_dense
+./build/solve_qr_compact
 ```
 
 ## Accordance with the design document
