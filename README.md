@@ -72,37 +72,27 @@ target and registered as the `example_solve_qr_compact` CTest:
 ## Benchmark: batched vs. per-matrix throughput
 
 [`examples/bench_qr_compact.cpp`](examples/bench_qr_compact.cpp) measures how
-much the Compact (interleaved, batched) pipeline buys over the conventional
-one-matrix-at-a-time LAPACK path on the small-matrix regime the compact API
-targets. For each order `n in {20, 40, 60, 80, 100}` it builds a pool of
-`nmat` well-conditioned matrices with known solution `X == 1` and times two
-solves of the same data:
+much the Compact (batched) pipeline buys over the conventional
+one-matrix-at-a-time LAPACK path. For each order `n in {20, 40, 60, 80, 100}`
+it builds a pool of `nmat` well-conditioned matrices with known solution
+`X == 1` and times both solves of the same data:
 
 ```
 batched      mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact
 non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
 ```
 
-The batched path compacts/uncompacts each group of `V` matrices (the SIMD
-vector length of the active compact format) on the fly, as the intended
-application would. The non-batched path factors **in place** (the application
-does not reuse the matrix), so no per-matrix copy is timed -- a destroyable
-working copy of the pool is refreshed before each pass, outside the timed
-region -- and it turns LAPACKE NaN-checking off (`LAPACKE_set_nancheck(0)`) so
-the per-matrix driver is timed clean. The outer loop over the pool is
-parallelised with OpenMP (MKL's own threading is pinned to 1 so the outer loop
-is the only parallelism), each size is timed `reps` times keeping the best,
-both paths are accuracy-gated against the known solution, and a geometric-mean
-speedup across the sizes is printed at the end.
+The outer loop runs under OpenMP (MKL threading pinned to 1); each size is
+timed `reps` times keeping the best, both paths are accuracy-gated against
+`X == 1`, and a geometric-mean speedup across sizes is printed at the end.
 
 ```sh
 ./build/bench_qr_compact [nmat] [reps]    # defaults: 1000 matrices, 3 reps
 ```
 
-Because both paths are accuracy-gated, the benchmark doubles as an end-to-end
-integration test of the compact pipeline against per-matrix LAPACK; it is
-registered with CTest as `bench_qr_compact_integration` (label `integration`)
-with a small pool and a single rep to keep it fast.
+Because both paths are accuracy-gated, it doubles as an end-to-end integration
+test, registered with CTest as `bench_qr_compact_integration` (label
+`integration`) with a small pool and a single rep.
 
 ## Accordance with the design document
 
