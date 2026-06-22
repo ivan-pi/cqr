@@ -26,12 +26,6 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
   * Debian/Ubuntu — `sudo apt-get install libmkl-dev` (headers in
     `/usr/include/mkl`, LP64 libs in the default library path).
 
-No Fortran toolchain is required (the project is C++-only).
-
-> **Claude Code on the web:** MKL is installed automatically by the
-> `.claude/hooks/session-start.sh` SessionStart hook, so web sessions can build
-> and test out of the box.
-
 ## Build
 
 The compact API is an Intel MKL extension: the `*_compact` symbols are reached
