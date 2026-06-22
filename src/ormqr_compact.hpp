@@ -44,12 +44,11 @@ namespace ormqr {
 /* pack<T,V>::type : the V-wide SIMD element                          */
 /* ------------------------------------------------------------------ */
 
-/* Gate on the capability (the vector_size + may_alias attributes), not on
- * compiler identity: any compiler advertising the GNU vector extensions
- * qualifies -- GCC, Clang, Intel icpx, classic icpc, etc. -- and one that
- * lacks them fails with a clear message regardless of which __* macros it
- * happens to define. __has_attribute is itself guarded for old preprocessors
- * that predate it. */
+/* Define the V-wide element as a GNU vector type when the compiler provides
+ * the vector_size and may_alias attributes, detected directly via
+ * __has_attribute (itself guarded for preprocessors that predate it). A
+ * compiler that supplies these attributes -- GCC, Clang, Intel icpx/icpc --
+ * uses the vector type; any other stops at the #error below. */
 #if defined(__has_attribute)
 #  if __has_attribute(vector_size) && __has_attribute(__may_alias__)
 #    define CQR_HAS_GNU_VECTORS 1
