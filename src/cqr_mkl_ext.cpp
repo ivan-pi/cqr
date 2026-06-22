@@ -22,7 +22,6 @@
 
 #include "cqr_mkl_ext.h"
 #include "cqr_compact.hpp"
-#include "compact_format.hpp"
 
 #include <algorithm>
 

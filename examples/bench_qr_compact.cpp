@@ -27,7 +27,6 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "compact_format.hpp"
 
 #include <chrono>
 #include <cmath>

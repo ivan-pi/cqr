@@ -61,8 +61,10 @@ void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
 #ifdef __cplusplus
 
 /* ------------------------------------------------------------------ *
- * C++-only RAII helpers (internal; for this project's tests/examples, *
- * not part of the FFI-stable C surface above).                        *
+ * C++-only internal helpers (for this project's implementation and    *
+ * tests/examples; not part of the FFI-stable C surface above). These  *
+ * are MKL-dependent on purpose -- the MKL-free headers (cqr_compact.h, *
+ * cqr_compact.hpp) carry nothing from this file.                      *
  * ------------------------------------------------------------------ */
 
 #include "mkl_service.h"   /* mkl_malloc / mkl_free */
@@ -73,6 +75,23 @@ void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
 
 namespace cqr {
 namespace detail {
+
+/* Interleave width V for a given MKL Compact pack format and scalar type T.
+ * MKL packs V = (SIMD register bytes) / sizeof(T):
+ *   SSE = 16 B, AVX = 32 B, AVX512 = 64 B.
+ * Returns 0 for an unrecognised format. */
+template <typename T>
+inline int vlen_for_format(MKL_COMPACT_PACK format)
+{
+    int bytes;
+    switch (format) {
+    case MKL_COMPACT_SSE:    bytes = 16; break;
+    case MKL_COMPACT_AVX:    bytes = 32; break;
+    case MKL_COMPACT_AVX512: bytes = 64; break;
+    default:                 return 0;
+    }
+    return bytes / static_cast<int>(sizeof(T));
+}
 
 /* Stateless deleter calling mkl_free -- usable as a zero-size unique_ptr
  * deleter, so the owning handle is no larger than a bare pointer. */

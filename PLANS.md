@@ -5,7 +5,7 @@ Known gaps between the implementation and the design document
 
 - **Complex precisions (`cunmqr`/`zunmqr`).** Only real precisions exist; the
   family is real-only and `trans='C'` is folded to `'T'`
-  (`src/cqr_mkl_ext.cpp:53-54,82`). Document the real-only scope, or
+  (`src/cqr_mkl_ext.cpp:46-47,80`). Document the real-only scope, or
   add genuine complex specializations.
 - **`A` packed column count assumed equal to `k`.** `ncols_a = k` is hardcoded
   (`src/cqr_mkl_ext.cpp:84-87`), correct for square/tall
@@ -14,7 +14,7 @@ Known gaps between the implementation and the design document
   packed-ncols parameter.
 - **`work[0]` not set on the compute path.** Design section 5 requires `work[0]`
   to hold the minimum `lwork` on successful exit; it is only set during the
-  `lwork = -1` query (`src/cqr_mkl_ext.cpp:73-76`). Trivial fix.
+  `lwork = -1` query (`src/cqr_mkl_ext.cpp:71-74`). Trivial fix.
 - **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
   well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
   (`logspace(0,-cond,n)`), the rank-deficient / near-rank-deficient / banded /
