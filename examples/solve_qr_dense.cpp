@@ -38,54 +38,79 @@ void check(bool cond, const char *what)
     if (!cond) { std::printf("FAILED: %s\n", what); std::exit(1); }
 }
 
-/* Relative 1-norm difference ||A - B||_1 / ||B||_1, A and B column-major m x n. */
-double rel_diff(const double *A, const double *B, int m, int n)
+/* Minimal column-major dense matrix: owns its storage and hands raw pointers
+ * (data(), ld()) to BLAS/LAPACK. Leading dimension == row count. */
+class Matrix {
+public:
+    Matrix(int rows, int cols)
+        : rows_(rows), cols_(cols), a_((size_t)rows * cols) {}
+
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
+    int ld()   const { return rows_; }
+    double       *data()       { return a_.data(); }
+    const double *data() const { return a_.data(); }
+    double &operator()(int i, int j)       { return a_[i + (size_t)j * rows_]; }
+    double  operator()(int i, int j) const { return a_[i + (size_t)j * rows_]; }
+
+private:
+    int rows_, cols_;
+    std::vector<double> a_;
+};
+
+/* 1-norm of a matrix, ||A||_1 (max column sum). */
+double norm1(const Matrix &A)
 {
-    std::vector<double> D(A, A + (size_t)m * n);
-    cblas_daxpy((size_t)m * n, -1.0, B, 1, D.data(), 1);          /* D <- A - B */
-    double num = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', m, n, D.data(), m);
-    double den = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', m, n, B, m);
-    return num / std::max(den, 1e-300);
+    return LAPACKE_dlange(LAPACK_COL_MAJOR, '1', A.rows(), A.cols(), A.data(), A.ld());
+}
+
+/* Relative 1-norm difference ||A - B||_1 / ||B||_1 (A, B same shape). */
+double rel_diff(const Matrix &A, const Matrix &B)
+{
+    Matrix D = A;                                 /* D <- A */
+    cblas_daxpy((size_t)D.rows() * D.cols(), -1.0, B.data(), 1, D.data(), 1);  /* D <- A - B */
+    return norm1(D) / std::max(norm1(B), 1e-300);
 }
 
 void solve(int n, int nrhs)
 {
     /* Known exact solution X(:,j) = j+1, so B = A X and the solve must
      * recover X (mirrors the compact suite-2 construction). */
-    const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
-    std::vector<double> A(sA), X(sB), B(sB);
+    Matrix A(n, n), X(n, nrhs), B(n, nrhs);
     for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i) X[i + (size_t)j * n] = double(j + 1);
-    for (size_t i = 0; i < sA; ++i) A[i] = frand();
-    for (int i = 0; i < n; ++i) A[i + (size_t)i * n] += 2.0;  /* tame conditioning */
+        for (int i = 0; i < n; ++i) X(i, j) = double(j + 1);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) A(i, j) = frand();
+    for (int i = 0; i < n; ++i) A(i, i) += 2.0;   /* tame conditioning */
     cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n,
-                1.0, A.data(), n, X.data(), n, 0.0, B.data(), n);   /* B = A X */
+                1.0, A.data(), A.ld(), X.data(), X.ld(), 0.0, B.data(), B.ld());  /* B = A X */
 
     /* --- Path 1: explicit QR solve  dgeqrf -> dormqr -> dtrsm --- */
-    std::vector<double> Aqr(A), Xqr(B), tau(n);
-    lapack_int info = LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, Aqr.data(), n, tau.data());
+    Matrix Aqr = A, Xqr = B;
+    std::vector<double> tau(n);
+    lapack_int info = LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, Aqr.data(), Aqr.ld(), tau.data());
     if (!info)  /* Xqr <- Q^T B  (the step ext_mkl_dormqr_compact fills) */
         info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                              Aqr.data(), n, tau.data(), Xqr.data(), n);
+                              Aqr.data(), Aqr.ld(), tau.data(), Xqr.data(), Xqr.ld());
     check(info == 0, "manual QR (dgeqrf/dormqr)");
     cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasNoTrans, CblasNonUnit,
-                n, nrhs, 1.0, Aqr.data(), n, Xqr.data(), n);  /* Xqr <- R^{-1} Xqr */
+                n, nrhs, 1.0, Aqr.data(), Aqr.ld(), Xqr.data(), Xqr.ld());  /* Xqr <- R^{-1} Xqr */
 
     /* --- Path 2: naive forward driver  LAPACKE_dgels --- */
-    std::vector<double> Adg(A), Xdg(B);
-    info = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Adg.data(), n, Xdg.data(), n);
+    Matrix Adg = A, Xdg = B;
+    info = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs,
+                         Adg.data(), Adg.ld(), Xdg.data(), Xdg.ld());
     check(info == 0, "LAPACKE_dgels");
 
     /* --- Compare both paths to the exact X and to each other --- */
-    double fwd_qr = rel_diff(Xqr.data(), X.data(), n, nrhs);
-    double fwd_dg = rel_diff(Xdg.data(), X.data(), n, nrhs);
-    double agree  = rel_diff(Xqr.data(), Xdg.data(), n, nrhs);
+    double fwd_qr = rel_diff(Xqr, X);
+    double fwd_dg = rel_diff(Xdg, X);
+    double agree  = rel_diff(Xqr, Xdg);
 
-    std::vector<double> R(B);                                  /* R <- A Xqr - B */
+    Matrix R = B;                                 /* R <- A Xqr - B */
     cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n,
-                1.0, A.data(), n, Xqr.data(), n, -1.0, R.data(), n);
-    double res_qr = LAPACKE_dlange(LAPACK_COL_MAJOR, '1', n, nrhs, R.data(), n) /
-                    std::max(LAPACKE_dlange(LAPACK_COL_MAJOR, '1', n, nrhs, B.data(), n), 1e-300);
+                1.0, A.data(), A.ld(), Xqr.data(), Xqr.ld(), -1.0, R.data(), R.ld());
+    double res_qr = norm1(R) / std::max(norm1(B), 1e-300);
 
     const double rtol = 100.0 * n * eps;
     bool ok = (fwd_qr <= rtol && fwd_dg <= rtol && agree <= rtol && res_qr <= rtol);
