@@ -71,6 +71,16 @@ if(CQR_WITH_MKL)
   add_executable(solve_qr_compact examples/solve_qr_compact.cpp)
   target_link_libraries(solve_qr_compact
     PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+
+  # Throughput benchmark: compact batched vs per-matrix LAPACK QR solve, with
+  # the outer loop over the matrix pool parallelised by OpenMP when available.
+  add_executable(bench_qr_compact examples/bench_qr_compact.cpp)
+  target_link_libraries(bench_qr_compact
+    PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -93,5 +103,9 @@ if(CQR_BUILD_TESTS)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
+
+    # The benchmark carries a correctness gate (both paths must recover the
+    # known solution); run a small, quick pool of it under CTest.
+    add_test(NAME bench_qr_compact_smoke COMMAND bench_qr_compact 64 1)
   endif()
 endif()
