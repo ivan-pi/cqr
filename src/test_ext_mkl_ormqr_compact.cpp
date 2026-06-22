@@ -1,0 +1,257 @@
+/* test_ext_mkl_ormqr_compact.cpp
+ *
+ * Validation of ext_mkl_dormqr_compact against real Intel MKL, implementing
+ * the two test suites of ext_mkl_dormqr_compact_design.md section 7 through
+ * the genuine MKL Compact pipeline (mkl_dgepack_compact / mkl_dgeqrf_compact /
+ * mkl_dtrsm_compact). This is the design document's "hard correctness gate
+ * against standard dense LAPACK equivalents" (section 7.4).
+ *
+ * Suite 1 (section 7.1) -- Isolated Q application (Q^T B):
+ *   A generated Householder representation (H, tau) and a target batch B are
+ *   packed into MKL Compact format. ext_mkl_dormqr_compact computes Q^T B in
+ *   place. The checker materializes the dense reference Q^T B per matrix via
+ *   dense LAPACK (LAPACKE_dormqr) and gates the application residual at
+ *   rtol = 20 * n * eps (relative to the matrix L1 norm).
+ *
+ * Suite 2 (section 7.2) -- End-to-end AX = B solver:
+ *   A known X (X(:,j) = j+1) defines B = A X. The compact pipeline runs
+ *   mkl_dgeqrf_compact -> ext_mkl_dormqr_compact('T') -> mkl_dtrsm_compact and
+ *   the checker gates the forward error (Xhat - X) and the system residual
+ *   (A Xhat - B) at rtol = 100 * n * eps (relative to the matrix L1 norm).
+ *
+ * Build: needs Intel MKL (headers + libmkl_rt); wired up by CMakeLists.txt.
+ */
+
+#include <mkl.h>
+#include <mkl_compact.h>
+
+#include "ext_mkl_ormqr_compact.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <limits>
+#include <vector>
+#include <algorithm>
+
+namespace {
+
+const double eps = std::numeric_limits<double>::epsilon();
+
+int vlen(MKL_COMPACT_PACK fmt)
+{
+    switch (fmt) {
+    case MKL_COMPACT_SSE:    return 16 / (int)sizeof(double);
+    case MKL_COMPACT_AVX:    return 32 / (int)sizeof(double);
+    case MKL_COMPACT_AVX512: return 64 / (int)sizeof(double);
+    default:                 return 0;
+    }
+}
+
+double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
+
+/* L1 (max column sum) norm of a column-major m x n matrix */
+double norm1(const double *M, int m, int n)
+{
+    double mx = 0;
+    for (int j = 0; j < n; ++j) {
+        double s = 0;
+        for (int i = 0; i < m; ++i) s += std::abs(M[i + (size_t)j * m]);
+        mx = std::max(mx, s);
+    }
+    return mx;
+}
+
+double maxdiff(const double *a, const double *b, size_t n)
+{
+    double d = 0;
+    for (size_t i = 0; i < n; ++i) d = std::max(d, std::abs(a[i] - b[i]));
+    return d;
+}
+
+/* ---------------- Suite 1: isolated Q^T B (section 7.1) ---------------- */
+
+int suite1(int nm, int m, int n, int k)
+{
+    const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
+    const int V = vlen(fmt);
+
+    /* per-matrix dense buffers (column-major) */
+    std::vector<std::vector<double>> H(nm, std::vector<double>((size_t)m * k));
+    std::vector<std::vector<double>> tau(nm, std::vector<double>(k));
+    std::vector<std::vector<double>> B(nm, std::vector<double>((size_t)m * n));
+    std::vector<std::vector<double>> Bref(nm), Bout(nm, std::vector<double>((size_t)m * n));
+
+    for (int v = 0; v < nm; ++v) {
+        for (auto &x : H[v]) x = frand();
+        for (int i = 0; i < std::min(m, k); ++i) H[v][i + (size_t)i * m] += 2.0;
+        /* turn H into a real Householder representation via dense QR */
+        LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, k, H[v].data(), m, tau[v].data());
+        for (auto &x : B[v]) x = frand();
+        Bref[v] = B[v];
+        /* dense reference: Q^T B */
+        LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, n, k,
+                       H[v].data(), m, tau[v].data(), Bref[v].data(), m);
+    }
+
+    /* pack into MKL Compact format */
+    std::vector<const double *> Hp(nm), Bp(nm), Tp(nm);
+    for (int v = 0; v < nm; ++v) { Hp[v] = H[v].data(); Bp[v] = B[v].data(); Tp[v] = tau[v].data(); }
+
+    MKL_INT sz_a = mkl_dget_size_compact(m, k, fmt, nm);
+    MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
+    MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
+    double *ap   = (double *)mkl_malloc(sz_a, 64);
+    double *taup = (double *)mkl_malloc(sz_t, 64);
+    double *cp   = (double *)mkl_malloc(sz_c, 64);
+
+    mkl_dgepack_compact(MKL_COL_MAJOR, m, k, Hp.data(), m, ap, m, fmt, nm);
+    mkl_dgepack_compact(MKL_COL_MAJOR, k, 1, Tp.data(), k, taup, k, fmt, nm);
+    mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Bp.data(), m, cp, m, fmt, nm);
+
+    /* routine under test */
+    std::vector<MKL_INT> info(nm, 99);
+    double wq;
+    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, n, k,
+                           ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
+    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, n, k,
+                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+
+    /* unpack and compare against the dense reference */
+    std::vector<double *> Op(nm);
+    for (int v = 0; v < nm; ++v) Op[v] = Bout[v].data();
+    mkl_dgeunpack_compact(MKL_COL_MAJOR, m, n, Op.data(), m, cp, m, fmt, nm);
+
+    int fails = 0;
+    double worst = 0;
+    for (int v = 0; v < nm; ++v) {
+        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
+        double resid = maxdiff(Bout[v].data(), Bref[v].data(), (size_t)m * n);
+        double rel = resid / std::max(norm1(Bref[v].data(), m, n), 1e-300);
+        worst = std::max(worst, rel);
+    }
+    const double rtol = 20.0 * n * eps;
+    bool ok = (worst <= rtol);
+    fails += !ok;
+    std::printf("  [suite1] V=%-2d nm=%-2d m=%-3d n=%d k=%-3d | QtB rel resid %.2e (rtol %.2e) %s\n",
+                V, nm, m, n, k, worst, rtol, ok ? "OK" : "FAIL");
+
+    mkl_free(ap); mkl_free(taup); mkl_free(cp);
+    return fails;
+}
+
+/* ---------------- Suite 2: end-to-end AX = B (section 7.2) ------------- */
+
+int suite2(int nm, int n, int nrhs)
+{
+    const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
+    const int V = vlen(fmt);
+    const int m = n, k = n;
+
+    std::vector<double> X((size_t)n * nrhs);
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = 0; i < n; ++i) X[i + (size_t)j * n] = double(j + 1);
+
+    std::vector<std::vector<double>> A(nm, std::vector<double>((size_t)n * n));
+    std::vector<std::vector<double>> B(nm, std::vector<double>((size_t)n * nrhs));
+    for (int v = 0; v < nm; ++v) {
+        for (auto &x : A[v]) x = frand();
+        for (int i = 0; i < n; ++i) A[v][i + (size_t)i * n] += 2.0; /* tame cond */
+        for (int j = 0; j < nrhs; ++j)                              /* B = A X */
+            for (int i = 0; i < n; ++i) {
+                double s = 0;
+                for (int l = 0; l < n; ++l) s += A[v][i + (size_t)l * n] * X[l + (size_t)j * n];
+                B[v][i + (size_t)j * n] = s;
+            }
+    }
+
+    std::vector<const double *> Ap(nm), Bp(nm);
+    for (int v = 0; v < nm; ++v) { Ap[v] = A[v].data(); Bp[v] = B[v].data(); }
+
+    MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nm);
+    MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
+    MKL_INT sz_c = mkl_dget_size_compact(m, nrhs, fmt, nm);
+    double *ap   = (double *)mkl_malloc(sz_a, 64);
+    double *taup = (double *)mkl_malloc(sz_t, 64);
+    double *cp   = (double *)mkl_malloc(sz_c, 64);
+
+    mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap, m, fmt, nm);
+    mkl_dgepack_compact(MKL_COL_MAJOR, m, nrhs, Bp.data(), m, cp, m, fmt, nm);
+
+    std::vector<MKL_INT> info(nm, 99);
+
+    /* 1. compact QR: ap <- (H, R), taup <- tau   (workspace query first) */
+    double wq;
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, info.data(), fmt, nm);
+    MKL_INT lwork = (MKL_INT)wq;
+    std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, info.data(), fmt, nm);
+
+    /* 2. routine under test: cp <- Q^T B */
+    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+                           ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
+    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+
+    /* 3. compact upper-triangular solve: cp <- R^{-1} (Q^T B) = Xhat */
+    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
+                      n, nrhs, 1.0, ap, m, cp, m, fmt, nm);
+
+    std::vector<std::vector<double>> Xhat(nm, std::vector<double>((size_t)n * nrhs));
+    std::vector<double *> Op(nm);
+    for (int v = 0; v < nm; ++v) Op[v] = Xhat[v].data();
+    mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Op.data(), n, cp, m, fmt, nm);
+
+    int fails = 0;
+    double worst_fwd = 0, worst_res = 0;
+    std::vector<double> AX((size_t)n * nrhs);
+    for (int v = 0; v < nm; ++v) {
+        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
+        double fwd = maxdiff(Xhat[v].data(), X.data(), (size_t)n * nrhs) /
+                     std::max(norm1(X.data(), n, nrhs), 1e-300);
+        worst_fwd = std::max(worst_fwd, fwd);
+
+        for (int j = 0; j < nrhs; ++j)                /* AX = A Xhat */
+            for (int i = 0; i < n; ++i) {
+                double s = 0;
+                for (int l = 0; l < n; ++l) s += A[v][i + (size_t)l * n] * Xhat[v][l + (size_t)j * n];
+                AX[i + (size_t)j * n] = s;
+            }
+        double res = maxdiff(AX.data(), B[v].data(), (size_t)n * nrhs) /
+                     std::max(norm1(B[v].data(), n, nrhs), 1e-300);
+        worst_res = std::max(worst_res, res);
+    }
+    const double rtol = 100.0 * n * eps;
+    bool ok = (worst_fwd <= rtol && worst_res <= rtol);
+    fails += !ok;
+    std::printf("  [suite2] V=%-2d nm=%-2d n=%-3d nrhs=%d | fwd err %.2e res %.2e (rtol %.2e) %s\n",
+                V, nm, n, nrhs, worst_fwd, worst_res, rtol, ok ? "OK" : "FAIL");
+
+    mkl_free(ap); mkl_free(taup); mkl_free(cp);
+    return fails;
+}
+
+} /* anonymous namespace */
+
+int main()
+{
+    std::srand(42);
+    std::printf("MKL compact format = %d, V(double) = %d\n",
+                (int)mkl_get_format_compact(), vlen(mkl_get_format_compact()));
+
+    int fails = 0;
+    /* Suite 1: isolated Q^T B across batch sizes / shapes */
+    fails += suite1(8,  43, 5, 43);
+    fails += suite1(16, 64, 8, 64);
+    fails += suite1(11, 32, 4, 20);   /* k < m, padded partial last group */
+
+    /* Suite 2: end-to-end solver, shapes from section 7.3 (32..512) */
+    fails += suite2(8,  32, 5);
+    fails += suite2(8,  64, 4);
+    fails += suite2(16, 128, 3);
+    fails += suite2(7,  32, 6);       /* padded partial last group */
+
+    if (fails) { std::printf("\n%d CHECK(S) FAILED\n", fails); return 1; }
+    std::printf("\nall checks passed\n");
+    return 0;
+}
