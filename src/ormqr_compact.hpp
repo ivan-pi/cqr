@@ -5,7 +5,7 @@
  *
  *     B := op(Q) * B,   op(Q) = Q ('N') or Q^T ('T'),  side = 'L'
  *
- * The missing mkl_?ormqr_compact / a portable armpl_?ormqr_interleave_batch.
+ * The missing mkl_?ormqr_compact, in portable form.
  *
  * Design:
  *   - V is the compact-format interleave width (number of matrices whose
