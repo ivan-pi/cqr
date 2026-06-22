@@ -17,6 +17,21 @@ design document [`ext_mkl_dormqr_compact_design.md`](ext_mkl_dormqr_compact_desi
 | `src/test_ext_mkl_ormqr_compact.cpp` | MKL-backed validation through the real compact pipeline (design §7). |
 | `src/xcheck_armpl_ormqr.cpp` | Cross-check vs ArmPL interleave-batch (real ArmPL or `src/armpl_stub/`). |
 
+## Prerequisites
+
+* **CMake ≥ 3.18**, a **C++17 compiler** (GCC/Clang) and a build tool (Make/Ninja).
+* **Intel MKL** — provides the Compact-format extension (`mkl_compact.h`,
+  `mkl_*geqrf_compact`, …) that this project builds on. Any MKL works:
+  * oneAPI MKL — `source /opt/intel/oneapi/setvars.sh` (sets `MKLROOT`), or
+  * Debian/Ubuntu — `sudo apt-get install libmkl-dev` (headers in
+    `/usr/include/mkl`, LP64 libs in the default library path).
+
+No Fortran toolchain is required (the project is C++-only).
+
+> **Claude Code on the web:** MKL is installed automatically by the
+> `.claude/hooks/session-start.sh` SessionStart hook, so web sessions can build
+> and test out of the box.
+
 ## Build
 
 The compact API is an Intel MKL extension: the `*_compact` symbols are reached

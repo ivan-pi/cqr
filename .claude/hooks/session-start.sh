@@ -1,0 +1,45 @@
+#!/bin/bash
+# SessionStart hook for Claude Code on the web.
+#
+# Installs the one missing prerequisite for building/testing cqr: Intel MKL.
+# The base image already ships CMake, g++/gcc and GNU Make; the project is
+# CXX-only (no Fortran), so gfortran is not required.
+#
+# cqr's MKL "Compact" extension (mkl_*geqrf_compact / the ext_mkl_dormqr_compact
+# routine it complements) is reached through the Intel BLAS link line, so the
+# build is configured with -DBLA_VENDOR=Intel10_64lp_seq and needs the MKL
+# headers + LP64 libraries. Ubuntu's `libmkl-dev` (universe) provides
+# /usr/include/mkl/mkl_compact.h and libmkl_intel_lp64 / libmkl_sequential /
+# libmkl_core, which CMake's FindBLAS + cmake/FindMKLCompact.cmake locate.
+#
+# NOTE: Intel's own apt repo (apt.repos.intel.com) is blocked by the web
+# network policy, so we deliberately use the distro package rather than oneAPI.
+set -euo pipefail
+
+# Async: let the session start while MKL installs in the background.
+echo '{"async": true, "asyncTimeout": 600000}'
+
+# Only manage dependencies in the remote (web) environment; leave local
+# machines (which may already have a oneAPI MKL install) untouched.
+if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
+  exit 0
+fi
+
+# Idempotent: skip the apt work if the compact header is already present.
+if [ -f /usr/include/mkl/mkl_compact.h ]; then
+  echo "Intel MKL already present; nothing to do."
+  exit 0
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+# `sudo` if we are not root, otherwise run apt directly.
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO="sudo"
+fi
+
+$SUDO apt-get update -y
+$SUDO apt-get install -y --no-install-recommends libmkl-dev
+
+echo "Intel MKL installed (libmkl-dev)."
