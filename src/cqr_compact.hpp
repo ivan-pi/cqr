@@ -31,6 +31,41 @@
  *     A_v(i,j)  = ap [ g*ldap*ncols_a*V + (j*ldap + i)*V + v ]
  *     tau_v(kk) = taup[ g*k*V           +  kk*V          + v ]
  *     B_v(i,j)  = bp [ g*ldbp*nrhs*V   + (j*ldbp + i)*V + v ]
+ *
+ * Applying the implicit Q (the heart of this file):
+ *   ?geqrf_compact never forms Q. It returns Q as a product of k elementary
+ *   Householder reflectors together with the scalars tau(0..k-1):
+ *
+ *       Q = H(0) H(1) ... H(k-1),   H(kk) = I - tau(kk) * v(kk) * v(kk)^T.
+ *
+ *   Each reflector vector v(kk) is unit-lower -- an implicit 1 in position kk,
+ *   sub-diagonal entries stored in column kk of A, zeros above:
+ *       v(kk)[kk] = 1            (implicit, never read),
+ *       v(kk)[i]  = A(i,kk),     i = kk+1 .. spec_len-1,   <-- the ak[i] below
+ *       v(kk)[i]  = 0,           i < kk.
+ *
+ *   So we never touch a dense Q. Applying one reflector to a single panel slice
+ *   c (a column of B for side='L', a row for side='R') is a rank-1 update, two
+ *   passes over the tail i = kk+1 .. spec_len-1 (this is dorm2r):
+ *       w  = v(kk)^T c = c[kk] + sum_i ak[i]*c[i]     (dot, exploiting v[kk]=1)
+ *       c := c - tau(kk) * w * v(kk)                  (axpy back)
+ *          => c[kk] -= tau*w;   c[i] -= tau*w*ak[i].
+ *
+ *   Order / transpose. Each H is symmetric (H^T = H), so Q^T = H(k-1)..H(0),
+ *   and the reflectors must be applied in the order the matrix product dictates
+ *   (this is the LAPACK DORMQR/DORM2R table):
+ *
+ *       side   op(Q)      expanded                 sweep over kk
+ *       'L'    Q  * C     H(0)..H(k-1) * C         descending (Backward)
+ *       'L'    Q^T* C     H(k-1)..H(0) * C         ascending  (Forward)
+ *       'R'    C * Q      C * H(0)..H(k-1)         ascending  (Forward)
+ *       'R'    C * Q^T    C * H(k-1)..H(0)         descending (Backward)
+ *
+ *   i.e. fwd = (side=='L') ? trans : !trans, as the entry points compute. For
+ *   side='R' the dot/axpy run over the rows of C rather than its columns; the
+ *   strided kernel expresses that solely by swapping which stride is the
+ *   "special" (reflector) direction and which is the "panel" direction, so the
+ *   arithmetic is shared with side='L'.
  */
 
 #ifndef CQR_COMPACT_HPP
@@ -38,6 +73,7 @@
 
 #include <cstddef>
 #include <cassert>
+#include <type_traits>
 
 namespace cqr {
 namespace detail {
@@ -61,6 +97,12 @@ namespace detail {
 
 template <typename T, int V>
 struct pack {
+    /* GNU vector_size requires a power-of-two byte width; the supported
+     * interleave widths are 2/4/8/16, matching the C API. Check it here -- the
+     * single chokepoint -- so a bad width fails with this message instead of a
+     * cryptic error inside the attribute instantiation. */
+    static_assert(V == 2 || V == 4 || V == 8 || V == 16,
+                  "interleave width V must be 2, 4, 8, or 16");
     /* aligned(alignof(T)) relaxes the alignment requirement so the type
      * is valid on any T-aligned buffer (unaligned vector loads are free
      * on all modern hardware); may_alias exempts it from strict-aliasing
@@ -89,6 +131,45 @@ struct pack {
 enum class Direction { Forward, Backward };
 
 /* ------------------------------------------------------------------ */
+/* BatchView: a strided 2-D view of one group of V interleaved matrices*/
+/*                                                                     */
+/* The element type is the V-wide pack (use a const pack for read-only */
+/* operands such as the reflector batch A). Indices are in elements;   */
+/* strides are in units of the V-wide pack, so one BatchView addresses */
+/* element (i,p) of every matrix in the group at once. The two axes    */
+/* are named for their role in the reflector sweep, not for row/col:   */
+/*   special -- the axis the Householder vector runs along             */
+/*              (rows of A and, for side='L', of C; columns for 'R'),  */
+/*   panel   -- the orthogonal axis, register-blocked 4 at a time.     */
+/* ------------------------------------------------------------------ */
+
+template <typename VT, typename Int = int>
+struct BatchView {
+    VT          *const data    = nullptr;
+    const std::size_t  special = 0;   /* stride along the swept (reflector) axis */
+    const std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
+
+    VT &operator()(Int i, Int p) const noexcept {
+        return data[static_cast<std::size_t>(i) * special
+                  + static_cast<std::size_t>(p) * panel];
+    }
+};
+
+/* Reinterpret a packed T buffer as a group view of V-wide pack elements. */
+template <typename T, int V, typename Int = int>
+BatchView<const typename pack<T, V>::type, Int>
+make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept {
+    using VT = typename pack<T, V>::type;
+    return { reinterpret_cast<const VT *>(p), special, panel };
+}
+template <typename T, int V, typename Int = int>
+BatchView<typename pack<T, V>::type, Int>
+make_view(T *p, std::size_t special, std::size_t panel) noexcept {
+    using VT = typename pack<T, V>::type;
+    return { reinterpret_cast<VT *>(p), special, panel };
+}
+
+/* ------------------------------------------------------------------ */
 /* One group of V interleaved matrices                                 */
 /* ------------------------------------------------------------------ */
 
@@ -99,6 +180,10 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
                          T *b_, Int ldbp)
 {
     using VT = typename pack<T, V>::type;
+    static_assert(std::is_floating_point<T>::value,
+                  "ormqr_compact is defined for real float/double");
+
+    assert(k <= m && ldap >= m && ldbp >= m);
 
     const VT *A   = reinterpret_cast<const VT *>(a_);
     const VT *tau = reinterpret_cast<const VT *>(tau_);
@@ -152,79 +237,73 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
 }
 
 /* ------------------------------------------------------------------ */
-/* One group, fully general: any side / layout via explicit strides.   */
+/* One group, fully general: any side / layout via BatchView strides.  */
 /*                                                                     */
 /* The unblocked dorm2r math is identical to the left/col-major kernel */
-/* above; only the addressing changes. For reflector kk the essential  */
-/* Householder vector is column kk of A (implicit 1 at the diagonal):  */
-/*   ak[i] = A(i,kk),  i in (kk, spec_len),                            */
-/* indexed by the "special" stride. C is swept along two strides:      */
-/* the special index (rows for side='L', columns for side='R') and the */
-/* panel index (the other dimension), register-blocked 4 at a time.    */
-/*                                                                     */
-/* All strides are in units of the V-wide pack element VT.             */
+/* above; only the addressing changes, and that now lives entirely in  */
+/* the two BatchViews. For reflector kk the essential Householder      */
+/* vector is column kk of A (implicit 1 at the diagonal):              */
+/*   A(i,kk),  i in (kk, spec_len).                                    */
+/* C is swept along its special axis (rows for side='L', columns for   */
+/* side='R') and register-blocked 4 panel slices at a time.            */
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
 void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int k,
-                                 const T *a_, std::size_t a_spec, std::size_t a_kk,
+                                 BatchView<const typename pack<T, V>::type, Int> A,
                                  const T *tau_,
-                                 T *c_, std::size_t c_spec, std::size_t c_panel)
+                                 BatchView<typename pack<T, V>::type, Int> C)
 {
     using VT = typename pack<T, V>::type;
+    static_assert(std::is_floating_point<T>::value,
+                  "ormqr_compact is defined for real float/double");
 
-    const VT *A   = reinterpret_cast<const VT *>(a_);
+    /* k reflectors live along the special axis; strides must be non-degenerate
+     * so distinct (i,p) map to distinct elements. */
+    assert(k <= spec_len);
+    assert(A.special && A.panel && C.special && C.panel);
+
     const VT *tau = reinterpret_cast<const VT *>(tau_);
-    VT       *C   = reinterpret_cast<VT *>(c_);
-
     const bool fwd = (dir == Direction::Forward);
 
     for (Int s = 0; s < k; ++s) {
         const Int kk = fwd ? s : k - 1 - s;     /* Q^T: ascending, Q: descending */
-        const VT *ak = A + kk * a_kk;
         const VT  t  = tau[kk];
-        const std::size_t dk = kk * c_spec;
 
         Int p = 0;
 
-        /* main loop: 4 panel slices at a time; ak[i] loaded once, used 4x.
-         * The strides are std::size_t, so each index*stride product is
-         * already evaluated in 64-bit -- no explicit widening cast needed. */
+        /* main loop: 4 panel slices at a time; A(i,kk) loaded once, used 4x.
+         * Both index*stride products are evaluated in 64-bit inside operator(),
+         * and the panel offset p*stride is loop-invariant across i, so the
+         * codegen matches the hand-strided version. */
         for (; p + 4 <= panel_cnt; p += 4) {
-            VT *c0 = C + (p + 0) * c_panel;
-            VT *c1 = C + (p + 1) * c_panel;
-            VT *c2 = C + (p + 2) * c_panel;
-            VT *c3 = C + (p + 3) * c_panel;
-
-            VT w0 = c0[dk], w1 = c1[dk], w2 = c2[dk], w3 = c3[dk];
+            VT w0 = C(kk, p + 0), w1 = C(kk, p + 1),
+               w2 = C(kk, p + 2), w3 = C(kk, p + 3);
             for (Int i = kk + 1; i < spec_len; ++i) {
-                const VT av = ak[i * a_spec];
-                const std::size_t di = i * c_spec;
-                w0 += av * c0[di]; w1 += av * c1[di];
-                w2 += av * c2[di]; w3 += av * c3[di];
+                const VT av = A(i, kk);
+                w0 += av * C(i, p + 0); w1 += av * C(i, p + 1);
+                w2 += av * C(i, p + 2); w3 += av * C(i, p + 3);
             }
-            c0[dk] -= t * w0; c1[dk] -= t * w1;
-            c2[dk] -= t * w2; c3[dk] -= t * w3;
+            C(kk, p + 0) -= t * w0; C(kk, p + 1) -= t * w1;
+            C(kk, p + 2) -= t * w2; C(kk, p + 3) -= t * w3;
 
             w0 *= t; w1 *= t; w2 *= t; w3 *= t;  /* fold tau into w */
             for (Int i = kk + 1; i < spec_len; ++i) {
-                const VT av = ak[i * a_spec];
-                const std::size_t di = i * c_spec;
-                c0[di] -= av * w0; c1[di] -= av * w1;
-                c2[di] -= av * w2; c3[di] -= av * w3;
+                const VT av = A(i, kk);
+                C(i, p + 0) -= av * w0; C(i, p + 1) -= av * w1;
+                C(i, p + 2) -= av * w2; C(i, p + 3) -= av * w3;
             }
         }
 
         /* remainder panel slices */
         for (; p < panel_cnt; ++p) {
-            VT *cp = C + p * c_panel;
-            VT  w  = cp[dk];
+            VT w = C(kk, p);
             for (Int i = kk + 1; i < spec_len; ++i)
-                w += ak[i * a_spec] * cp[i * c_spec];
-            cp[dk] -= t * w;
+                w += A(i, kk) * C(i, p);
+            C(kk, p) -= t * w;
             w *= t;
             for (Int i = kk + 1; i < spec_len; ++i)
-                cp[i * c_spec] -= ak[i * a_spec] * w;
+                C(i, p) -= A(i, kk) * w;
         }
     }
 }
@@ -288,18 +367,21 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     const Int  spec_len  = left ? m : n;
     const Int  panel_cnt = left ? n : m;
 
-    /* element strides (in VT units) for the reflector column of A and for
-     * the special / panel sweep of C. */
-    std::size_t a_spec, a_kk, c_spec, c_panel;
-    if (!rowmajor) { a_spec = 1;     a_kk = (size_t)ldap; }
-    else           { a_spec = (size_t)ldap; a_kk = 1;     }
-    if (left) {
-        if (!rowmajor) { c_spec = 1;            c_panel = (size_t)ldcp; }
-        else           { c_spec = (size_t)ldcp; c_panel = 1;            }
-    } else {
-        if (!rowmajor) { c_spec = (size_t)ldcp; c_panel = 1;            }
-        else           { c_spec = 1;            c_panel = (size_t)ldcp; }
-    }
+    /* Q has order spec_len, so there cannot be more reflectors than that; the
+     * packed A must hold at least k columns for the column-major group stride. */
+    assert(m >= 0 && n >= 0 && k >= 0 && k <= spec_len);
+    assert(rowmajor || ncols_a >= k);
+
+    /* element strides (in VT units). A is swept down its rows (the reflector
+     * axis) with kk along its columns; for C the special axis is rows when
+     * side='L' and columns when side='R'. Column-major: a row step is 1 and a
+     * column step is ld; row-major flips that. */
+    const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
+    const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
+    const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1;
+    const std::size_t a_panel   = rowmajor ? 1 : (std::size_t)ldap;
+    const std::size_t c_special = left ? c_row : c_col;
+    const std::size_t c_panel   = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ldap*(complementary extent), which is the column count for col-major
@@ -318,9 +400,10 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
         if (left && !rowmajor)
             ormqr_compact_group<T, V, Int>(dir, m, n, k, a, ldap, tg, c, ldcp);
         else
-            ormqr_compact_group_strided<T, V, Int>(dir, spec_len, panel_cnt, k,
-                                                   a, a_spec, a_kk, tg,
-                                                   c, c_spec, c_panel);
+            ormqr_compact_group_strided<T, V, Int>(
+                dir, spec_len, panel_cnt, k,
+                make_const_view<T, V, Int>(a, a_special, a_panel), tg,
+                make_view<T, V, Int>(c, c_special, c_panel));
     }
 }
 
