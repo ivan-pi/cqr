@@ -39,6 +39,9 @@
  * Pointer arguments are not inspected (LAPACK convention). An empty problem
  * (m, nrhs, k, or nm == 0) is a valid no-op returning 0. The routine never
  * aborts the calling process.
+ *
+ * Assisted-by: Claude:claude-fable-5
+ * Assisted-by: Claude:claude-opus-4-8
  */
 
 #ifdef __cplusplus

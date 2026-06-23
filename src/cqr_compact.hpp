@@ -66,6 +66,9 @@
  *   strided kernel expresses that solely by swapping which stride is the
  *   "special" (reflector) direction and which is the "panel" direction, so the
  *   arithmetic is shared with side='L'.
+ *
+ * Assisted-by: Claude:claude-fable-5
+ * Assisted-by: Claude:claude-opus-4-8
  */
 
 #ifndef CQR_COMPACT_HPP
