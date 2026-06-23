@@ -1,3 +1,5 @@
+# Assisted-by: Claude:claude-opus-4.8
+
 cmake_minimum_required(VERSION 3.18)
 
 project(cqr

@@ -20,6 +20,8 @@
  *   (A Xhat - B) at rtol = 100 * n * eps (relative to the matrix L1 norm).
  *
  * Build: needs Intel MKL (headers + libmkl_rt); wired up by CMakeLists.txt.
+ *
+ * Assisted-by: Claude:claude-opus-4.8
  */
 
 #include <mkl.h>
