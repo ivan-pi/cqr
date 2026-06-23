@@ -22,14 +22,16 @@
  * MKL compact API: pack with mkl_?gepack_compact, query/obtain the opaque
  * `format` from mkl_get_format_compact(), and pass the total batch size `nm`.
  * C is overwritten with op(Q)*C. With lwork = -1 the call is a workspace query
- * returning the optimal lwork in work[0]. Per-matrix status is reported in the
- * length-`nm` array info[]: info[i] = 0 on success, or -j if the j-th argument
- * had an illegal value (LAPACK convention).
+ * returning the optimal lwork in work[0] (this kernel needs none, so 1).
+ *
+ * Following the MKL Compact convention, this routine does NOT validate its
+ * arguments -- compact routines skip error checking for vectorization, so the
+ * caller is responsible for passing consistent parameters. `info` is a single
+ * scalar (MKL leaves the compact info reserved), set to 0 on success.
  *
  * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
- * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32. Values outside this set are
- * reported through info[] rather than miscomputed.
+ * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32.
  */
 
 #include "mkl_types.h"

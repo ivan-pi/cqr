@@ -139,22 +139,23 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     mkl_dgepack_compact(MKL_COL_MAJOR, k, 1, Tp.data(), k, taup, k, fmt, nm);
     mkl_dgepack_compact(layout, m, n, Bp.data(), ldC, cp, ldcp, fmt, nm);
 
-    /* routine under test (workspace query, then compute) */
-    std::vector<MKL_INT> info(nm, 99);
+    /* routine under test (workspace query, then compute). info is a single
+     * scalar (MKL Compact convention), not a per-matrix array. */
+    MKL_INT info = 99;
     double wq;
     cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, taup, cp, ldcp, &wq, -1, info.data(), fmt, nm);
+                           ap, ldap, taup, cp, ldcp, &wq, -1, &info, fmt, nm);
     cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* unpack and compare against the dense reference */
     auto Op = batch_ptrs<double>(Bout.data(), nm, sB);
     mkl_dgeunpack_compact(layout, m, n, Op.data(), ldC, cp, ldcp, fmt, nm);
 
     int fails = 0;
+    if (info != 0) { ++fails; std::printf("    info = %d (expected 0)\n", (int)info); }
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
-        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
         const double *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
         double resid = maxdiff(Bo, Rv, sB);
         double rel = resid / std::max(norm1_layout(Rv, m, n, rowmajor, ldC), 1e-300);
@@ -211,20 +212,20 @@ int suite2(int nm, int n, int nrhs)
     mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap, m, fmt, nm);
     mkl_dgepack_compact(MKL_COL_MAJOR, m, nrhs, Bp.data(), m, cp, m, fmt, nm);
 
-    std::vector<MKL_INT> info(nm, 99);
+    MKL_INT info = 99;   /* compact info is a single scalar (MKL convention) */
 
     /* 1. compact QR: ap <- (H, R), taup <- tau   (workspace query first) */
     double wq;
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, info.data(), fmt, nm);
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, &info, fmt, nm);
     MKL_INT lwork = (MKL_INT)wq;
     std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, info.data(), fmt, nm);
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, &info, fmt, nm);
 
     /* 2. routine under test: cp <- Q^T B */
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
+                           ap, m, taup, cp, m, &wq, -1, &info, fmt, nm);
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* 3. compact upper-triangular solve: cp <- R^{-1} (Q^T B) = Xhat */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
@@ -235,10 +236,10 @@ int suite2(int nm, int n, int nrhs)
     mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Op.data(), n, cp, m, fmt, nm);
 
     int fails = 0;
+    if (info != 0) { ++fails; std::printf("    info = %d (expected 0)\n", (int)info); }
     double worst_fwd = 0, worst_res = 0;
     std::vector<double> AX(sB);
     for (int v = 0; v < nm; ++v) {
-        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
         double fwd = maxdiff(Xv, X.data(), sB) /

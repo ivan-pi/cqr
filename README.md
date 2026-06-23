@@ -97,9 +97,10 @@ test, registered with CTest as `bench_qr_compact_integration` (label
 ## Accordance with the design document
 
 * **API (sections 2-5):** `cqr_mkl_dormqr_compact` is implemented with the exact
-  signature, `MKL_COMPACT_PACK` format abstraction, `lwork = -1` workspace
-  query, and per-matrix `info[]` reporting (`info[i] = -j` for an illegal
-  `j`-th argument).
+  signature, `MKL_COMPACT_PACK` format abstraction, and `lwork = -1` workspace
+  query. Following the MKL Compact convention it skips argument checking (the
+  caller is responsible for valid parameters) and writes a single scalar `info`
+  (0 on success), matching MKL's reserved compact `info`.
 * **Dispatcher (section 8.1):** unwraps the format to the interleave width `V`
   (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32) and dispatches to the
   templated kernel.
@@ -118,5 +119,6 @@ FP64/FP32. The tuned contiguous kernel serves the `side='L'`, column-major
 solver path; the other three side/layout combinations run through a
 stride-generalized kernel (same unblocked `dorm2r` math, correctness-first -
 the non-contiguous inner sweep is not yet SIMD-tuned). Real types only
-(`d`/`s`); complex (`c`/`z`) is out of scope. Unsupported argument values are
-reported through `info[]` (never silently miscomputed), per LAPACK convention.
+(`d`/`s`); complex (`c`/`z`) is out of scope. Per the MKL Compact convention,
+the routine does not validate arguments -- the caller must pass consistent
+parameters (the portable `dormqr_compact`/`sormqr_compact` C API does validate).

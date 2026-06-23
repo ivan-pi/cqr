@@ -1,11 +1,18 @@
 /* cqr_mkl_ext.cpp
  *
  * Implementation of cqr_mkl_?ormqr_compact (design document section 8.1):
- * a C-linkage dispatcher that
- *   1. validates the arguments and reports illegal values through info[],
- *   2. handles the lwork = -1 workspace query,
- *   3. unwraps MKL_COMPACT_PACK + the scalar type to the interleave width V,
- *   4. dispatches to the templated kernel cqr::detail::ormqr_compact_general<T,V>.
+ * a thin C-linkage adapter that
+ *   1. handles the lwork = -1 workspace query (the kernel needs no scratch),
+ *   2. unwraps MKL_COMPACT_PACK + the scalar type to the interleave width V,
+ *   3. forwards to the templated kernel cqr::detail::ormqr_compact_general<T,V>,
+ *      instantiated on MKL_INT so ILP64 dimensions are not narrowed.
+ *
+ * Following the MKL Compact convention, the routine does NOT validate its
+ * arguments: compact routines skip error checking for vectorization and make
+ * the caller responsible for passing consistent parameters (see "Numerical
+ * Limitations for Compact BLAS and Compact LAPACK Routines"). MKL likewise
+ * leaves the compact `info` reserved; we write it as a single scalar status
+ * (0 on success), not a per-matrix array.
  *
  * Supports side in {L,R} and layout in {MKL_COL_MAJOR, MKL_ROW_MAJOR} for
  * trans in {N,T} (C is folded to T for real types). A is the (s x k) reflector
@@ -23,73 +30,13 @@
 #include "cqr_mkl_ext.h"
 #include "cqr_compact.hpp"
 
-#include <algorithm>
-
 namespace {
 
 using cqr::detail::vlen_for_format;
 
-/* Shared validation + dispatch for both precisions. Returns the 1-based
- * index of the first illegal argument (LAPACK convention), 0 if all valid. */
-template <typename T>
-int validate_and_dispatch(MKL_LAYOUT layout, char side, char trans,
-                          MKL_INT m, MKL_INT n, MKL_INT k,
-                          const T *ap, MKL_INT ldap,
-                          const T *taup,
-                          T *cp, MKL_INT ldcp,
-                          T *work, MKL_INT lwork,
-                          MKL_COMPACT_PACK format, MKL_INT nm)
-{
-    const bool rowmajor = (layout == MKL_ROW_MAJOR);
-    const bool left  = (side == 'L' || side == 'l');
-    const bool right = (side == 'R' || side == 'r');
-    const bool tran = (trans == 'T' || trans == 't' ||
-                       trans == 'C' || trans == 'c');
-    const bool notran = (trans == 'N' || trans == 'n');
-    const int  V = vlen_for_format<T>(format);
-
-    /* A is (spec_len x k) with spec_len = m (side='L') or n (side='R');
-     * C is m x n. A leading dimension counts rows (col-major) or columns
-     * (row-major); likewise for C. */
-    const MKL_INT spec_len = left ? m : n;
-
-    /* Argument checks, in signature order (section 5: info[i] = -j). */
-    if (layout != MKL_COL_MAJOR && layout != MKL_ROW_MAJOR) return 1;
-    if (!left && !right)                      return 2;
-    if (!tran && !notran)                     return 3;
-    if (m < 0)                                return 4;
-    if (n < 0)                                return 5;
-    if (k < 0 || (left && k > m) || (right && k > n)) return 6;
-    if (ldap < std::max<MKL_INT>(1, rowmajor ? k : spec_len)) return 8;
-    if (ldcp < std::max<MKL_INT>(1, rowmajor ? n : m))        return 11;
-    if (lwork < 1 && lwork != -1)             return 13;
-    if (V == 0)                               return 15; /* unknown format */
-    if (nm < 0)                               return 16;
-
-    /* Workspace query (lwork = -1): this branch-free kernel needs none, so
-     * the minimum (and optimal) workspace is 1. */
-    if (lwork == -1) {
-        if (work) work[0] = T(1);
-        return 0;
-    }
-
-    /* Nothing to compute for an empty problem. */
-    if (m == 0 || n == 0 || k == 0 || nm == 0)
-        return 0;
-
-    const char tr = tran ? 'T' : 'N';
-    /* Instantiate the kernel on MKL_INT so the public (possibly 64-bit ILP64)
-     * dimensions are carried through without narrowing to int. */
-    switch (V) {
-    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    default: return 15; /* V derived from format unsupported by the kernel */
-    }
-    return 0;
-}
-
+/* Thin adapter shared by both precisions: workspace query, format -> V, and a
+ * forward to the templated kernel. No argument validation (MKL Compact
+ * convention); info is a single scalar status. */
 template <typename T>
 void run(MKL_LAYOUT layout, char side, char trans,
          MKL_INT m, MKL_INT n, MKL_INT k,
@@ -97,15 +44,36 @@ void run(MKL_LAYOUT layout, char side, char trans,
          T *cp, MKL_INT ldcp, T *work, MKL_INT lwork, MKL_INT *info,
          MKL_COMPACT_PACK format, MKL_INT nm)
 {
-    const int bad = validate_and_dispatch<T>(layout, side, trans, m, n, k,
-                                              ap, ldap, taup, cp, ldcp,
-                                              work, lwork, format, nm);
-    /* info is an array of size nm; every matrix in the batch shares the
-     * same (identical) dimensions, so the status is uniform (section 5). */
-    if (info) {
-        const MKL_INT count = (nm > 0) ? nm : 1;
-        for (MKL_INT i = 0; i < count; ++i) info[i] = (bad == 0) ? 0 : -bad;
+    /* Workspace query: the branch-free kernel needs no scratch, so the
+     * optimal (and minimum) lwork is 1. */
+    if (lwork == -1) {
+        if (work) work[0] = T(1);
+        if (info)  *info  = 0;
+        return;
     }
+
+    /* Empty problem: nothing to do (also keeps the kernel's nm >= 1 invariant). */
+    if (m == 0 || n == 0 || k == 0 || nm == 0) {
+        if (info) *info = 0;
+        return;
+    }
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool left     = (side == 'L' || side == 'l');
+    const bool tran     = (trans == 'T' || trans == 't' ||
+                           trans == 'C' || trans == 'c');
+    const char tr       = tran ? 'T' : 'N';
+
+    MKL_INT status = 0;
+    /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
+    switch (vlen_for_format<T>(format)) {
+    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    default: status = -1;   /* unrecognised pack format: cannot select a kernel */
+    }
+    if (info) *info = status;
 }
 
 } /* anonymous namespace */

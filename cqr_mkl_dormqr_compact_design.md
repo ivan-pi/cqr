@@ -50,10 +50,8 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
 ## 5. Output Parameters
 
 * **`cp`**: Overwritten by the product of $Q$ (or $Q^T$) and $C$. The output data is also stored in Compact format.
-* **`work`**: On exit, if `info = 0`, `work[0]` contains the minimum required `lwork` for successful execution.
-* **`info`** (`MKL_INT*`): Array of size `nm`. On execution, it reports the status of each matrix computation:
-    * `info[i] = 0`: Successful exit for the $i$-th matrix.
-    * `info[i] < 0`: If the $j$-th argument had an illegal value, `info[i] = -j`.
+* **`work`**: On a workspace query (`lwork = -1`), `work[0]` returns the minimum required `lwork`. This kernel is branch-free and needs no scratch, so that value is `1`.
+* **`info`** (`MKL_INT*`): A single scalar status, set to `0` on success. This follows the MKL Compact convention, where the compact `info` is a reserved scalar rather than a per-matrix array, and the routine performs no argument checking (see section 6) -- so there is no `-j` illegal-argument reporting.
 
 ## 6. Design Considerations & Compatibility
 
@@ -61,6 +59,7 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
 2. **Compact Format Abstraction:** Relying on `MKL_COMPACT_PACK format` ensures that the user's existing logic for packing matrices using `mkl_dpack_compact` remains strictly valid and reusable.
 3. **Stride Agnostic:** Using `ldap` and `ldcp` within the compact buffer mimics standard LAPACK behavior and respects the inner working of MKL's compact vectorization routines.
 4. **Padding and SIMD Semantics:** When the batch size `nm` is not evenly divisible by the SIMD vector length (e.g., $V=4$ for `MKL_COMPACT_AVX` or $V=8$ for `MKL_COMPACT_AVX512` in double precision), `mkl_dgepack_compact` pads the unfilled slots with identity matrices. Because the QR factorization of an identity matrix produces $\tau=0$ and empty Householder vectors, applying these padded transformations mathematically behaves as a no-op ($I \times C = C$). `cqr_mkl_dormqr_compact` can safely exploit this by executing unmasked SIMD instructions across the entire padded pack, ensuring maximum performance without corrupting trailing data.
+5. **No Argument Checking:** Like MKL's own compact routines -- which "skip error checking for performance reasons" and make "the user responsible for passing correct parameters" (Intel MKL, *Numerical Limitations for Compact BLAS and Compact LAPACK Routines*) -- `cqr_mkl_dormqr_compact` validates nothing and assumes consistent inputs. Callers that want defensive parameter checking should use the portable `dormqr_compact`/`sormqr_compact` C API, which performs LAPACK-style `info = -j` validation.
 
 ## 7. Testing and Validation Methodology
 
