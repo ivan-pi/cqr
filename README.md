@@ -36,7 +36,7 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
   end with the compact pipeline (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact`
   -> `mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
 * `bench_qr_compact [nmat] [reps]` - throughput of the batched pipeline vs. the
-  one-matrix-at-a-time LAPACK path over pools of small matrices (order 20-100),
+  one-matrix-at-a-time LAPACK path over pools of small matrices (order 10-100),
   reporting a geometric-mean speedup. Accuracy-gated, so it doubles as an
   integration test.
 
@@ -52,8 +52,8 @@ include:
 
 | File | Role |
 |------|------|
-| `src/cqr_mkl_ext.h` | The MKL-style public API `cqr_mkl_dormqr_compact`: takes `MKL_COMPACT_PACK` formats and drives the kernel - the drop-in `mkl_?ormqr_compact` (side='L'). |
-| `src/cqr_compact.h` | The portable C API `dormqr_compact` / `sormqr_compact`: same apply-`Q` operation with an explicit interleave width `V` and no MKL dependency. |
+| `src/cqr_mkl_ext.h` | The MKL-style public API `cqr_mkl_dormqr_compact` / `cqr_mkl_sormqr_compact`: takes `MKL_COMPACT_PACK` formats and drives the kernel - the drop-in `mkl_?ormqr_compact` (side `L`/`R`, col- or row-major). |
+| `src/cqr_compact.h` | The portable C API `dormqr_compact` / `sormqr_compact`: the same apply-`Q` operation from the left (`B := op(Q)*B`) with an explicit interleave width `V` and no MKL dependency. |
 
 Everything else under `src/` is internal - implementation details and tests,
 not part of the supported interface:
