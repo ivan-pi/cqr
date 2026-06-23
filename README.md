@@ -1,38 +1,28 @@
 # cqr - compact-format apply-Q (`cqr_mkl_dormqr_compact`)
 
-A portable kernel and an Intel MKL-style public API for applying the
-orthogonal factor `Q` (or `Q^T`) of a **Compact-format** QR factorization
-(`mkl_?geqrf_compact`) to a batch of general matrices - the routine missing
-between `mkl_?geqrf_compact` and the application of its reflectors. See the
-design document [`cqr_mkl_dormqr_compact_design.md`](cqr_mkl_dormqr_compact_design.md).
+A portable SIMD kernel and an Intel MKL-style API for applying the orthogonal
+factor `Q` (or `Q^T`) of a **Compact-format** QR factorization
+(`mkl_?geqrf_compact`) to a batch of matrices - the routine missing between
+`mkl_?geqrf_compact` and the use of its reflectors. See the
+[design document](cqr_mkl_dormqr_compact_design.md).
 
 ## Layout
 
 | File | Role |
 |------|------|
-| `src/cqr_compact.hpp` | Templated SIMD kernel: `B := op(Q)*B`, templated on scalar `T` and interleave width `V` (design sections 8.2/8.3, tier-2 GNU vector types). |
-| `src/cqr_compact_dispatch.cpp` / `.h` | Portable C entry points `dormqr_compact` / `sormqr_compact` (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_ext.cpp` / `.h` | **The design-document public API** `cqr_mkl_dormqr_compact` (section 2): a C-linkage dispatcher that unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel (section 8.1). |
+| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
+| `src/cqr_compact_dispatch.{cpp,h}` | Portable C entry points `dormqr_compact` / `sormqr_compact` (runtime `V` -> compile-time dispatch). |
+| `src/cqr_mkl_ext.{cpp,h}` | The public API `cqr_mkl_dormqr_compact`: unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
 | `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
-| `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline (design section 7). |
-| `examples/solve_qr_compact.cpp` | Worked Compact-format batch `AX=B` solve (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact` -> `mkl_dtrsm_compact`) cross-checked against the naive per-matrix `LAPACKE_dgels`. |
-| `examples/bench_qr_compact.cpp` | Throughput benchmark over a pool of small matrices (order 20-100): compact batched pipeline vs per-matrix LAPACK (`LAPACKE_dgeqrf`/`dormqr` + `cblas_dtrsm`), OpenMP over the pool, geometric-mean speedup. |
-
-## Prerequisites
-
-* **CMake >= 3.18**, a **C++17 compiler** (GCC/Clang) and a build tool (Make/Ninja).
-* **Intel MKL** - provides the Compact-format extension (`mkl_compact.h`,
-  `mkl_*geqrf_compact`, ...) that this project builds on. Any MKL works:
-  * oneAPI MKL - `source /opt/intel/oneapi/setvars.sh` (sets `MKLROOT`), or
-  * Debian/Ubuntu - `sudo apt-get install libmkl-dev` (headers in
-    `/usr/include/mkl`, LP64 libs in the default library path).
+| `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
+| `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
+| `examples/bench_qr_compact.cpp` | Throughput benchmark vs. per-matrix LAPACK. |
 
 ## Build
 
-The compact API is an Intel MKL extension: the `*_compact` symbols are reached
-through the BLAS link line, so the BLAS is selected with CMake's standard
-`BLA_VENDOR` mechanism. Configuring against a non-Intel BLAS stops with a clear
-fatal error (only MKL provides the compact API).
+The `*_compact` symbols are reached through the BLAS link line, so the BLAS is
+selected with CMake's standard `BLA_VENDOR` mechanism (only MKL provides the
+compact API; other vendors stop with a fatal error).
 
 ```sh
 cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release
@@ -40,56 +30,29 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
-`-DCQR_WITH_MKL=OFF` (build and test only the portable kernel, no MKL).
+Requires CMake >= 3.18, a C++17 compiler, and Intel MKL (oneAPI, or
+`libmkl-dev`). Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
+`-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 
-## Example: a batched QR solve with the Compact API
+## Examples
 
-[`examples/solve_qr_compact.cpp`](examples/solve_qr_compact.cpp) solves a batch
-of square systems `A_v X_v = B_v` end to end with the Compact-format (interleaved)
-pipeline - the routine this repo adds (`cqr_mkl_dormqr_compact`) is the middle
-step:
+* `solve_qr_compact` - a batch of square systems `A_v X_v = B_v` solved end to
+  end with the compact pipeline (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact`
+  -> `mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
+* `bench_qr_compact [nmat] [reps]` - throughput of the batched pipeline vs. the
+  one-matrix-at-a-time LAPACK path over pools of small matrices (order 20-100),
+  reporting a geometric-mean speedup. Accuracy-gated, so it doubles as an
+  integration test.
 
-```
-mkl_dgeqrf_compact      A = Q R                       factor the batch
-cqr_mkl_dormqr_compact  B <- Q^T B                    apply Q^T  (the added routine)
-mkl_dtrsm_compact       R X = (Q^T B)  ->  X = R^-1 Q^T B   triangular solve
-```
+Both are registered with CTest (`example_solve_qr_compact`,
+`bench_qr_compact_integration`).
 
-The dense batches are packed with `mkl_dgepack_compact`, run through the three
-compact calls, and unpacked with `mkl_dgeunpack_compact`. It cross-checks the
-result against the naive baseline - `LAPACKE_dgels('N')` on each matrix
-separately (which reduces to the same QR solve when `m == n`) - confirming the
-compact batch agrees with the per-matrix driver and with the known exact
-solution. One batch size is deliberately not a multiple of the SIMD width to
-exercise the padded last pack. Built (with MKL) as the `solve_qr_compact`
-target and registered as the `example_solve_qr_compact` CTest:
+## Related work
 
-```sh
-./build/solve_qr_compact
-```
+Batched / compact dense linear algebra for many small matrices:
 
-## Benchmark: batched vs. per-matrix throughput
-
-[`examples/bench_qr_compact.cpp`](examples/bench_qr_compact.cpp) measures how
-much the Compact (batched) pipeline buys over the conventional
-one-matrix-at-a-time LAPACK path. For each order `n in {20, 40, 60, 80, 100}`
-it builds a pool of `nmat` well-conditioned matrices with known solution
-`X == 1` and times both solves of the same data:
-
-```
-batched      mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
-non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
-```
-
-The outer loop runs under OpenMP (MKL threading pinned to 1); each size is
-timed `reps` times keeping the best, both paths are accuracy-gated against
-`X == 1`, and a geometric-mean speedup across sizes is printed at the end.
-
-```sh
-./build/bench_qr_compact [nmat] [reps]    # defaults: 1000 matrices, 3 reps
-```
-
-Because both paths are accuracy-gated, it doubles as an end-to-end integration
-test, registered with CTest as `bench_qr_compact_integration` (label
-`integration`) with a small pool and a single rep.
+* [Intel oneMKL Compact BLAS and LAPACK functions](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/compact-blas-and-lapack-functions.html) - the compact (interleaved) format this project extends.
+* [Arm Performance Libraries interleave-batch functions](https://developer.arm.com/documentation/101004/2507/Interleave-batch-functions/Interleave-batch-introduction?lang=en) - Arm's equivalent interleaved-batch API.
+* [Batched BLAS (BBLAS)](https://icl.utk.edu/bblas/) - the proposed standard interface for batched BLAS.
+* [Kokkos Kernels batched API](https://kokkos.org/kokkos-kernels/docs/API/batched-index.html) - portable batched kernels.
+* [batmat](https://github.com/tttapa/batmat) - batched small-matrix linear algebra.
