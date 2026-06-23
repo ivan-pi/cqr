@@ -6,18 +6,6 @@ factor `Q` (or `Q^T`) of a **Compact-format** QR factorization
 `mkl_?geqrf_compact` and the use of its reflectors. See the
 [design document](cqr_mkl_dormqr_compact_design.md).
 
-## Layout
-
-| File | Role |
-|------|------|
-| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
-| `src/cqr_compact_dispatch.{cpp,h}` | Portable C entry points `dormqr_compact` / `sormqr_compact` (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_ext.{cpp,h}` | The public API `cqr_mkl_dormqr_compact`: unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
-| `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
-| `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
-| `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
-| `examples/bench_qr_compact.cpp` | Throughput benchmark vs. per-matrix LAPACK. |
-
 ## Prerequisites
 
 * **CMake >= 3.18**, a **C++17 compiler** (GCC/Clang) and a build tool (Make/Ninja).
@@ -54,6 +42,18 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
 
 Both are registered with CTest (`example_solve_qr_compact`,
 `bench_qr_compact_integration`).
+
+## Layout
+
+| File | Role |
+|------|------|
+| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
+| `src/cqr_compact_dispatch.{cpp,h}` | Portable C entry points `dormqr_compact` / `sormqr_compact` (runtime `V` -> compile-time dispatch). |
+| `src/cqr_mkl_ext.{cpp,h}` | The public API `cqr_mkl_dormqr_compact`: unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
+| `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
+| `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
+| `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
+| `examples/bench_qr_compact.cpp` | Throughput benchmark vs. per-matrix LAPACK. |
 
 ## Related work
 
