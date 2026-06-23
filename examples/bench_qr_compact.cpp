@@ -56,6 +56,17 @@ void check(bool cond, const char *what)
  * for double here. */
 using cqr::detail::vlen_for_format;
 
+/* Human-readable name of the SIMD ISA behind an MKL Compact pack format. */
+const char *compact_format_name(MKL_COMPACT_PACK format)
+{
+    switch (format) {
+    case MKL_COMPACT_SSE:    return "SSE";
+    case MKL_COMPACT_AVX:    return "AVX";
+    case MKL_COMPACT_AVX512: return "AVX512";
+    default:                 return "unknown";
+    }
+}
+
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
  * `b` (n per matrix; single RHS). The exact solution is X == 1, so each RHS is
@@ -237,11 +248,11 @@ int main(int argc, char **argv)
                 "cqr_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
     std::printf("            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
 #ifdef _OPENMP
-    std::printf("matrices=%d  reps=%d  compact V=%d  OpenMP threads=%d\n\n",
-                nmat, reps, V, nthreads);
+    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
+                nmat, reps, V, compact_format_name(fmt), nthreads);
 #else
-    std::printf("matrices=%d  reps=%d  compact V=%d  Sequential\n\n",
-                nmat, reps, V);
+    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  Sequential\n\n",
+                nmat, reps, V, compact_format_name(fmt));
 #endif
     std::printf("   n |  batched (s)  Mmat/s | unbatched (s)  Mmat/s | speedup |  max fwd err\n");
     std::printf("-----+----------------------+----------------------+---------+-------------\n");
