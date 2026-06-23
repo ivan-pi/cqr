@@ -51,7 +51,7 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
 
 * **`cp`**: Overwritten by the product of $Q$ (or $Q^T$) and $C$. The output data is also stored in Compact format.
 * **`work`**: On a workspace query (`lwork = -1`), `work[0]` returns the minimum required `lwork`. This kernel is branch-free and needs no scratch, so that value is `1`.
-* **`info`** (`MKL_INT*`): A single scalar status, set to `0` on success. This follows the MKL Compact convention, where the compact `info` is a reserved scalar rather than a per-matrix array, and the routine performs no argument checking (see section 6) -- so there is no `-j` illegal-argument reporting.
+* **`info`** (`MKL_INT*`): Intel MKL leaves the compact `info` unused/reserved, so its meaning is ours to define. For now we write a single scalar status, `0` on success -- an implementation choice that may change in future. The routine performs no argument checking (see section 6), so there is no `-j` illegal-argument reporting.
 
 ## 6. Design Considerations & Compatibility
 

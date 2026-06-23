@@ -93,32 +93,3 @@ timed `reps` times keeping the best, both paths are accuracy-gated against
 Because both paths are accuracy-gated, it doubles as an end-to-end integration
 test, registered with CTest as `bench_qr_compact_integration` (label
 `integration`) with a small pool and a single rep.
-
-## Accordance with the design document
-
-* **API (sections 2-5):** `cqr_mkl_dormqr_compact` is implemented with the exact
-  signature, `MKL_COMPACT_PACK` format abstraction, and `lwork = -1` workspace
-  query. Following the MKL Compact convention it skips argument checking (the
-  caller is responsible for valid parameters) and writes a single scalar `info`
-  (0 on success), matching MKL's reserved compact `info`.
-* **Dispatcher (section 8.1):** unwraps the format to the interleave width `V`
-  (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32) and dispatches to the
-  templated kernel.
-* **Validation (section 7):** `test_cqr_mkl_ext` runs Suite 1 (isolated
-  `op(Q)*C` vs dense LAPACK, gate `20*s*eps`) over the full feature matrix -
-  `side in {L,R} x layout in {col,row} x trans in {N,T}` - and Suite 2 (end-to-end
-  `AX=B`: `mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact`,
-  gates on forward error and system residual at `100*n*eps`) against real MKL.
-* **Padding (section 6.4):** padded slots of the last compact pack carry identity
-  factorizations (`tau=0`), so applying them is a no-op; exercised by the
-  partial-group test cases.
-
-**Feature coverage:** `side in {'L','R'}`, `layout in {MKL_COL_MAJOR,
-MKL_ROW_MAJOR}`, `trans in {N,T}` (`C` folds to `T` for the real types) in
-FP64/FP32. The tuned contiguous kernel serves the `side='L'`, column-major
-solver path; the other three side/layout combinations run through a
-stride-generalized kernel (same unblocked `dorm2r` math, correctness-first -
-the non-contiguous inner sweep is not yet SIMD-tuned). Real types only
-(`d`/`s`); complex (`c`/`z`) is out of scope. Per the MKL Compact convention,
-the routine does not validate arguments -- the caller must pass consistent
-parameters (the portable `dormqr_compact`/`sormqr_compact` C API does validate).

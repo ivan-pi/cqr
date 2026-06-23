@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(cqr
   VERSION 0.1.0
-  DESCRIPTION "Compact-format apply-Q (cqr_mkl_dormqr_compact) and its kernel"
+  DESCRIPTION "Compact QR extensions"
   LANGUAGES CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -18,9 +18,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)   # cqr_compact.hpp uses GNU vector_size types
+# C++17 is required per-target via target_compile_features below; no GNU
+# extensions are needed (the kernel's vector_size attribute compiles under
+# strict -std=c++17).
 
 # Host-tuned codegen for the SIMD kernel (opt-in; correctness is independent).
 add_library(cqr_flags INTERFACE)
@@ -42,6 +42,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(cqr_compact src/cqr_compact_dispatch.cpp)
 target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(cqr_compact PUBLIC cxx_std_17)
 target_link_libraries(cqr_compact PRIVATE cqr_flags)
 add_library(cqr::compact ALIAS cqr_compact)
 
@@ -54,6 +55,7 @@ if(CQR_WITH_MKL)
   add_library(cqr_mkl_ext src/cqr_mkl_ext.cpp)
   target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
   target_link_libraries(cqr_mkl_ext
     PUBLIC  MKL::Compact          # MKL types in the public header
     PRIVATE cqr_compact cqr_flags)
