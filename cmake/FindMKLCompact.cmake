@@ -13,6 +13,8 @@
 # selected BLAS. Non-Intel BLAS implementations (OpenBLAS, reference, ...) do
 # not provide the compact API, so the configure step stops with a FATAL_ERROR
 # explaining how to select Intel MKL.
+#
+# Assisted-by: Claude:claude-opus-4.8
 
 if(TARGET MKL::Compact)
   set(MKLCompact_FOUND TRUE)
