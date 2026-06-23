@@ -18,6 +18,15 @@ factor `Q` (or `Q^T`) of a **Compact-format** QR factorization
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark vs. per-matrix LAPACK. |
 
+## Prerequisites
+
+* **CMake >= 3.18**, a **C++17 compiler** (GCC/Clang) and a build tool (Make/Ninja).
+* **Intel MKL** - provides the Compact-format extension (`mkl_compact.h`,
+  `mkl_*geqrf_compact`, ...) that this project builds on. Any MKL works:
+  * oneAPI MKL - `source /opt/intel/oneapi/setvars.sh` (sets `MKLROOT`), or
+  * Debian/Ubuntu - `sudo apt-get install libmkl-dev` (headers in
+    `/usr/include/mkl`, LP64 libs in the default library path).
+
 ## Build
 
 The `*_compact` symbols are reached through the BLAS link line, so the BLAS is
@@ -30,8 +39,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Requires CMake >= 3.18, a C++17 compiler, and Intel MKL (oneAPI, or
-`libmkl-dev`). Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
+Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
 `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 
 ## Examples
