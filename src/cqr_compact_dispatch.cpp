@@ -3,8 +3,7 @@
  * extern "C" wrappers around the templated implementation; dispatch on
  * the runtime interleave width V to a compile-time instantiation.
  *
- * Assisted-by: Claude:claude-fable-5
- * Assisted-by: Claude:claude-opus-4-8
+ * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4-8
  */
 
 #include "cqr_compact.h"
