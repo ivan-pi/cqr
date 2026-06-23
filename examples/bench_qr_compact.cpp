@@ -21,6 +21,8 @@
  *
  * Build: needs Intel MKL plus this repo's cqr_mkl_ormqr_compact; wired up by
  * CMakeLists.txt as the `bench_qr_compact` target. OpenMP is used when available.
+ *
+ * Assisted-by: Claude:claude-opus-4.8
  */
 
 #include <mkl.h>

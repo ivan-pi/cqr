@@ -32,6 +32,8 @@
  * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
  * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32.
+ *
+ * Assisted-by: Claude:claude-opus-4.8
  */
 
 #include "mkl_types.h"

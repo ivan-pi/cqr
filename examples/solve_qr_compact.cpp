@@ -21,6 +21,8 @@
  * Build: needs Intel MKL (the compact API is an MKL extension) plus this
  * repo's cqr_mkl_ormqr_compact; wired up by CMakeLists.txt as the
  * `solve_qr_compact` target.
+ *
+ * Assisted-by: Claude:claude-opus-4.8
  */
 
 #include <mkl.h>

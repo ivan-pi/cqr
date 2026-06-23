@@ -25,6 +25,8 @@
  *   C_v(i,j)  = cp [ g*ldcp*n*V    + (j*ldcp + i)*V + v ]
  * Row-major swaps the in-matrix index roles (i*ld + j) and the group stride's
  * complementary extent (ldap*s for A, ldcp*m for C).
+ *
+ * Assisted-by: Claude:claude-opus-4.8
  */
 
 #include "cqr_mkl_ext.h"
