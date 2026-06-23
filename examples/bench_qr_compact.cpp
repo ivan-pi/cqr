@@ -5,7 +5,7 @@
  * against the conventional per-matrix LAPACK path. Same math (X = R^-1 Q^T B),
  * different data layout:
  *
- *   batched      mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact
+ *   batched      mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
  *   non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
  *
  * For each size, a pool of `nmat` well-conditioned matrices with known solution
@@ -19,14 +19,14 @@
  *
  * Usage:  bench_qr_compact [nmat] [reps]      (defaults: 1000 matrices, 3 reps)
  *
- * Build: needs Intel MKL plus this repo's ext_mkl_ormqr_compact; wired up by
+ * Build: needs Intel MKL plus this repo's cqr_mkl_ormqr_compact; wired up by
  * CMakeLists.txt as the `bench_qr_compact` target. OpenMP is used when available.
  */
 
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 
 #include <chrono>
 #include <cmath>
@@ -52,17 +52,9 @@ void check(bool cond, const char *what)
 }
 
 /* Interleave width V for the active compact format (doubles): MKL packs
- * V = (SIMD register bytes) / sizeof(double). Mirrors vlen_for_format() in
- * ext_mkl_ormqr_compact.cpp. */
-int vlen_for_format(MKL_COMPACT_PACK fmt)
-{
-    switch (fmt) {
-    case MKL_COMPACT_SSE:    return 16 / (int)sizeof(double);
-    case MKL_COMPACT_AVX:    return 32 / (int)sizeof(double);
-    case MKL_COMPACT_AVX512: return 64 / (int)sizeof(double);
-    default:                 return 0;
-    }
-}
+ * V = (SIMD register bytes) / sizeof(double). Shared helper, specialised
+ * for double here. */
+using cqr::detail::vlen_for_format;
 
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
@@ -114,9 +106,10 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     {
         /* Per-thread compact buffers, sized for a full group of V. */
         const int align = 64;
-        double *ap   = (double *)mkl_malloc(mkl_dget_size_compact(n, n,    fmt, V), align);
-        double *taup = (double *)mkl_malloc(mkl_dget_size_compact(n, 1,    fmt, V), align);
-        double *bp   = (double *)mkl_malloc(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, V), align);
+        auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, V), align);
+        auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
         std::vector<MKL_INT> info(V);
         double wq;
@@ -145,7 +138,7 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
             mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup,
                                work.data(), lwork, info.data(), fmt, cnt);
             double dummy;
-            ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
+            cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
                                    ap, n, taup, bp, n, &dummy, 1, info.data(), fmt, cnt);
             mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
                               n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
@@ -154,8 +147,7 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
             for (int s = 0; s < cnt; ++s)
                 maxerr = std::max(maxerr, sol_error(Xptr[s], n));
         }
-
-        mkl_free(ap); mkl_free(taup); mkl_free(bp);
+        /* ap/taup/bp freed by their RAII owners at end of the parallel region. */
     }
     return maxerr;
 }
@@ -222,7 +214,7 @@ int main(int argc, char **argv)
     /* mkl_get_format_compact() returns the architecture's optimal packing
      * format -- always one of SSE/AVX/AVX512 -- so V is one of 2/4/8. */
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen_for_format(fmt);
+    const int V = vlen_for_format<double>(fmt);
 
     /* Pin MKL's internal threading: the OpenMP outer loop is the only
      * parallelism, so per-call MKL threads would just oversubscribe. */
@@ -242,7 +234,7 @@ int main(int argc, char **argv)
     const double eps = std::numeric_limits<double>::epsilon();
 
     std::printf("QR solve throughput: compact batched (mkl_dgeqrf_compact -> "
-                "ext_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
+                "cqr_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
     std::printf("            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
     std::printf("matrices=%d  reps=%d  compact V=%d  OpenMP threads=%d\n\n",
                 nmat, reps, V, nthreads);

@@ -1,21 +1,21 @@
-/* test_ext_mkl_ormqr_compact.cpp
+/* test_cqr_mkl_ext.cpp
  *
- * Validation of ext_mkl_dormqr_compact against real Intel MKL, implementing
- * the two test suites of ext_mkl_dormqr_compact_design.md section 7 through
+ * Validation of cqr_mkl_dormqr_compact against real Intel MKL, implementing
+ * the two test suites of cqr_mkl_dormqr_compact_design.md section 7 through
  * the genuine MKL Compact pipeline (mkl_dgepack_compact / mkl_dgeqrf_compact /
  * mkl_dtrsm_compact). This is the design document's "hard correctness gate
  * against standard dense LAPACK equivalents" (section 7.4).
  *
  * Suite 1 (section 7.1) -- Isolated Q application (Q^T B):
  *   A generated Householder representation (H, tau) and a target batch B are
- *   packed into MKL Compact format. ext_mkl_dormqr_compact computes Q^T B in
+ *   packed into MKL Compact format. cqr_mkl_dormqr_compact computes Q^T B in
  *   place. The checker materializes the dense reference Q^T B per matrix via
  *   dense LAPACK (LAPACKE_dormqr) and gates the application residual at
  *   rtol = 20 * n * eps (relative to the matrix L1 norm).
  *
  * Suite 2 (section 7.2) -- End-to-end AX = B solver:
  *   A known X (X(:,j) = j+1) defines B = A X. The compact pipeline runs
- *   mkl_dgeqrf_compact -> ext_mkl_dormqr_compact('T') -> mkl_dtrsm_compact and
+ *   mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('T') -> mkl_dtrsm_compact and
  *   the checker gates the forward error (Xhat - X) and the system residual
  *   (A Xhat - B) at rtol = 100 * n * eps (relative to the matrix L1 norm).
  *
@@ -25,7 +25,7 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -38,15 +38,8 @@ namespace {
 
 const double eps = std::numeric_limits<double>::epsilon();
 
-int vlen(MKL_COMPACT_PACK fmt)
-{
-    switch (fmt) {
-    case MKL_COMPACT_SSE:    return 16 / (int)sizeof(double);
-    case MKL_COMPACT_AVX:    return 32 / (int)sizeof(double);
-    case MKL_COMPACT_AVX512: return 64 / (int)sizeof(double);
-    default:                 return 0;
-    }
-}
+/* shared interleave-width helper (specialised for double here) */
+int vlen(MKL_COMPACT_PACK fmt) { return cqr::detail::vlen_for_format<double>(fmt); }
 
 double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
 
@@ -96,7 +89,7 @@ double norm1_layout(const double *M, int m, int n, bool rowmajor, int ld)
     return mx;
 }
 
-/* Generalized Suite 1: validate ext_mkl_dormqr_compact's op(Q) application
+/* Generalized Suite 1: validate cqr_mkl_dormqr_compact's op(Q) application
  * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x k
  * reflector batch with s = m (side='L') or n (side='R'); C is m x n. */
 int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k)
@@ -135,9 +128,10 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     MKL_INT sz_a = mkl_dget_size_compact(s, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
-    double *ap   = (double *)mkl_malloc(sz_a, 64);
-    double *taup = (double *)mkl_malloc(sz_t, 64);
-    double *cp   = (double *)mkl_malloc(sz_c, 64);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_c);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     const MKL_INT ldap = rowmajor ? k : s;          /* compact leading dims */
     const MKL_INT ldcp = rowmajor ? n : m;
@@ -145,22 +139,23 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     mkl_dgepack_compact(MKL_COL_MAJOR, k, 1, Tp.data(), k, taup, k, fmt, nm);
     mkl_dgepack_compact(layout, m, n, Bp.data(), ldC, cp, ldcp, fmt, nm);
 
-    /* routine under test (workspace query, then compute) */
-    std::vector<MKL_INT> info(nm, 99);
+    /* routine under test (workspace query, then compute). info is a single
+     * scalar (MKL Compact convention), not a per-matrix array. */
+    MKL_INT info = 99;
     double wq;
-    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, taup, cp, ldcp, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+    cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
+                           ap, ldap, taup, cp, ldcp, &wq, -1, &info, fmt, nm);
+    cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
+                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* unpack and compare against the dense reference */
     auto Op = batch_ptrs<double>(Bout.data(), nm, sB);
     mkl_dgeunpack_compact(layout, m, n, Op.data(), ldC, cp, ldcp, fmt, nm);
 
     int fails = 0;
+    if (info != 0) { ++fails; std::printf("    info = %d (expected 0)\n", (int)info); }
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
-        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
         const double *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
         double resid = maxdiff(Bo, Rv, sB);
         double rel = resid / std::max(norm1_layout(Rv, m, n, rowmajor, ldC), 1e-300);
@@ -173,7 +168,6 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
                 rowmajor ? "row" : "col", side, trans, V, nm, m, n, k,
                 worst, rtol, ok ? "OK" : "FAIL");
 
-    mkl_free(ap); mkl_free(taup); mkl_free(cp);
     return fails;
 }
 
@@ -210,27 +204,28 @@ int suite2(int nm, int n, int nrhs)
     MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, nrhs, fmt, nm);
-    double *ap   = (double *)mkl_malloc(sz_a, 64);
-    double *taup = (double *)mkl_malloc(sz_t, 64);
-    double *cp   = (double *)mkl_malloc(sz_c, 64);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(sz_t);
+    auto cp_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_c);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
     mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap, m, fmt, nm);
     mkl_dgepack_compact(MKL_COL_MAJOR, m, nrhs, Bp.data(), m, cp, m, fmt, nm);
 
-    std::vector<MKL_INT> info(nm, 99);
+    MKL_INT info = 99;   /* compact info is a single scalar (MKL convention) */
 
     /* 1. compact QR: ap <- (H, R), taup <- tau   (workspace query first) */
     double wq;
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, info.data(), fmt, nm);
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, &info, fmt, nm);
     MKL_INT lwork = (MKL_INT)wq;
     std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, info.data(), fmt, nm);
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork, &info, fmt, nm);
 
     /* 2. routine under test: cp <- Q^T B */
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, taup, cp, m, &wq, -1, info.data(), fmt, nm);
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, info.data(), fmt, nm);
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+                           ap, m, taup, cp, m, &wq, -1, &info, fmt, nm);
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
+                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* 3. compact upper-triangular solve: cp <- R^{-1} (Q^T B) = Xhat */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
@@ -241,10 +236,10 @@ int suite2(int nm, int n, int nrhs)
     mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Op.data(), n, cp, m, fmt, nm);
 
     int fails = 0;
+    if (info != 0) { ++fails; std::printf("    info = %d (expected 0)\n", (int)info); }
     double worst_fwd = 0, worst_res = 0;
     std::vector<double> AX(sB);
     for (int v = 0; v < nm; ++v) {
-        if (info[v] != 0) { ++fails; std::printf("    info[%d] = %d (expected 0)\n", v, (int)info[v]); }
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
         double fwd = maxdiff(Xv, X.data(), sB) /
@@ -267,7 +262,6 @@ int suite2(int nm, int n, int nrhs)
     std::printf("  [suite2] V=%-2d nm=%-2d n=%-3d nrhs=%d | fwd err %.2e res %.2e (rtol %.2e) %s\n",
                 V, nm, n, nrhs, worst_fwd, worst_res, rtol, ok ? "OK" : "FAIL");
 
-    mkl_free(ap); mkl_free(taup); mkl_free(cp);
     return fails;
 }
 

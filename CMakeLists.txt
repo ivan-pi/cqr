@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(cqr
   VERSION 0.1.0
-  DESCRIPTION "Compact-format apply-Q (ext_mkl_dormqr_compact) and its kernel"
+  DESCRIPTION "Compact QR extensions"
   LANGUAGES CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -18,9 +18,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)   # ormqr_compact.hpp uses GNU vector_size types
+# C++17 is required per-target via target_compile_features below; no GNU
+# extensions are needed (the kernel's vector_size attribute compiles under
+# strict -std=c++17).
 
 # Host-tuned codegen for the SIMD kernel (opt-in; correctness is independent).
 add_library(cqr_flags INTERFACE)
@@ -40,43 +40,45 @@ endif()
 # ---------------------------------------------------------------------------
 # Core kernel library (portable; no BLAS dependency)
 # ---------------------------------------------------------------------------
-add_library(ormqr_compact src/ormqr_compact_dispatch.cpp)
-target_include_directories(ormqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(ormqr_compact PRIVATE cqr_flags)
-add_library(cqr::ormqr_compact ALIAS ormqr_compact)
+add_library(cqr_compact src/cqr_compact_dispatch.cpp)
+target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(cqr_compact PUBLIC cxx_std_17)
+target_link_libraries(cqr_compact PRIVATE cqr_flags)
+add_library(cqr::compact ALIAS cqr_compact)
 
 # ---------------------------------------------------------------------------
-# Intel MKL compact extension: ext_mkl_dormqr_compact (design doc section 2)
+# Intel MKL compact extension: cqr_mkl_dormqr_compact (design doc section 2)
 # ---------------------------------------------------------------------------
 if(CQR_WITH_MKL)
   find_package(MKLCompact REQUIRED)
 
-  add_library(ext_mkl_ormqr_compact src/ext_mkl_ormqr_compact.cpp)
-  target_include_directories(ext_mkl_ormqr_compact
+  add_library(cqr_mkl_ext src/cqr_mkl_ext.cpp)
+  target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_link_libraries(ext_mkl_ormqr_compact
+  target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
+  target_link_libraries(cqr_mkl_ext
     PUBLIC  MKL::Compact          # MKL types in the public header
-    PRIVATE ormqr_compact cqr_flags)
-  add_library(cqr::ext_mkl_ormqr_compact ALIAS ext_mkl_ormqr_compact)
+    PRIVATE cqr_compact cqr_flags)
+  add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
 endif()
 
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
 # Worked example of the Compact-format batch QR solver
-# (mkl_dgeqrf_compact -> ext_mkl_dormqr_compact -> mkl_dtrsm_compact),
+# (mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact),
 # cross-checked against the naive per-matrix LAPACKE_dgels. Needs Intel MKL
-# (the compact API) and this repo's ext_mkl_ormqr_compact.
+# (the compact API) and this repo's cqr_mkl_ext.
 if(CQR_WITH_MKL)
   add_executable(solve_qr_compact examples/solve_qr_compact.cpp)
   target_link_libraries(solve_qr_compact
-    PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+    PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
 
   # Throughput benchmark: compact batched vs per-matrix LAPACK QR solve, with
   # the outer loop over the matrix pool parallelised by OpenMP when available.
   add_executable(bench_qr_compact examples/bench_qr_compact.cpp)
   target_link_libraries(bench_qr_compact
-    PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
+    PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
   find_package(OpenMP QUIET)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
@@ -90,16 +92,16 @@ if(CQR_BUILD_TESTS)
   enable_testing()
 
   # Portable self-contained kernel test (no BLAS).
-  add_executable(test_ormqr_compact src/test_ormqr_compact.cpp)
-  target_link_libraries(test_ormqr_compact PRIVATE ormqr_compact cqr_flags)
-  add_test(NAME portable_kernel COMMAND test_ormqr_compact)
+  add_executable(test_cqr_compact src/test_cqr_compact.cpp)
+  target_link_libraries(test_cqr_compact PRIVATE cqr_compact cqr_flags)
+  add_test(NAME portable_kernel COMMAND test_cqr_compact)
 
-  # MKL-backed validation of ext_mkl_dormqr_compact (design doc section 7).
+  # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)
-    add_executable(test_ext_mkl_ormqr_compact src/test_ext_mkl_ormqr_compact.cpp)
-    target_link_libraries(test_ext_mkl_ormqr_compact
-      PRIVATE ext_mkl_ormqr_compact MKL::Compact cqr_flags)
-    add_test(NAME mkl_compact_suites COMMAND test_ext_mkl_ormqr_compact)
+    add_executable(test_cqr_mkl_ext src/test_cqr_mkl_ext.cpp)
+    target_link_libraries(test_cqr_mkl_ext
+      PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
+    add_test(NAME mkl_compact_suites COMMAND test_cqr_mkl_ext)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)

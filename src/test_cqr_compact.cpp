@@ -1,4 +1,4 @@
-/* test_ormqr_compact.cpp
+/* test_cqr_compact.cpp
  *
  * Self-contained validation of the templated compact ormqr.
  * Reference: unblocked Householder QR (dgeqr2-style, LAPACK reflector
@@ -12,7 +12,7 @@
  *   2. back substitution recovers X
  *   3. applying 'N' after 'T' recovers the original B  (Q Q^T = I)
  *
- * Build (native):   g++ -O3 -march=native -std=c++17 ormqr_compact_dispatch.cpp test_ormqr_compact.cpp -o test_ormqr
+ * Build (native):   g++ -O3 -march=native -std=c++17 cqr_compact_dispatch.cpp test_cqr_compact.cpp -o test_cqr
  * Build (AArch64):  aarch64-linux-gnu-g++ -O3 -march=armv8.2-a -std=c++17 -static ...
  */
 
@@ -21,12 +21,13 @@
 #include <cstring>
 #include <cmath>
 #include <ctime>
+#include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
 
-#include "ormqr_compact.h"
-#include "ormqr_compact.hpp"
+#include "cqr_compact.h"
+#include "cqr_compact.hpp"
 
 /* ----------------------- reference kernels (scalar) ----------------- */
 
@@ -155,8 +156,15 @@ static void unpack_compact(int m, int n, std::vector<std::vector<T>> &Mk,
 
 /* ----------------------------- helpers ------------------------------ */
 
+static std::mt19937_64 rng(42);
+
 template <class T>
-static T frand() { return T(2) * T(rand()) / T(RAND_MAX) - T(1); }
+static T frand()
+{
+    /* one distribution per instantiation (T), reused across calls */
+    static std::uniform_real_distribution<T> dist(T(-1), T(1));
+    return dist(rng);
+}
 
 template <class T>
 static T max_abs_diff(const std::vector<T> &a, const std::vector<T> &b)
@@ -219,7 +227,7 @@ static int run_case(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* check 1: compact Q^T B vs scalar */
-    ormqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e1 = 0;
@@ -233,7 +241,7 @@ static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    ormqr::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e3 = 0;
@@ -301,7 +309,7 @@ static int run_case_pivoted(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* kernel: c := Q^T b */
-    ormqr::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
 
@@ -359,14 +367,53 @@ static void bench(int V, int nm, int m, int nrhs, int reps)
     volatile T sink = bp[0]; (void)sink;
 }
 
+/* --------------------- C API argument validation -------------------- */
+/* The public C entry points must reject illegal arguments LAPACK-style
+ * (return -j for the j-th argument), not assert or miscompute. */
+static int test_validation()
+{
+    const int m = 8, nrhs = 2, k = 8, V = 4, nm = 4, ld = 8, nca = 8;
+    std::vector<double> ap((size_t)ld * nca * V, 0), tau((size_t)k * V, 0),
+                        bp((size_t)ld * nrhs * V, 0);
+    auto call = [&](char tr, int m_, int nrhs_, int k_, int ldap_, int nca_,
+                    int ldbp_, int V_, int nm_) {
+        return dormqr_compact(tr, m_, nrhs_, k_, ap.data(), ldap_, nca_,
+                              tau.data(), bp.data(), ldbp_, V_, nm_);
+    };
+
+    struct { const char *what; int got, want; } t[] = {
+        {"valid",          call('T', m, nrhs, k,   ld,    nca,   ld,    V, nm),   0},
+        {"bad trans",      call('X', m, nrhs, k,   ld,    nca,   ld,    V, nm),  -1},
+        {"m<0",            call('T', -1, nrhs, k,  ld,    nca,   ld,    V, nm),  -2},
+        {"nrhs<0",         call('T', m, -1, k,     ld,    nca,   ld,    V, nm),  -3},
+        {"k>m",            call('T', m, nrhs, m+1, ld,    nca,   ld,    V, nm),  -4},
+        {"ldap<m",         call('T', m, nrhs, k,   m-1,   nca,   ld,    V, nm),  -6},
+        {"ncols_a<k",      call('T', m, nrhs, k,   ld,    k-1,   ld,    V, nm),  -7},
+        {"ldbp<m",         call('T', m, nrhs, k,   ld,    nca,   m-1,   V, nm), -10},
+        {"bad V",          call('T', m, nrhs, k,   ld,    nca,   ld,    3, nm), -11},
+        {"nm<0",           call('T', m, nrhs, k,   ld,    nca,   ld,    V, -1), -12},
+        {"empty m=0",      call('T', 0, nrhs, 0,   1,     0,     1,     V, nm),   0},
+        {"empty nm=0",     call('T', m, nrhs, k,   ld,    nca,   ld,    V, 0),    0},
+    };
+    int bad = 0;
+    for (auto &c : t) bad += (c.got != c.want);
+    std::printf("C API validation: %zu checks | %s\n",
+                sizeof(t) / sizeof(t[0]), bad ? "FAIL" : "OK");
+    for (auto &c : t)
+        if (c.got != c.want)
+            std::printf("  %-12s got=%d want=%d\n", c.what, c.got, c.want);
+    return bad ? 1 : 0;
+}
+
 /* ------------------------------- main -------------------------------- */
 
 int main(int argc, char **)
 {
-    srand(42);
     int fails = 0;
 
     const int m = 43, nrhs = 5;  /* nz=28 + npoly=15 */
+
+    fails += test_validation();
 
     fails += run_case<double, 2>(4, m, nrhs);
     fails += run_case<double, 4>(8, m, nrhs);

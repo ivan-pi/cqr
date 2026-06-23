@@ -1,8 +1,8 @@
-#ifndef ORMQR_COMPACT_H
-#define ORMQR_COMPACT_H
+#ifndef CQR_COMPACT_H
+#define CQR_COMPACT_H
 
 /* C API (FFI-stable) for the templated C++ implementation in
- * ormqr_compact.hpp. Apply Q or Q^T from a compact-format QR
+ * cqr_compact.hpp. Apply Q or Q^T from a compact-format QR
  * factorization (mkl_?geqrf_compact) to a compact-format RHS block,
  * from the left:  B := op(Q) * B.
  *
@@ -29,26 +29,36 @@
  *            (MKL: SSE d=2/s=4, AVX d=4/s=8, AVX512 d=8/s=16;
  *             any of these also work on NEON/SVE as unrolled bursts)
  *   nm       total number of matrices (partial last group is padded)
+ *
+ * Returns 0 on success, or -j (LAPACK sign convention) if the j-th argument,
+ * counted in signature order, had an illegal value:
+ *   -1 trans (not 'T'/'t'/'N'/'n')   -2 m (<0)        -3 nrhs (<0)
+ *   -4 k (<0 or >m)                  -6 ldap (<max(1,m))
+ *   -7 ncols_a (<k)                  -10 ldbp (<max(1,m))
+ *   -11 V (not 2/4/8/16)             -12 nm (<0)
+ * Pointer arguments are not inspected (LAPACK convention). An empty problem
+ * (m, nrhs, k, or nm == 0) is a valid no-op returning 0. The routine never
+ * aborts the calling process.
  */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void dormqr_compact(char trans, int m, int nrhs, int k,
-                    const double *ap, int ldap, int ncols_a,
-                    const double *taup,
-                    double *bp, int ldbp,
-                    int V, int nm);
+int dormqr_compact(char trans, int m, int nrhs, int k,
+                   const double *ap, int ldap, int ncols_a,
+                   const double *taup,
+                   double *bp, int ldbp,
+                   int V, int nm);
 
-void sormqr_compact(char trans, int m, int nrhs, int k,
-                    const float *ap, int ldap, int ncols_a,
-                    const float *taup,
-                    float *bp, int ldbp,
-                    int V, int nm);
+int sormqr_compact(char trans, int m, int nrhs, int k,
+                   const float *ap, int ldap, int ncols_a,
+                   const float *taup,
+                   float *bp, int ldbp,
+                   int V, int nm);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ORMQR_COMPACT_H */
+#endif /* CQR_COMPACT_H */

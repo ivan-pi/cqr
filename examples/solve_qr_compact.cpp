@@ -8,7 +8,7 @@
  * is exactly the sequence the design document validates (section 7.2):
  *
  *     mkl_dgeqrf_compact      A = Q R                    (factor the batch)
- *     ext_mkl_dormqr_compact  B <- Q^T B                 (apply Q^T -- the
+ *     cqr_mkl_dormqr_compact  B <- Q^T B                 (apply Q^T -- the
  *                                                         routine this repo
  *                                                         adds to MKL)
  *     mkl_dtrsm_compact       R X = (Q^T B)              (triangular solve)
@@ -19,14 +19,14 @@
  * driver recover the known exact solution.
  *
  * Build: needs Intel MKL (the compact API is an MKL extension) plus this
- * repo's ext_mkl_ormqr_compact; wired up by CMakeLists.txt as the
+ * repo's cqr_mkl_ormqr_compact; wired up by CMakeLists.txt as the
  * `solve_qr_compact` target.
  */
 
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "ext_mkl_ormqr_compact.h"
+#include "cqr_mkl_ext.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -144,9 +144,10 @@ void batch_solve(int nm, int n, int nrhs)
      * geqrf_compact -> dormqr_compact -> dtrsm_compact, all on the         *
      * interleaved buffers ap / taup / bp.                                  */
     const int compact_align = 64;   /* byte alignment for the compact buffers */
-    double *ap   = (double *)mkl_malloc(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
-    double *taup = (double *)mkl_malloc(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
-    double *bp   = (double *)mkl_malloc(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
+    auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, nm), compact_align);
+    auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, nm), compact_align);
+    auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, nm), compact_align);
+    double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
     /* pack the dense batches into compact (interleaved) layout */
     {
@@ -172,9 +173,9 @@ void batch_solve(int nm, int n, int nrhs)
      *    lwork is 1 -- the same quick-return value reference LAPACK dormqr
      *    reports -- and no query is required. */
     double dummy;
-    ext_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
                            ap, n, taup, bp, n, &dummy, 1, info.data(), fmt, nm);
-    check_info(info, "ext_mkl_dormqr_compact");
+    check_info(info, "cqr_mkl_dormqr_compact");
 
     /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
@@ -186,7 +187,8 @@ void batch_solve(int nm, int n, int nrhs)
         mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xcptr.data(), n, bp, n, fmt, nm);
     }
 
-    mkl_free(ap); mkl_free(taup); mkl_free(bp);
+    /* ap/taup/bp stay live until their RAII owners go out of scope when
+     * batch_solve returns; no manual mkl_free needed. */
 
     /* ===== Path 2: naive per-matrix forward driver LAPACKE_dgels =======
      * Xd starts as a copy of the RHS, which dgels overwrites in place. */
@@ -219,7 +221,7 @@ void batch_solve(int nm, int n, int nrhs)
 
 int main()
 {
-    std::printf("Compact batch QR solve: mkl_dgeqrf_compact -> ext_mkl_dormqr_compact "
+    std::printf("Compact batch QR solve: mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact "
                 "-> mkl_dtrsm_compact  vs  per-matrix LAPACKE_dgels\n");
     std::printf("(compact format = %d)\n", (int)mkl_get_format_compact());
 
