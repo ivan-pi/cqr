@@ -31,6 +31,41 @@
  *     A_v(i,j)  = ap [ g*ldap*ncols_a*V + (j*ldap + i)*V + v ]
  *     tau_v(kk) = taup[ g*k*V           +  kk*V          + v ]
  *     B_v(i,j)  = bp [ g*ldbp*nrhs*V   + (j*ldbp + i)*V + v ]
+ *
+ * Applying the implicit Q (the heart of this file):
+ *   ?geqrf_compact never forms Q. It returns Q as a product of k elementary
+ *   Householder reflectors together with the scalars tau(0..k-1):
+ *
+ *       Q = H(0) H(1) ... H(k-1),   H(kk) = I - tau(kk) * v(kk) * v(kk)^T.
+ *
+ *   Each reflector vector v(kk) is unit-lower -- an implicit 1 in position kk,
+ *   sub-diagonal entries stored in column kk of A, zeros above:
+ *       v(kk)[kk] = 1            (implicit, never read),
+ *       v(kk)[i]  = A(i,kk),     i = kk+1 .. spec_len-1,   <-- the ak[i] below
+ *       v(kk)[i]  = 0,           i < kk.
+ *
+ *   So we never touch a dense Q. Applying one reflector to a single panel slice
+ *   c (a column of B for side='L', a row for side='R') is a rank-1 update, two
+ *   passes over the tail i = kk+1 .. spec_len-1 (this is dorm2r):
+ *       w  = v(kk)^T c = c[kk] + sum_i ak[i]*c[i]     (dot, exploiting v[kk]=1)
+ *       c := c - tau(kk) * w * v(kk)                  (axpy back)
+ *          => c[kk] -= tau*w;   c[i] -= tau*w*ak[i].
+ *
+ *   Order / transpose. Each H is symmetric (H^T = H), so Q^T = H(k-1)..H(0),
+ *   and the reflectors must be applied in the order the matrix product dictates
+ *   (this is the LAPACK DORMQR/DORM2R table):
+ *
+ *       side   op(Q)      expanded                 sweep over kk
+ *       'L'    Q  * C     H(0)..H(k-1) * C         descending (Backward)
+ *       'L'    Q^T* C     H(k-1)..H(0) * C         ascending  (Forward)
+ *       'R'    C * Q      C * H(0)..H(k-1)         ascending  (Forward)
+ *       'R'    C * Q^T    C * H(k-1)..H(0)         descending (Backward)
+ *
+ *   i.e. fwd = (side=='L') ? trans : !trans, as the entry points compute. For
+ *   side='R' the dot/axpy run over the rows of C rather than its columns; the
+ *   strided kernel expresses that solely by swapping which stride is the
+ *   "special" (reflector) direction and which is the "panel" direction, so the
+ *   arithmetic is shared with side='L'.
  */
 
 #ifndef CQR_COMPACT_HPP
@@ -38,6 +73,7 @@
 
 #include <cstddef>
 #include <cassert>
+#include <type_traits>
 
 namespace cqr {
 namespace detail {
@@ -99,6 +135,13 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
                          T *b_, Int ldbp)
 {
     using VT = typename pack<T, V>::type;
+    static_assert(V > 0, "interleave width V must be positive");
+    static_assert(sizeof(VT) == sizeof(T) * V,
+                  "pack<T,V> must hold exactly V scalars contiguously");
+    static_assert(std::is_floating_point<T>::value,
+                  "ormqr_compact is defined for real float/double");
+
+    assert(k <= m && ldap >= m && ldbp >= m);
 
     const VT *A   = reinterpret_cast<const VT *>(a_);
     const VT *tau = reinterpret_cast<const VT *>(tau_);
@@ -172,6 +215,16 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
                                  T *c_, std::size_t c_spec, std::size_t c_panel)
 {
     using VT = typename pack<T, V>::type;
+    static_assert(V > 0, "interleave width V must be positive");
+    static_assert(sizeof(VT) == sizeof(T) * V,
+                  "pack<T,V> must hold exactly V scalars contiguously");
+    static_assert(std::is_floating_point<T>::value,
+                  "ormqr_compact is defined for real float/double");
+
+    /* k reflectors live along the special axis; strides must be non-degenerate
+     * so distinct (i,p) map to distinct elements. */
+    assert(k <= spec_len);
+    assert(a_spec && a_kk && c_spec && c_panel);
 
     const VT *A   = reinterpret_cast<const VT *>(a_);
     const VT *tau = reinterpret_cast<const VT *>(tau_);
@@ -287,6 +340,11 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     const Direction dir  = fwd ? Direction::Forward : Direction::Backward;
     const Int  spec_len  = left ? m : n;
     const Int  panel_cnt = left ? n : m;
+
+    /* Q has order spec_len, so there cannot be more reflectors than that; the
+     * packed A must hold at least k columns for the column-major group stride. */
+    assert(m >= 0 && n >= 0 && k >= 0 && k <= spec_len);
+    assert(rowmajor || ncols_a >= k);
 
     /* element strides (in VT units) for the reflector column of A and for
      * the special / panel sweep of C. */
