@@ -72,8 +72,8 @@ struct pack {
 #else
 #error "ormqr_compact requires the GNU vector extensions " \
        "(__attribute__((vector_size)) with may_alias); compile with a " \
-       "compiler that supports them (GCC, Clang, Intel icpx/icpc) in GNU " \
-       "mode (-std=gnu++17)."
+       "compiler that supports them (GCC, Clang, Intel icpx/icpc). These " \
+       "attributes are available under strict -std=c++17, not only GNU mode."
 #endif
 
 /* ------------------------------------------------------------------ */
