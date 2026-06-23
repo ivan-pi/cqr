@@ -45,13 +45,33 @@ Both are registered with CTest (`example_solve_qr_compact`,
 
 ## Layout
 
+### Public interface
+
+These two headers are the project's API - the only files most users need to
+include:
+
+| File | Role |
+|------|------|
+| `src/cqr_mkl_ext.h` | The MKL-style public API `cqr_mkl_dormqr_compact`: takes `MKL_COMPACT_PACK` formats and drives the kernel - the drop-in `mkl_?ormqr_compact` (side='L'). |
+| `src/cqr_compact.h` | The portable C API `dormqr_compact` / `sormqr_compact`: same apply-`Q` operation with an explicit interleave width `V` and no MKL dependency. |
+
+### Internal implementation
+
+Everything else under `src/` is internal - implementation details and tests,
+not part of the supported interface:
+
 | File | Role |
 |------|------|
 | `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
-| `src/cqr_compact_dispatch.{cpp,h}` | Portable C entry points `dormqr_compact` / `sormqr_compact` (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_ext.{cpp,h}` | The public API `cqr_mkl_dormqr_compact`: unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
+| `src/cqr_compact_dispatch.cpp` | Portable C entry points (runtime `V` -> compile-time dispatch). |
+| `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
 | `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
+
+### Examples
+
+| File | Role |
+|------|------|
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark vs. per-matrix LAPACK. |
 
