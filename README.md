@@ -1,9 +1,11 @@
-# cqr - compact-format apply-Q (`cqr_mkl_dormqr_compact`)
+# cqr - Compact QR extensions
 
-A portable SIMD kernel and an Intel MKL-style API for applying the orthogonal
-factor `Q` (or `Q^T`) of a **Compact-format** QR factorization
-(`mkl_?geqrf_compact`) to a batch of matrices - the routine missing between
-`mkl_?geqrf_compact` and the use of its reflectors. See the
+Intel MKL ships `mkl_?geqrf_compact` and `mkl_?trsm_compact` but no
+`?ormqr_compact` - leaving no supported way to apply the orthogonal factor `Q`
+(or `Q^T`) of a **Compact-format** QR factorization to a batch of matrices.
+**cqr** fills that gap: a portable SIMD kernel plus an Intel MKL-style API for
+the missing apply-Q step, completing the compact pipeline between
+`mkl_?geqrf_compact` and `mkl_?trsm_compact`. See the
 [design document](cqr_mkl_dormqr_compact_design.md).
 
 ## Prerequisites
