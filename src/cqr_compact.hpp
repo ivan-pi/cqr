@@ -145,9 +145,9 @@ enum class Direction { Forward, Backward };
 
 template <typename VT, typename Int = int>
 struct BatchView {
-    VT          *data    = nullptr;
-    std::size_t  special = 0;   /* stride along the swept (reflector) axis */
-    std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
+    VT          *const data    = nullptr;
+    const std::size_t  special = 0;   /* stride along the swept (reflector) axis */
+    const std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
 
     VT &operator()(Int i, Int p) const noexcept {
         return data[static_cast<std::size_t>(i) * special
