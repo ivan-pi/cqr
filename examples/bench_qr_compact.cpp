@@ -222,22 +222,27 @@ int main(int argc, char **argv)
     /* Turn LAPACKE NaN-checking off so the per-matrix path is timed clean. */
     LAPACKE_set_nancheck(0);
 
-    int nthreads = 1;
 #ifdef _OPENMP
+    int nthreads = 1;
 #pragma omp parallel
 #pragma omp single
     nthreads = omp_get_num_threads();
 #endif
 
-    const int sizes[] = {20, 40, 60, 80, 100};
+    const int sizes[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
     const double eps = std::numeric_limits<double>::epsilon();
 
     std::printf("QR solve throughput: compact batched (mkl_dgeqrf_compact -> "
                 "cqr_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
     std::printf("            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
+#ifdef _OPENMP
     std::printf("matrices=%d  reps=%d  compact V=%d  OpenMP threads=%d\n\n",
                 nmat, reps, V, nthreads);
+#else
+    std::printf("matrices=%d  reps=%d  compact V=%d  Sequential\n\n",
+                nmat, reps, V);
+#endif
     std::printf("   n |  batched (s)  Mmat/s | unbatched (s)  Mmat/s | speedup |  max fwd err\n");
     std::printf("-----+----------------------+----------------------+---------+-------------\n");
 
@@ -267,7 +272,7 @@ int main(int argc, char **argv)
 
         const double speedup = tu / tb;
         log_speedup_sum += std::log(speedup);
-        std::printf("%4d | %11.4f  %6.2f | %11.4f  %6.2f | %6.2fx | %.2e (rtol %.1e)\n",
+        std::printf("%4d | %12.4f  %6.2f | %12.4f  %6.2f | %6.2fx | %.2e (rtol %.1e)\n",
                     n, tb, nmat / tb / 1e6, tu, nmat / tu / 1e6,
                     speedup, maxerr, rtol);
     }
