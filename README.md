@@ -55,8 +55,6 @@ include:
 | `src/cqr_mkl_ext.h` | The MKL-style public API `cqr_mkl_dormqr_compact`: takes `MKL_COMPACT_PACK` formats and drives the kernel - the drop-in `mkl_?ormqr_compact` (side='L'). |
 | `src/cqr_compact.h` | The portable C API `dormqr_compact` / `sormqr_compact`: same apply-`Q` operation with an explicit interleave width `V` and no MKL dependency. |
 
-### Internal implementation
-
 Everything else under `src/` is internal - implementation details and tests,
 not part of the supported interface:
 
