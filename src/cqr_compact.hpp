@@ -97,12 +97,12 @@ namespace detail {
 
 template <typename T, int V>
 struct pack {
-    /* GNU vector_size requires a power-of-two byte width; since sizeof(T) is
-     * itself a power of two, V must be a positive power of two. Check it here
-     * -- the single chokepoint -- so a bad width fails with this message
-     * instead of a cryptic error inside the attribute instantiation. */
-    static_assert(V > 0 && (V & (V - 1)) == 0,
-                  "interleave width V must be a positive power of two");
+    /* GNU vector_size requires a power-of-two byte width; the supported
+     * interleave widths are 2/4/8/16, matching the C API. Check it here -- the
+     * single chokepoint -- so a bad width fails with this message instead of a
+     * cryptic error inside the attribute instantiation. */
+    static_assert(V == 2 || V == 4 || V == 8 || V == 16,
+                  "interleave width V must be 2, 4, 8, or 16");
     /* aligned(alignof(T)) relaxes the alignment requirement so the type
      * is valid on any T-aligned buffer (unaligned vector loads are free
      * on all modern hardware); may_alias exempts it from strict-aliasing
@@ -149,33 +149,21 @@ struct BatchView {
     std::size_t  special = 0;   /* stride along the swept (reflector) axis */
     std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
 
-    [[nodiscard]] constexpr VT &operator()(Int i, Int p) const noexcept {
+    VT &operator()(Int i, Int p) const noexcept {
         return data[static_cast<std::size_t>(i) * special
                   + static_cast<std::size_t>(p) * panel];
     }
 };
 
-/* Per-axis element stride of a 2-D matrix stored with leading dimension ld.
- * Column-major: rows are unit-stride, columns step by ld; row-major flips. */
-[[nodiscard]] constexpr std::size_t row_stride(bool rowmajor,
-                                               std::size_t ld) noexcept {
-    return rowmajor ? ld : 1;
-}
-[[nodiscard]] constexpr std::size_t col_stride(bool rowmajor,
-                                               std::size_t ld) noexcept {
-    return rowmajor ? 1 : ld;
-}
-
-/* Reinterpret a packed T buffer as a group view of V-wide elements. The cast
- * forbids constexpr, but the factory stays [[nodiscard]] / noexcept. */
+/* Reinterpret a packed T buffer as a group view of V-wide pack elements. */
 template <typename T, int V, typename Int = int>
-[[nodiscard]] BatchView<const typename pack<T, V>::type, Int>
+BatchView<const typename pack<T, V>::type, Int>
 make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept {
     using VT = typename pack<T, V>::type;
     return { reinterpret_cast<const VT *>(p), special, panel };
 }
 template <typename T, int V, typename Int = int>
-[[nodiscard]] BatchView<typename pack<T, V>::type, Int>
+BatchView<typename pack<T, V>::type, Int>
 make_view(T *p, std::size_t special, std::size_t panel) noexcept {
     using VT = typename pack<T, V>::type;
     return { reinterpret_cast<VT *>(p), special, panel };
@@ -192,9 +180,6 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
                          T *b_, Int ldbp)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(V > 0, "interleave width V must be positive");
-    static_assert(sizeof(VT) == sizeof(T) * V,
-                  "pack<T,V> must hold exactly V scalars contiguously");
     static_assert(std::is_floating_point<T>::value,
                   "ormqr_compact is defined for real float/double");
 
@@ -270,9 +255,6 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
                                  BatchView<typename pack<T, V>::type, Int> C)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(V > 0, "interleave width V must be positive");
-    static_assert(sizeof(VT) == sizeof(T) * V,
-                  "pack<T,V> must hold exactly V scalars contiguously");
     static_assert(std::is_floating_point<T>::value,
                   "ormqr_compact is defined for real float/double");
 
@@ -390,16 +372,16 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     assert(m >= 0 && n >= 0 && k >= 0 && k <= spec_len);
     assert(rowmajor || ncols_a >= k);
 
-    /* element strides (in VT units). A is always swept down its rows (the
-     * reflector axis), with kk along its columns. For C the special axis is
-     * rows when side='L' and columns when side='R'; the panel axis is the
-     * other one. row_stride/col_stride fold the column-/row-major choice. */
-    const std::size_t a_special = row_stride(rowmajor, (std::size_t)ldap);
-    const std::size_t a_panel   = col_stride(rowmajor, (std::size_t)ldap);
-    const std::size_t c_rows    = row_stride(rowmajor, (std::size_t)ldcp);
-    const std::size_t c_cols    = col_stride(rowmajor, (std::size_t)ldcp);
-    const std::size_t c_special = left ? c_rows : c_cols;
-    const std::size_t c_panel   = left ? c_cols : c_rows;
+    /* element strides (in VT units). A is swept down its rows (the reflector
+     * axis) with kk along its columns; for C the special axis is rows when
+     * side='L' and columns when side='R'. Column-major: a row step is 1 and a
+     * column step is ld; row-major flips that. */
+    const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
+    const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
+    const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1;
+    const std::size_t a_panel   = rowmajor ? 1 : (std::size_t)ldap;
+    const std::size_t c_special = left ? c_row : c_col;
+    const std::size_t c_panel   = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ldap*(complementary extent), which is the column count for col-major
