@@ -92,26 +92,20 @@ double norm1_layout(const double *M, int m, int n, bool rowmajor, int ld)
 }
 
 /* Generalized Suite 1: validate cqr_mkl_dormqr_compact's op(Q) application
- * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x nca
- * reflector batch with s = m (side='L') or n (side='R'); only its first k
- * columns hold reflectors, but it is *packed* with nca >= k columns (nca = k
- * for square/tall factors, nca > k for wide ones, where geqrf packs s x N with
- * N > s). C is m x n. Passing nca exercises the group-stride addressing for a
- * factor whose packed column count exceeds k. */
-int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k,
-           int nca = -1)
+ * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x k
+ * reflector batch with s = m (side='L') or n (side='R'); C is m x n. */
+int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int  V = vlen(fmt);
     const bool rowmajor = (layout == MKL_ROW_MAJOR);
     const bool left = (side == 'L' || side == 'l');
-    const int  s = left ? m : n;                    /* A is s x nca, Q is s x s */
-    if (nca < 0) nca = k;                            /* default: packed as s x k */
+    const int  s = left ? m : n;                    /* A is s x k, Q is s x s */
     const int  lap = rowmajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR;
-    const int  ldH = rowmajor ? nca : s;            /* dense leading dims */
+    const int  ldH = rowmajor ? k : s;              /* dense leading dims */
     const int  ldC = rowmajor ? n : m;
 
-    const size_t sH = (size_t)s * nca, sT = (size_t)k, sB = (size_t)m * n;
+    const size_t sH = (size_t)s * k, sT = (size_t)k, sB = (size_t)m * n;
     std::vector<double> H(nm * sH), tau(nm * sT), B(nm * sB), Bref(nm * sB), Bout(nm * sB);
 
     for (int v = 0; v < nm; ++v) {
@@ -119,13 +113,12 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
         double *Bv = B.data() + v * sB, *Rv = Bref.data() + v * sB;
         for (size_t i = 0; i < sH; ++i) Hv[i] = frand();
         /* boost the (i,i) diagonal (same offset in both layouts) */
-        for (int i = 0; i < std::min(s, nca); ++i) Hv[(size_t)i * ldH + i] += 2.0;
-        /* turn H into a real Householder representation via dense QR; the s x nca
-         * factor carries min(s,nca) >= k reflectors, of which op(Q) uses k. */
-        LAPACKE_dgeqrf(lap, s, nca, Hv, ldH, tv);
+        for (int i = 0; i < std::min(s, k); ++i) Hv[(size_t)i * ldH + i] += 2.0;
+        /* turn H into a real Householder representation via dense QR */
+        LAPACKE_dgeqrf(lap, s, k, Hv, ldH, tv);
         for (size_t i = 0; i < sB; ++i) Bv[i] = frand();
         std::copy(Bv, Bv + sB, Rv);
-        /* dense reference: op(Q) C, reading the first k reflector columns of H */
+        /* dense reference: op(Q) C */
         LAPACKE_dormqr(lap, side, trans, m, n, k, Hv, ldH, tv, Rv, ldC);
     }
 
@@ -134,7 +127,7 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     auto Tp = batch_ptrs<const double>(tau.data(), nm, sT);
     auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
 
-    MKL_INT sz_a = mkl_dget_size_compact(s, nca, fmt, nm);
+    MKL_INT sz_a = mkl_dget_size_compact(s, k, fmt, nm);
     MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nm);
     MKL_INT sz_c = mkl_dget_size_compact(m, n, fmt, nm);
     auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_a);
@@ -142,21 +135,20 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     auto cp_buf   = cqr::detail::mkl_alloc_bytes<double>(sz_c);
     double *ap = ap_buf.get(), *taup = taup_buf.get(), *cp = cp_buf.get();
 
-    const MKL_INT ldap = rowmajor ? nca : s;        /* compact leading dims */
+    const MKL_INT ldap = rowmajor ? k : s;          /* compact leading dims */
     const MKL_INT ldcp = rowmajor ? n : m;
-    mkl_dgepack_compact(layout, s, nca, Hp.data(), ldH, ap, ldap, fmt, nm);
+    mkl_dgepack_compact(layout, s, k, Hp.data(), ldH, ap, ldap, fmt, nm);
     mkl_dgepack_compact(MKL_COL_MAJOR, k, 1, Tp.data(), k, taup, k, fmt, nm);
     mkl_dgepack_compact(layout, m, n, Bp.data(), ldC, cp, ldcp, fmt, nm);
 
     /* routine under test (workspace query, then compute). info is a single
-     * scalar (MKL Compact convention), not a per-matrix array. nca is the
-     * packed column count of A (group stride). */
+     * scalar (MKL Compact convention), not a per-matrix array. */
     MKL_INT info = 99;
     double wq;
     cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, nca, taup, cp, ldcp, &wq, -1, &info, fmt, nm);
+                           ap, ldap, taup, cp, ldcp, &wq, -1, &info, fmt, nm);
     cqr_mkl_dormqr_compact(layout, side, trans, m, n, k,
-                           ap, ldap, nca, taup, cp, ldcp, &wq, (MKL_INT)wq, &info, fmt, nm);
+                           ap, ldap, taup, cp, ldcp, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* unpack and compare against the dense reference */
     auto Op = batch_ptrs<double>(Bout.data(), nm, sB);
@@ -233,9 +225,9 @@ int suite2(int nm, int n, int nrhs)
 
     /* 2. routine under test: cp <- Q^T B */
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, n, taup, cp, m, &wq, -1, &info, fmt, nm);
+                           ap, m, taup, cp, m, &wq, -1, &info, fmt, nm);
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k,
-                           ap, m, n, taup, cp, m, &wq, (MKL_INT)wq, &info, fmt, nm);
+                           ap, m, taup, cp, m, &wq, (MKL_INT)wq, &info, fmt, nm);
 
     /* 3. compact upper-triangular solve: cp <- R^{-1} (Q^T B) = Xhat */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
@@ -294,11 +286,6 @@ int main()
                 fails += suite1(lay, side, tr, 16, 32, 8, side == 'L' ? 32 : 8);
                 /* k < dim, padded partial last group */
                 fails += suite1(lay, side, tr, 11, 32, 6, side == 'L' ? 20 : 4);
-                /* Wide factor: A packed with nca > k columns, several groups
-                 * (nm > V) so a wrong group stride mis-addresses groups >= 1. */
-                const int V = vlen(mkl_get_format_compact());
-                fails += suite1(lay, side, tr, 2 * V + 3, 12, 7,
-                                side == 'L' ? 12 : 7, /*nca=*/20);
             }
 
     /* Suite 2: end-to-end solver, shapes from section 7.3 (32..512) */

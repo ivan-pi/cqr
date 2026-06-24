@@ -11,7 +11,7 @@ This extension provides a routine to multiply a set of general matrices $C$ by t
 void cqr_mkl_dormqr_compact (
     MKL_LAYOUT layout, char side, char trans, 
     MKL_INT m, MKL_INT n, MKL_INT k, 
-    const double * ap, MKL_INT ldap, MKL_INT ncols_a, 
+    const double * ap, MKL_INT ldap, 
     const double * taup, 
     double * cp, MKL_INT ldcp, 
     double * work, MKL_INT lwork, MKL_INT * info, 
@@ -41,8 +41,7 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
     * If `side = 'L'`, $m \ge k \ge 0$. 
     * If `side = 'R'`, $n \ge k \ge 0$.
 * **`ap`** (`const double *`): Buffer containing the elementary reflectors from the QR factorization, stored in MKL Compact format.
-* **`ldap`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `ap`.
-* **`ncols_a`** (`MKL_INT`): The packed column count of $A$ — the number of columns passed to `mkl_?gepack_compact`/`mkl_?get_size_compact` when $A$ was packed, which sets the per-matrix group stride. $A$ has order $s$ ($=m$ for `side='L'`, $=n$ for `side='R'`); `op(Q)` reads only its first $k$ columns, but the buffer is addressed by its packed width. For a square or tall factor this equals $k$; for a wide factor (more original columns than reflectors) it exceeds $k$. Must satisfy $\text{ncols\_a} \ge k$.
+* **`ldap`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `ap`. As in LAPACK `?ormqr`, $A$ is dimensioned $(\text{ldap}, k)$ and must be packed with exactly $k$ columns, so the per-matrix group stride is $\text{ldap}\cdot k$. For square/tall factors $k$ equals the factored column count (the `mkl_?geqrf_compact` output is consumed directly); a wide factor must pack only its $k$ reflector columns.
 * **`taup`** (`const double *`): Buffer containing the scalar factors of the elementary reflectors, stored in MKL Compact format.
 * **`cp`** (`double *`): Buffer containing the batch of matrices $C$ to be multiplied, stored in MKL Compact format.
 * **`ldcp`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `cp`.

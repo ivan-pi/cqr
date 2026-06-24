@@ -9,12 +9,16 @@ Gaps between the implementation and the design document
   family is real-only and `trans='C'` is folded to `'T'`
   (in `src/cqr_mkl_ext.cpp`). Document the real-only scope, or
   add genuine complex specializations.
-- ~~**`A` packed column count assumed equal to `k`.**~~ Resolved:
-  `cqr_mkl_?ormqr_compact` now takes an explicit `ncols_a` parameter (the packed
-  column count of `A`, `>= k`) instead of hardcoding `k`, so wide factorizations
-  (`m < n`, packed with `n` columns) are addressed correctly. The invariant
-  `ncols_a >= k` is asserted in `src/cqr_mkl_ext.cpp` and exercised by the
-  wide-factor cases in `src/test_cqr_mkl_ext.cpp` (suite 1, `m=12 n=7 nca=20`).
+- **`A` packed column count.** `cqr_mkl_?ormqr_compact` keeps LAPACK `?ormqr`'s
+  convention: `A` is dimensioned `(ldap, k)` and packed with exactly `k`
+  columns, so the col-major group stride is `ldap*k*V`. This holds automatically
+  for square/tall factors (`k = n`), which is the AX=B pipeline. A wide factor
+  (`m < n`, packed with `n` columns) must pack only its `k` reflector columns —
+  the precondition is documented in `src/cqr_mkl_ext.h`. Callers that genuinely
+  need to address a wider packed `A` can use the portable `dormqr_compact`
+  (`src/cqr_compact.h`), which already exposes an explicit `ncols_a`. The MKL
+  API deliberately does not add that argument, to stay LAPACK-signature + MKL's
+  `{layout, format, nm}` and nothing more.
 - **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
   well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
   (`logspace(0,-cond,n)`), the rank-deficient / near-rank-deficient / banded /

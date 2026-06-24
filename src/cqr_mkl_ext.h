@@ -33,14 +33,17 @@
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
  * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32.
  *
- * Packed column count of A (`ncols_a`). A is the reflector batch of order
- * s = m (side='L') or n (side='R'); op(Q) reads only its first k columns, but
- * the compact buffer is addressed by its *packed* column count, which is the
- * column count of the original factored matrix. For square/tall factors that
- * equals k (the common case, and what the AX=B pipeline uses); for a wide
- * factor (more original columns than reflectors) it exceeds k. ncols_a must be
- * the value passed to mkl_?gepack_compact / mkl_?get_size_compact when A was
- * packed, and must satisfy ncols_a >= k.
+ * Signature: exactly LAPACK ?ormqr plus the three arguments MKL's compact
+ * routines add (layout, format, nm) -- no extras. As in ?ormqr, A is the
+ * order-s reflector batch (s = m for side='L', n for side='R') dimensioned
+ * (ldap, k): only its first k columns are read, and the compact buffer must be
+ * *packed with exactly k columns*, so each matrix occupies ldap*k elements and
+ * the group stride is ldap*k*V. For square and tall factors k equals the
+ * factored column count, so the buffer returned by mkl_?geqrf_compact is
+ * consumed directly. A wide factor (more columns than reflectors, k < cols)
+ * must pack only its k reflector columns; alternatively the portable
+ * dormqr_compact (cqr_compact.h) takes an explicit packed-column count for the
+ * non-conforming layout.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
@@ -53,7 +56,7 @@ extern "C" {
 
 void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             MKL_INT m, MKL_INT n, MKL_INT k,
-                            const double *ap, MKL_INT ldap, MKL_INT ncols_a,
+                            const double *ap, MKL_INT ldap,
                             const double *taup,
                             double *cp, MKL_INT ldcp,
                             double *work, MKL_INT lwork, MKL_INT *info,
@@ -61,7 +64,7 @@ void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
 
 void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             MKL_INT m, MKL_INT n, MKL_INT k,
-                            const float *ap, MKL_INT ldap, MKL_INT ncols_a,
+                            const float *ap, MKL_INT ldap,
                             const float *taup,
                             float *cp, MKL_INT ldcp,
                             float *work, MKL_INT lwork, MKL_INT *info,

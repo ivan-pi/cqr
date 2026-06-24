@@ -152,7 +152,7 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
                                work.data(), lwork, info, fmt, cnt);
             double dummy;
             cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                                   ap, n, n, taup, bp, n, &dummy, 1, info, fmt, cnt);
+                                   ap, n, taup, bp, n, &dummy, 1, info, fmt, cnt);
             mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
                               n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
 

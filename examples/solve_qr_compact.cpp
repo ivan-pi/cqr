@@ -170,14 +170,13 @@ void batch_solve(int nm, int n, int nrhs)
     mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info, fmt, nm);
     check_info(info[0], "mkl_dgeqrf_compact");
 
-    /* 2. apply Q^T to the RHS: bp <- Q^T B   (this repo's extension). A is the
-     *    n x n factor, so its packed column count is n. The apply-Q kernel
-     *    needs no workspace, so its minimum (and optimal) lwork is 1 -- the
-     *    same quick-return value reference LAPACK dormqr reports -- and no
-     *    query is required. */
+    /* 2. apply Q^T to the RHS: bp <- Q^T B   (this repo's extension). The
+     *    apply-Q kernel needs no workspace, so its minimum (and optimal)
+     *    lwork is 1 -- the same quick-return value reference LAPACK dormqr
+     *    reports -- and no query is required. */
     double dummy;
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           ap, n, n, taup, bp, n, &dummy, 1, info, fmt, nm);
+                           ap, n, taup, bp, n, &dummy, 1, info, fmt, nm);
     check_info(info[0], "cqr_mkl_dormqr_compact");
 
     /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat */
