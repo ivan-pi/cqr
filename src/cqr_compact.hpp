@@ -147,7 +147,11 @@ enum class Direction { Forward, Backward };
 
 template <typename VT, typename Int = int>
 struct BatchView {
-    VT          *const data    = nullptr;
+    /* __restrict promises the pointee is reached only through this view, so the
+     * A (read-only reflectors) and C (read-write panel) views in a kernel are
+     * assumed disjoint -- the same no-alias guarantee the contiguous kernel
+     * gets from its restrict-qualified locals. */
+    VT *__restrict const data  = nullptr;
     const std::size_t  special = 0;   /* stride along the swept (reflector) axis */
     const std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
 
@@ -187,9 +191,13 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
 
     assert(k <= m && ldap >= m && ldbp >= m);
 
-    const VT *A   = reinterpret_cast<const VT *>(a_);
-    const VT *tau = reinterpret_cast<const VT *>(tau_);
-    VT       *B   = reinterpret_cast<VT *>(b_);
+    /* A and tau are read-only and disjoint from the written B; __restrict makes
+     * that no-alias promise explicit so the compiler keeps the w0..w3
+     * accumulators in registers across the two i-sweeps instead of reloading
+     * b*[kk] for fear of aliasing through ak[i]. */
+    const VT *__restrict A   = reinterpret_cast<const VT *>(a_);
+    const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
+    VT       *__restrict B   = reinterpret_cast<VT *>(b_);
 
     const bool fwd = (dir == Direction::Forward);
 
@@ -265,7 +273,9 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
     assert(k <= spec_len);
     assert(A.special && A.panel && C.special && C.panel);
 
-    const VT *tau = reinterpret_cast<const VT *>(tau_);
+    /* tau is read-only and disjoint from the A/C views (which carry their own
+     * __restrict on data); annotate it to match the contiguous kernel. */
+    const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
     const bool fwd = (dir == Direction::Forward);
 
     for (Int s = 0; s < k; ++s) {
