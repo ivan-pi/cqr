@@ -187,10 +187,6 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
 
     assert(k <= m && ldap >= m && ldbp >= m);
 
-    /* A and tau are read-only and disjoint from the written B; __restrict makes
-     * that no-alias promise explicit so the compiler keeps the w0..w3
-     * accumulators in registers across the two i-sweeps instead of reloading
-     * b*[kk] for fear of aliasing through ak[i]. */
     const VT *__restrict A   = reinterpret_cast<const VT *>(a_);
     const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
     VT       *__restrict B   = reinterpret_cast<VT *>(b_);
@@ -269,10 +265,6 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
     assert(k <= spec_len);
     assert(A.special && A.panel && C.special && C.panel);
 
-    /* tau is read-only and disjoint from the panel C written below; __restrict
-     * matches the contiguous kernel. The A/C operands stay plain BatchViews --
-     * a view is a non-owning accessor and should not carry an aliasing
-     * contract -- so their disjointness is left to the compiler's analysis. */
     const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
     const bool fwd = (dir == Direction::Forward);
 
