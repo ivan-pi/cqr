@@ -17,7 +17,7 @@ namespace {
  * LAPACK; never aborts the host process. */
 template <typename T>
 int dispatch(char trans, int m, int nrhs, int k,
-             const T *ap, int ldap, int ncols_a,
+             const T *ap, int ldap,
              const T *taup, T *bp, int ldbp,
              int V, int nm)
 {
@@ -30,20 +30,19 @@ int dispatch(char trans, int m, int nrhs, int k,
     if (nrhs < 0)                               return -3;
     if (k < 0 || k > m)                         return -4;
     if (ldap < ldmin)                           return -6;
-    if (ncols_a < k)                            return -7;
-    if (ldbp < ldmin)                           return -10;
-    if (V != 2 && V != 4 && V != 8 && V != 16)  return -11;
-    if (nm < 0)                                 return -12;
+    if (ldbp < ldmin)                           return -9;
+    if (V != 2 && V != 4 && V != 8 && V != 16)  return -10;
+    if (nm < 0)                                 return -11;
 
     /* Nothing to compute for an empty problem (also keeps the kernel's
      * nm >= 1 / k >= 1 invariants satisfied below). */
     if (m == 0 || nrhs == 0 || k == 0 || nm == 0) return 0;
 
     switch (V) {
-    case 2:  cqr::detail::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
-    case 4:  cqr::detail::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
-    case 8:  cqr::detail::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
-    case 16: cqr::detail::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, nm); break;
+    case 2:  cqr::detail::ormqr_compact<T, 2>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, nm); break;
+    case 4:  cqr::detail::ormqr_compact<T, 4>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, nm); break;
+    case 8:  cqr::detail::ormqr_compact<T, 8>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, nm); break;
+    case 16: cqr::detail::ormqr_compact<T, 16>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, nm); break;
     }
     return 0;
 }
@@ -51,19 +50,19 @@ int dispatch(char trans, int m, int nrhs, int k,
 } /* anonymous namespace */
 
 extern "C" int dormqr_compact(char trans, int m, int nrhs, int k,
-                              const double *ap, int ldap, int ncols_a,
+                              const double *ap, int ldap,
                               const double *taup,
                               double *bp, int ldbp,
                               int V, int nm)
 {
-    return dispatch<double>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, V, nm);
+    return dispatch<double>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
 }
 
 extern "C" int sormqr_compact(char trans, int m, int nrhs, int k,
-                              const float *ap, int ldap, int ncols_a,
+                              const float *ap, int ldap,
                               const float *taup,
                               float *bp, int ldbp,
                               int V, int nm)
 {
-    return dispatch<float>(trans, m, nrhs, k, ap, ldap, ncols_a, taup, bp, ldbp, V, nm);
+    return dispatch<float>(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
 }

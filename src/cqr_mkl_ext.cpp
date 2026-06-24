@@ -66,17 +66,15 @@ void run(MKL_LAYOUT layout, char side, char trans,
                            trans == 'C' || trans == 'c');
     const char tr       = tran ? 'T' : 'N';
 
-    /* A is dimensioned (ldap, k) like LAPACK ?ormqr: packed with exactly k
-     * columns, so the col-major group stride is ldap*k*V. Pass k as the packed
-     * column count to the kernel (the portable dormqr_compact exposes that count
-     * explicitly for callers whose A is packed wider). */
+    /* A is dimensioned (ldap, k) like LAPACK ?ormqr, so the kernel takes its
+     * per-matrix column extent as k and forms the group stride internally. */
     MKL_INT status = 0;
     /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
     switch (vlen_for_format<T>(format)) {
-    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
-    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, k, taup, cp, ldcp, nm); break;
+    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
+    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
+    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
+    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
     default: status = -1;   /* unrecognised pack format: cannot select a kernel */
     }
     if (info) *info = status;

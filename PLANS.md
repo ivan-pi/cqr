@@ -9,16 +9,15 @@ Gaps between the implementation and the design document
   family is real-only and `trans='C'` is folded to `'T'`
   (in `src/cqr_mkl_ext.cpp`). Document the real-only scope, or
   add genuine complex specializations.
-- **`A` packed column count.** `cqr_mkl_?ormqr_compact` keeps LAPACK `?ormqr`'s
-  convention: `A` is dimensioned `(ldap, k)` and packed with exactly `k`
-  columns, so the col-major group stride is `ldap*k*V`. This holds automatically
-  for square/tall factors (`k = n`), which is the AX=B pipeline. A wide factor
-  (`m < n`, packed with `n` columns) must pack only its `k` reflector columns —
-  the precondition is documented in `src/cqr_mkl_ext.h`. Callers that genuinely
-  need to address a wider packed `A` can use the portable `dormqr_compact`
-  (`src/cqr_compact.h`), which already exposes an explicit `ncols_a`. The MKL
-  API deliberately does not add that argument, to stay LAPACK-signature + MKL's
-  `{layout, format, nm}` and nothing more.
+- **`A` packed column count.** Both APIs follow LAPACK `?ormqr`: `A` is
+  dimensioned `(ldap, k)`, so its per-matrix column extent — and hence the
+  col-major group stride `ldap*k*V` — is `k`. No `ncols_a` argument exists; the
+  column count of `A` *is* `k`, by definition of the `?ormqr` contract. This
+  holds automatically for square/tall factors (`k = n`), which is the AX=B
+  pipeline. A wide or partial-reflector factor whose compact buffer was packed
+  with more than `k` columns must pack only its `k` reflector columns — the
+  compact analogue of presenting `A` as `(LDA, K)` to dense `?ormqr`. The
+  preconditions are documented in `src/cqr_mkl_ext.h` and `src/cqr_compact.h`.
 - **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
   well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
   (`logspace(0,-cond,n)`), the rank-deficient / near-rank-deficient / banded /

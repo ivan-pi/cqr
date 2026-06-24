@@ -229,7 +229,7 @@ static int run_case(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* check 1: compact Q^T B vs scalar */
-    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e1 = 0;
@@ -243,7 +243,7 @@ static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
     double e3 = 0;
@@ -311,7 +311,7 @@ static int run_case_pivoted(int nm, int m, int nrhs)
     pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
 
     /* kernel: c := Q^T b */
-    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, m, tp.data(),
+    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(),
                                bp.data(), m, nm);
     unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
 
@@ -351,11 +351,11 @@ static void bench(int V, int nm, int m, int nrhs, int reps)
     for (int r = 0; r < reps; ++r) {
         if (sizeof(T) == 8)
             dormqr_compact((r & 1) ? 'N' : 'T', m, nrhs, k,
-                           (const double *)ap.data(), m, m, (const double *)tp.data(),
+                           (const double *)ap.data(), m, (const double *)tp.data(),
                            (double *)bp.data(), m, V, nm);
         else
             sormqr_compact((r & 1) ? 'N' : 'T', m, nrhs, k,
-                           (const float *)ap.data(), m, m, (const float *)tp.data(),
+                           (const float *)ap.data(), m, (const float *)tp.data(),
                            (float *)bp.data(), m, V, nm);
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -374,28 +374,27 @@ static void bench(int V, int nm, int m, int nrhs, int reps)
  * (return -j for the j-th argument), not assert or miscompute. */
 static int test_validation()
 {
-    const int m = 8, nrhs = 2, k = 8, V = 4, nm = 4, ld = 8, nca = 8;
-    std::vector<double> ap((size_t)ld * nca * V, 0), tau((size_t)k * V, 0),
+    const int m = 8, nrhs = 2, k = 8, V = 4, nm = 4, ld = 8;
+    std::vector<double> ap((size_t)ld * k * V, 0), tau((size_t)k * V, 0),
                         bp((size_t)ld * nrhs * V, 0);
-    auto call = [&](char tr, int m_, int nrhs_, int k_, int ldap_, int nca_,
+    auto call = [&](char tr, int m_, int nrhs_, int k_, int ldap_,
                     int ldbp_, int V_, int nm_) {
-        return dormqr_compact(tr, m_, nrhs_, k_, ap.data(), ldap_, nca_,
+        return dormqr_compact(tr, m_, nrhs_, k_, ap.data(), ldap_,
                               tau.data(), bp.data(), ldbp_, V_, nm_);
     };
 
     struct { const char *what; int got, want; } t[] = {
-        {"valid",          call('T', m, nrhs, k,   ld,    nca,   ld,    V, nm),   0},
-        {"bad trans",      call('X', m, nrhs, k,   ld,    nca,   ld,    V, nm),  -1},
-        {"m<0",            call('T', -1, nrhs, k,  ld,    nca,   ld,    V, nm),  -2},
-        {"nrhs<0",         call('T', m, -1, k,     ld,    nca,   ld,    V, nm),  -3},
-        {"k>m",            call('T', m, nrhs, m+1, ld,    nca,   ld,    V, nm),  -4},
-        {"ldap<m",         call('T', m, nrhs, k,   m-1,   nca,   ld,    V, nm),  -6},
-        {"ncols_a<k",      call('T', m, nrhs, k,   ld,    k-1,   ld,    V, nm),  -7},
-        {"ldbp<m",         call('T', m, nrhs, k,   ld,    nca,   m-1,   V, nm), -10},
-        {"bad V",          call('T', m, nrhs, k,   ld,    nca,   ld,    3, nm), -11},
-        {"nm<0",           call('T', m, nrhs, k,   ld,    nca,   ld,    V, -1), -12},
-        {"empty m=0",      call('T', 0, nrhs, 0,   1,     0,     1,     V, nm),   0},
-        {"empty nm=0",     call('T', m, nrhs, k,   ld,    nca,   ld,    V, 0),    0},
+        {"valid",          call('T', m, nrhs, k,   ld,    ld,    V, nm),   0},
+        {"bad trans",      call('X', m, nrhs, k,   ld,    ld,    V, nm),  -1},
+        {"m<0",            call('T', -1, nrhs, k,  ld,    ld,    V, nm),  -2},
+        {"nrhs<0",         call('T', m, -1, k,     ld,    ld,    V, nm),  -3},
+        {"k>m",            call('T', m, nrhs, m+1, ld,    ld,    V, nm),  -4},
+        {"ldap<m",         call('T', m, nrhs, k,   m-1,   ld,    V, nm),  -6},
+        {"ldbp<m",         call('T', m, nrhs, k,   ld,    m-1,   V, nm),  -9},
+        {"bad V",          call('T', m, nrhs, k,   ld,    ld,    3, nm), -10},
+        {"nm<0",           call('T', m, nrhs, k,   ld,    ld,    V, -1), -11},
+        {"empty m=0",      call('T', 0, nrhs, 0,   1,     1,     V, nm),   0},
+        {"empty nm=0",     call('T', m, nrhs, k,   ld,    ld,    V, 0),    0},
     };
     int bad = 0;
     for (auto &c : t) bad += (c.got != c.want);
