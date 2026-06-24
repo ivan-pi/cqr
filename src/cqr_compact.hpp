@@ -147,11 +147,7 @@ enum class Direction { Forward, Backward };
 
 template <typename VT, typename Int = int>
 struct BatchView {
-    /* __restrict promises the pointee is reached only through this view, so the
-     * A (read-only reflectors) and C (read-write panel) views in a kernel are
-     * assumed disjoint -- the same no-alias guarantee the contiguous kernel
-     * gets from its restrict-qualified locals. */
-    VT *__restrict const data  = nullptr;
+    VT          *const data    = nullptr;
     const std::size_t  special = 0;   /* stride along the swept (reflector) axis */
     const std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
 
@@ -273,8 +269,10 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
     assert(k <= spec_len);
     assert(A.special && A.panel && C.special && C.panel);
 
-    /* tau is read-only and disjoint from the A/C views (which carry their own
-     * __restrict on data); annotate it to match the contiguous kernel. */
+    /* tau is read-only and disjoint from the panel C written below; __restrict
+     * matches the contiguous kernel. The A/C operands stay plain BatchViews --
+     * a view is a non-owning accessor and should not carry an aliasing
+     * contract -- so their disjointness is left to the compiler's analysis. */
     const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
     const bool fwd = (dir == Direction::Forward);
 
