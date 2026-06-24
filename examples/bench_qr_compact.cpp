@@ -256,7 +256,7 @@ int main(int argc, char **argv)
     std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  Sequential\n\n",
                 nmat, reps, V, compact_format_name(fmt));
 #endif
-    std::printf("   n |  batched (s)  Mmat/s | unbatched (s)  Mmat/s | speedup |  max fwd err\n");
+    std::printf("   n |  batched (s)  Mmat/s | unbatched (s) Mmat/s | speedup |  max fwd err\n");
     std::printf("-----+----------------------+----------------------+---------+-------------\n");
 
     double log_speedup_sum = 0.0;
