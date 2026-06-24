@@ -33,6 +33,18 @@
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
  * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32.
  *
+ * Signature: exactly LAPACK ?ormqr plus the three arguments MKL's compact
+ * routines add (layout, format, nm) -- no extras. As in ?ormqr, A is the
+ * order-s reflector batch (s = m for side='L', n for side='R') dimensioned
+ * (ldap, k): only its first k columns are read, and the compact buffer must be
+ * *packed with exactly k columns*, so each matrix occupies ldap*k elements and
+ * the group stride is ldap*k*V. For square and tall factors k equals the
+ * factored column count, so the buffer returned by mkl_?geqrf_compact is
+ * consumed directly. A wide factor (more columns than reflectors, k < cols)
+ * must pack only its k reflector columns; alternatively the portable
+ * dormqr_compact (cqr_compact.h) takes an explicit packed-column count for the
+ * non-conforming layout.
+ *
  * Assisted-by: Claude:claude-opus-4.8
  */
 

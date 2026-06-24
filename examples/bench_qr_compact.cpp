@@ -124,9 +124,9 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
         auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
         double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
-        std::vector<MKL_INT> info(V);
+        MKL_INT info[1];   /* compact status: a single scalar (MKL convention) */
         double wq;
-        mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info.data(), fmt, V);
+        mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info, fmt, V);
         const MKL_INT lwork = (MKL_INT)wq;
         std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
 
@@ -149,10 +149,10 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
             mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, cnt);
 
             mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup,
-                               work.data(), lwork, info.data(), fmt, cnt);
+                               work.data(), lwork, info, fmt, cnt);
             double dummy;
             cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                                   ap, n, taup, bp, n, &dummy, 1, info.data(), fmt, cnt);
+                                   ap, n, taup, bp, n, &dummy, 1, info, fmt, cnt);
             mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
                               n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
 

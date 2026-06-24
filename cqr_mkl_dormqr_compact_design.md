@@ -41,7 +41,7 @@ Unlike ArmPL's `armpl_dormqr_interleave_batch` which explicitly requires batch, 
     * If `side = 'L'`, $m \ge k \ge 0$. 
     * If `side = 'R'`, $n \ge k \ge 0$.
 * **`ap`** (`const double *`): Buffer containing the elementary reflectors from the QR factorization, stored in MKL Compact format.
-* **`ldap`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `ap`.
+* **`ldap`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `ap`. As in LAPACK `?ormqr`, $A$ is dimensioned $(\text{ldap}, k)$ and must be packed with exactly $k$ columns, so the per-matrix group stride is $\text{ldap}\cdot k$. For square/tall factors $k$ equals the factored column count (the `mkl_?geqrf_compact` output is consumed directly); a wide factor must pack only its $k$ reflector columns.
 * **`taup`** (`const double *`): Buffer containing the scalar factors of the elementary reflectors, stored in MKL Compact format.
 * **`cp`** (`double *`): Buffer containing the batch of matrices $C$ to be multiplied, stored in MKL Compact format.
 * **`ldcp`** (`MKL_INT`): The leading dimension of each matrix within the compact buffer `cp`.

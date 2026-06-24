@@ -28,9 +28,11 @@
  *
  * Compact storage convention (matches MKL Compact / mkl_?gepack_compact):
  *   group g = matrix index / V, slot v = matrix index % V:
- *     A_v(i,j)  = ap [ g*ldap*ncols_a*V + (j*ldap + i)*V + v ]
+ *     A_v(i,j)  = ap [ g*ldap*k*V     + (j*ldap + i)*V + v ]
  *     tau_v(kk) = taup[ g*k*V           +  kk*V          + v ]
  *     B_v(i,j)  = bp [ g*ldbp*nrhs*V   + (j*ldbp + i)*V + v ]
+ * (A is the (ldap, k) reflector batch, exactly as LAPACK ?ormqr declares it,
+ * so its per-matrix column extent -- and hence the group stride -- is k.)
  *
  * Applying the implicit Q (the heart of this file):
  *   ?geqrf_compact never forms Q. It returns Q as a product of k elementary
@@ -317,7 +319,7 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
 
 template <typename T, int V, typename Int = int>
 void ormqr_compact(char trans, Int m, Int nrhs, Int k,
-                   const T *ap, Int ldap, Int ncols_a,
+                   const T *ap, Int ldap,
                    const T *taup,
                    T *bp, Int ldbp,
                    Int nm)
@@ -328,7 +330,9 @@ void ormqr_compact(char trans, Int m, Int nrhs, Int k,
     const Direction dir = (trans == 'T' || trans == 't')
                               ? Direction::Forward : Direction::Backward;
     const Int ngroups   = (nm + V - 1) / V;
-    const std::size_t str_a = static_cast<std::size_t>(ldap) * ncols_a * V;
+    /* A is (ldap, k): the per-matrix column extent is k, so the group stride
+     * is ldap*k*V (matches LAPACK ?ormqr's A(LDA,K) declaration). */
+    const std::size_t str_a = static_cast<std::size_t>(ldap) * k * V;
     const std::size_t str_t = static_cast<std::size_t>(k) * V;
     const std::size_t str_b = static_cast<std::size_t>(ldbp) * nrhs * V;
 
@@ -343,8 +347,8 @@ void ormqr_compact(char trans, Int m, Int nrhs, Int k,
 /* All groups, fully general: side = 'L'/'R', column- or row-major.    */
 /*                                                                     */
 /* C is the m x n batch; A is the (spec_len x k) reflector batch with  */
-/* spec_len = m (side='L') or n (side='R'); ncols_a is the packed      */
-/* column count of A (column-major group stride only). The left /      */
+/* spec_len = m (side='L') or n (side='R'), declared (ldap, k) exactly  */
+/* as LAPACK ?ormqr, so its per-matrix column extent is k. The left /  */
 /* column-major case routes to the tuned contiguous kernel above; the  */
 /* other three combinations use the strided kernel.                    */
 /* ------------------------------------------------------------------ */
@@ -352,7 +356,7 @@ void ormqr_compact(char trans, Int m, Int nrhs, Int k,
 template <typename T, int V, typename Int = int>
 void ormqr_compact_general(bool left, bool rowmajor, char trans,
                            Int m, Int n, Int k,
-                           const T *ap, Int ldap, Int ncols_a,
+                           const T *ap, Int ldap,
                            const T *taup,
                            T *cp, Int ldcp,
                            Int nm)
@@ -369,10 +373,8 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     const Int  spec_len  = left ? m : n;
     const Int  panel_cnt = left ? n : m;
 
-    /* Q has order spec_len, so there cannot be more reflectors than that; the
-     * packed A must hold at least k columns for the column-major group stride. */
+    /* Q has order spec_len, so there cannot be more reflectors than that. */
     assert(m >= 0 && n >= 0 && k >= 0 && k <= spec_len);
-    assert(rowmajor || ncols_a >= k);
 
     /* element strides (in VT units). A is swept down its rows (the reflector
      * axis) with kk along its columns; for C the special axis is rows when
@@ -386,10 +388,10 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     const std::size_t c_panel   = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
-     * ldap*(complementary extent), which is the column count for col-major
-     * and the row count for row-major. */
+     * ldap*(complementary extent) -- the column count k for col-major (A is
+     * (ldap, k)), the row count spec_len for row-major. */
     const std::size_t str_a = (rowmajor ? (size_t)ldap * spec_len
-                                        : (size_t)ldap * ncols_a) * V;
+                                        : (size_t)ldap * k) * V;
     const std::size_t str_t = (size_t)k * V;
     const std::size_t str_c = (rowmajor ? (size_t)ldcp * m
                                         : (size_t)ldcp * n) * V;

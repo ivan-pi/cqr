@@ -54,11 +54,11 @@ void check(bool cond, const char *what)
     if (!cond) { std::printf("FAILED: %s\n", what); std::exit(1); }
 }
 
-/* Every per-matrix status in a compact info[] array must be 0 (LAPACK
- * convention: info[v] = -j flags an illegal j-th argument for matrix v). */
-void check_info(const std::vector<MKL_INT> &info, const char *what)
+/* The compact routines report a single scalar status (MKL leaves the compact
+ * info reserved; this project writes one value, 0 on success). */
+void check_info(MKL_INT info, const char *what)
 {
-    for (MKL_INT s : info) check(s == 0, what);
+    check(info == 0, what);
 }
 
 /* Minimal column-major dense matrix: owns its storage and hands raw pointers
@@ -159,16 +159,16 @@ void batch_solve(int nm, int n, int nrhs)
         mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, nm);
     }
 
-    std::vector<MKL_INT> info(nm);
+    MKL_INT info[1];   /* compact status: a single scalar (MKL convention) */
 
     /* 1. compact QR: ap <- (H, R), taup <- tau. geqrf needs real workspace,
      *    so query the optimal size (lwork = -1) and allocate it. */
     double wq;
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info.data(), fmt, nm);
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info, fmt, nm);
     MKL_INT lwork = (MKL_INT)wq;
     std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
-    mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info.data(), fmt, nm);
-    check_info(info, "mkl_dgeqrf_compact");
+    mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info, fmt, nm);
+    check_info(info[0], "mkl_dgeqrf_compact");
 
     /* 2. apply Q^T to the RHS: bp <- Q^T B   (this repo's extension). The
      *    apply-Q kernel needs no workspace, so its minimum (and optimal)
@@ -176,8 +176,8 @@ void batch_solve(int nm, int n, int nrhs)
      *    reports -- and no query is required. */
     double dummy;
     cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           ap, n, taup, bp, n, &dummy, 1, info.data(), fmt, nm);
-    check_info(info, "cqr_mkl_dormqr_compact");
+                           ap, n, taup, bp, n, &dummy, 1, info, fmt, nm);
+    check_info(info[0], "cqr_mkl_dormqr_compact");
 
     /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
