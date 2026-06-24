@@ -9,11 +9,12 @@ Gaps between the implementation and the design document
   family is real-only and `trans='C'` is folded to `'T'`
   (in `src/cqr_mkl_ext.cpp`). Document the real-only scope, or
   add genuine complex specializations.
-- **`A` packed column count assumed equal to `k`.** `ncols_a = k` is hardcoded
-  (in `src/cqr_mkl_ext.cpp`), correct for square/tall
-  (`m >= n` so `k = n`) but mis-addresses groups for wide factorizations
-  (`m < n`, packed with `n` columns). Document the precondition or add a
-  packed-ncols parameter.
+- ~~**`A` packed column count assumed equal to `k`.**~~ Resolved:
+  `cqr_mkl_?ormqr_compact` now takes an explicit `ncols_a` parameter (the packed
+  column count of `A`, `>= k`) instead of hardcoding `k`, so wide factorizations
+  (`m < n`, packed with `n` columns) are addressed correctly. The invariant
+  `ncols_a >= k` is asserted in `src/cqr_mkl_ext.cpp` and exercised by the
+  wide-factor cases in `src/test_cqr_mkl_ext.cpp` (suite 1, `m=12 n=7 nca=20`).
 - **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
   well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
   (`logspace(0,-cond,n)`), the rank-deficient / near-rank-deficient / banded /
