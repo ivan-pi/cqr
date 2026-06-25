@@ -97,18 +97,22 @@ void run_syrk(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
      * which the kernel performs (an empty contraction yields the zero update). */
     if (n == 0 || nm == 0) return;
 
-    const bool rowmajor = (layout == MKL_ROW_MAJOR);
-    const bool lower    = (uplo  == MKL_LOWER);
+    using cqr::detail::Uplo;
+    using cqr::detail::Op;
+    using cqr::detail::Layout;
+
+    const Layout lay = (layout == MKL_ROW_MAJOR) ? Layout::RowMajor : Layout::ColMajor;
+    const Uplo   ul  = (uplo   == MKL_LOWER)     ? Uplo::Lower      : Uplo::Upper;
     /* real ?syrk: A^T only -- MKL_CONJTRANS folds to MKL_TRANS (conjugation is
      * ?herk). NOTRANS gives A*A^T, anything else A^T*A. */
-    const bool tran     = (trans != MKL_NOTRANS);
+    const Op     op  = (trans  == MKL_NOTRANS)   ? Op::NoTrans      : Op::Trans;
 
     /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
     switch (vlen_for_format<T>(format)) {
-    case 2:  cqr::detail::syrk_compact_general<T, 2,  MKL_INT>(lower, tran, rowmajor, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
-    case 4:  cqr::detail::syrk_compact_general<T, 4,  MKL_INT>(lower, tran, rowmajor, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
-    case 8:  cqr::detail::syrk_compact_general<T, 8,  MKL_INT>(lower, tran, rowmajor, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
-    case 16: cqr::detail::syrk_compact_general<T, 16, MKL_INT>(lower, tran, rowmajor, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 2:  cqr::detail::syrk_compact_general<T, 2,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 4:  cqr::detail::syrk_compact_general<T, 4,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 8:  cqr::detail::syrk_compact_general<T, 8,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 16: cqr::detail::syrk_compact_general<T, 16, MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
     default: break;   /* unrecognised pack format: no kernel, leave C untouched */
     }
 }

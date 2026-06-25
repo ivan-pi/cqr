@@ -61,6 +61,21 @@ namespace cqr {
 namespace detail {
 
 /* ------------------------------------------------------------------ */
+/* Strongly-typed kernel parameters.                                   */
+/*                                                                     */
+/* The kernels take these rather than bare bools so each call site     */
+/* reads as its intent -- Uplo::Lower, Op::NoTrans, Layout::ColMajor   */
+/* -- instead of a positional true/false whose meaning must be         */
+/* recalled. The MKL wrapper translates MKL_UPLO / MKL_TRANSPOSE /     */
+/* MKL_LAYOUT into these once, at the boundary.                        */
+/* ------------------------------------------------------------------ */
+
+enum class Uplo   { Lower, Upper };       /* which triangle of C is referenced */
+enum class Op     { NoTrans, Trans };     /* A*A^T (NoTrans) vs A^T*A (Trans)   */
+enum class Layout { ColMajor, RowMajor }; /* compact in-matrix storage order   */
+
+
+/* ------------------------------------------------------------------ */
 /* One group of V interleaved matrices: tuned trans='N', column-major. */
 /*                                                                     */
 /* A(i,p) = A[i + p*ldap] and C(i,j) = C[i + j*ldcp] as V-wide packs.   */
@@ -71,7 +86,7 @@ namespace detail {
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void syrk_compact_group(bool lower, Int n, Int k, T alpha, T beta,
+void syrk_compact_group(Uplo uplo, Int n, Int k, T alpha, T beta,
                         const T *a_, Int ldap, T *c_, Int ldcp)
 {
     using VT = typename pack<T, V>::type;
@@ -81,6 +96,7 @@ void syrk_compact_group(bool lower, Int n, Int k, T alpha, T beta,
 
     const VT *A = reinterpret_cast<const VT *>(a_);
     VT       *C = reinterpret_cast<VT *>(c_);
+    const bool lower = (uplo == Uplo::Lower);
     /* beta==0 overwrites C (must not read it: it may be uninitialised/NaN). */
     const bool overwrite = (beta == T(0));
 
@@ -141,7 +157,7 @@ void syrk_compact_group(bool lower, Int n, Int k, T alpha, T beta,
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void syrk_compact_group_strided(bool lower, Int n, Int k, T alpha, T beta,
+void syrk_compact_group_strided(Uplo uplo, Int n, Int k, T alpha, T beta,
                                 BatchView<const typename pack<T, V>::type, Int> A,
                                 BatchView<typename pack<T, V>::type, Int> C)
 {
@@ -151,6 +167,7 @@ void syrk_compact_group_strided(bool lower, Int n, Int k, T alpha, T beta,
     /* strides must be non-degenerate so distinct indices map to distinct slots */
     assert(A.special && A.panel && C.special && C.panel);
 
+    const bool lower = (uplo == Uplo::Lower);
     const bool overwrite = (beta == T(0));
 
     for (Int i = 0; i < n; ++i) {
@@ -196,19 +213,19 @@ void syrk_compact_group_strided(bool lower, Int n, Int k, T alpha, T beta,
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void syrk_compact(bool lower, Int n, Int k, T alpha,
+void syrk_compact(Uplo uplo, Int n, Int k, T alpha,
                   const T *ap, Int ldap, T beta,
                   T *cp, Int ldcp, Int nm)
 {
     assert(ldap >= n && ldcp >= n && k >= 0 && nm >= 1);
 
     const Int ngroups = (nm + V - 1) / V;
-    /* trans='N', column-major: A is (ldap, k), C is (ldcp, n). */
+    /* Op::NoTrans, column-major: A is (ldap, k), C is (ldcp, n). */
     const std::size_t str_a = static_cast<std::size_t>(ldap) * k * V;
     const std::size_t str_c = static_cast<std::size_t>(ldcp) * n * V;
 
     for (Int g = 0; g < ngroups; ++g)
-        syrk_compact_group<T, V, Int>(lower, n, k, alpha, beta,
+        syrk_compact_group<T, V, Int>(uplo, n, k, alpha, beta,
                                       ap + g * str_a, ldap,
                                       cp + g * str_c, ldcp);
 }
@@ -223,12 +240,15 @@ void syrk_compact(bool lower, Int n, Int k, T alpha,
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void syrk_compact_general(bool lower, bool trans, bool rowmajor,
+void syrk_compact_general(Uplo uplo, Op op, Layout layout,
                           Int n, Int k, T alpha,
                           const T *ap, Int ldap, T beta,
                           T *cp, Int ldcp, Int nm)
 {
     assert(n >= 0 && k >= 0 && nm >= 1);
+
+    const bool trans    = (op == Op::Trans);
+    const bool rowmajor = (layout == Layout::RowMajor);
 
     /* A element strides (in VT units): one along the C-index (n) axis, one
      * along the contraction (k) axis. Column-major makes A's first declared
@@ -251,18 +271,18 @@ void syrk_compact_general(bool lower, bool trans, bool rowmajor,
     const std::size_t str_a = (std::size_t)ldap * a_lines * V;
     const std::size_t str_c = (std::size_t)ldcp * n * V;
 
-    const bool tuned = (!trans && !rowmajor);
+    const bool tuned = (op == Op::NoTrans && layout == Layout::ColMajor);
 
     const Int ngroups = (nm + V - 1) / V;
     for (Int g = 0; g < ngroups; ++g) {
         const T *a = ap + g * str_a;
         T       *c = cp + g * str_c;
         if (tuned)
-            syrk_compact_group<T, V, Int>(lower, n, k, alpha, beta,
+            syrk_compact_group<T, V, Int>(uplo, n, k, alpha, beta,
                                           a, ldap, c, ldcp);
         else
             syrk_compact_group_strided<T, V, Int>(
-                lower, n, k, alpha, beta,
+                uplo, n, k, alpha, beta,
                 make_const_view<T, V, Int>(a, a_nidx, a_kidx),
                 make_view<T, V, Int>(c, c_row, c_col));
     }
