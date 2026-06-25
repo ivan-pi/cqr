@@ -1,18 +1,9 @@
 # FindMKLCompact.cmake
 #
-# Locate the Intel MKL Compact-format API and expose it as two imported targets:
+# Locate the Intel MKL Compact-format API and expose two imported targets:
 #
-#   MKL::CompactHeaders  -- the include dir with mkl_compact.h only (no link).
-#                           Use this when you only need MKL's *types* (e.g. a
-#                           public header that names MKL_INT / MKL_COMPACT_PACK)
-#                           and do not call any MKL runtime functions.
-#   MKL::Compact         -- MKL::CompactHeaders plus the BLAS link line that
-#                           provides the compact routines. Use this when you
-#                           *call* MKL (the compact API, mkl_malloc, ...).
-#
-# Splitting the two lets a library that merely uses MKL types compile against
-# the headers without inheriting a link dependency on MKL; calling code links
-# MKL::Compact itself.
+#   MKL::CompactHeaders  -- the MKL include dir only (no link line).
+#   MKL::Compact         -- the headers plus the BLAS link line.
 #
 # The compact routines (mkl_get_format_compact, mkl_?geqrf_compact, ...) are an
 # Intel MKL extension: they are reached through the ordinary BLAS link line, so

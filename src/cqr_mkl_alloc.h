@@ -1,20 +1,15 @@
 #ifndef CQR_MKL_ALLOC_H
 #define CQR_MKL_ALLOC_H
 
-/* cqr_mkl_alloc.h -- optional C++ buffer helpers for MKL Compact-format work.
+/* cqr_mkl_alloc.h -- optional RAII buffer helpers for MKL Compact-format work.
  *
- * These RAII helpers wrap mkl_malloc / mkl_free for allocating the aligned,
- * interleave-padded buffers that the MKL Compact API consumes (size them with
- * mkl_?get_size_compact). They are a convenience for this project's tests and
- * examples -- and for callers who want them -- not part of the FFI-stable C
- * surface in cqr_mkl_ext.h.
+ * mkl_alloc_bytes() and the mkl_buffer handle wrap mkl_malloc / mkl_free to
+ * allocate the aligned, interleave-padded buffers that the MKL Compact API
+ * consumes (size them with mkl_?get_size_compact). The buffer owns its
+ * storage and frees it automatically.
  *
- * Unlike cqr_mkl_ext.h (which uses MKL only for its *types* and so needs MKL
- * headers but no MKL link), this header *calls* MKL runtime functions
- * (mkl_malloc / mkl_free). Including it therefore makes the translation unit
- * depend on the MKL link line: it is the caller's responsibility to link MKL
- * (e.g. CMake target MKL::Compact). Keeping these helpers out of cqr_mkl_ext.h
- * is what lets libcqr_mkl_ext depend on MKL's include files only.
+ * These helpers call MKL runtime functions, so a translation unit that
+ * includes this header must link MKL (e.g. CMake target MKL::Compact).
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
