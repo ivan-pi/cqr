@@ -74,6 +74,13 @@ enum class Uplo   { Lower, Upper };       /* which triangle of C is referenced *
 enum class Op     { NoTrans, Trans };     /* A*A^T (NoTrans) vs A^T*A (Trans)   */
 enum class Layout { ColMajor, RowMajor }; /* compact in-matrix storage order   */
 
+/* Enumerator-validity predicates, for debug-only assertions that catch a value
+ * forged from a bad cast before the kernels silently treat it as the default
+ * branch. constexpr (hence inline), so they vanish in release builds. */
+constexpr bool valid(Uplo   u) { return u == Uplo::Lower    || u == Uplo::Upper;    }
+constexpr bool valid(Op     o) { return o == Op::NoTrans    || o == Op::Trans;      }
+constexpr bool valid(Layout l) { return l == Layout::ColMajor || l == Layout::RowMajor; }
+
 
 /* ------------------------------------------------------------------ */
 /* One group of V interleaved matrices: tuned trans='N', column-major. */
@@ -92,7 +99,7 @@ void syrk_compact_group(Uplo uplo, Int n, Int k, T alpha, T beta,
     using VT = typename pack<T, V>::type;
     static_assert(std::is_floating_point<T>::value,
                   "syrk_compact is defined for real float/double");
-    assert(ldap >= n && ldcp >= n && k >= 0);
+    assert(valid(uplo) && ldap >= n && ldcp >= n && k >= 0);
 
     const VT *A = reinterpret_cast<const VT *>(a_);
     VT       *C = reinterpret_cast<VT *>(c_);
@@ -165,7 +172,7 @@ void syrk_compact_group_strided(Uplo uplo, Int n, Int k, T alpha, T beta,
     static_assert(std::is_floating_point<T>::value,
                   "syrk_compact is defined for real float/double");
     /* strides must be non-degenerate so distinct indices map to distinct slots */
-    assert(A.special && A.panel && C.special && C.panel);
+    assert(valid(uplo) && A.special && A.panel && C.special && C.panel);
 
     const bool lower = (uplo == Uplo::Lower);
     const bool overwrite = (beta == T(0));
@@ -207,36 +214,16 @@ void syrk_compact_group_strided(Uplo uplo, Int n, Int k, T alpha, T beta,
 }
 
 /* ------------------------------------------------------------------ */
-/* All groups: nm matrices total. A padded partial last group is        */
-/* processed too -- its padding slots carry whatever mkl_?gepack_compact */
-/* wrote, and their (garbage) C triangle is simply never read back.      */
-/* ------------------------------------------------------------------ */
-
-template <typename T, int V, typename Int = int>
-void syrk_compact(Uplo uplo, Int n, Int k, T alpha,
-                  const T *ap, Int ldap, T beta,
-                  T *cp, Int ldcp, Int nm)
-{
-    assert(ldap >= n && ldcp >= n && k >= 0 && nm >= 1);
-
-    const Int ngroups = (nm + V - 1) / V;
-    /* Op::NoTrans, column-major: A is (ldap, k), C is (ldcp, n). */
-    const std::size_t str_a = static_cast<std::size_t>(ldap) * k * V;
-    const std::size_t str_c = static_cast<std::size_t>(ldcp) * n * V;
-
-    for (Int g = 0; g < ngroups; ++g)
-        syrk_compact_group<T, V, Int>(uplo, n, k, alpha, beta,
-                                      ap + g * str_a, ldap,
-                                      cp + g * str_c, ldcp);
-}
-
-/* ------------------------------------------------------------------ */
 /* All groups, fully general: uplo, trans in {N,T}, col- or row-major.  */
+/* This is the sole batch entry point -- the MKL wrapper calls it for    */
+/* every case and it dispatches the tuned path itself (below).           */
 /*                                                                     */
-/* trans='N': A is n x k; trans='T': A is k x n. The trans='N',         */
+/* Op::NoTrans: A is n x k; Op::Trans: A is k x n. The NoTrans,          */
 /* column-major case routes to the tuned contiguous kernel; the other   */
 /* three combinations use the strided kernel (same dot-product math,    */
-/* correctness-first addressing).                                       */
+/* correctness-first addressing). A padded partial last group is         */
+/* processed too -- its padding slots carry whatever mkl_?gepack_compact */
+/* wrote, and their (garbage) C triangle is simply never read back.      */
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
@@ -245,6 +232,7 @@ void syrk_compact_general(Uplo uplo, Op op, Layout layout,
                           const T *ap, Int ldap, T beta,
                           T *cp, Int ldcp, Int nm)
 {
+    assert(valid(uplo) && valid(op) && valid(layout));
     assert(n >= 0 && k >= 0 && nm >= 1);
 
     const bool trans    = (op == Op::Trans);
