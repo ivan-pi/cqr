@@ -70,6 +70,42 @@ void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             float *work, MKL_INT lwork, MKL_INT *info,
                             MKL_COMPACT_PACK format, MKL_INT nm);
 
+/* cqr_mkl_?syrk_compact -- Compact-format symmetric rank-k update
+ *
+ *     C := alpha * A * A^T + beta * C   (trans = MKL_NOTRANS, A is n x k)
+ *     C := alpha * A^T * A + beta * C   (trans = MKL_TRANS,   A is k x n)
+ *
+ * The Compact-format counterpart of BLAS ?syrk, completing the compact BLAS-3
+ * set alongside mkl_?gemm_compact and mkl_?trsm_compact. Unlike forming the
+ * product through mkl_?gemm_compact, this exploits the symmetry: only the uplo
+ * triangle of the symmetric n x n C is referenced (half the flops and writes).
+ *
+ * Signature: exactly BLAS ?syrk plus the three arguments MKL's compact routines
+ * add (layout, format, nm) -- and, like the other compact BLAS-3 routines, no
+ * work / lwork / info (there is no workspace and, per the compact convention,
+ * no argument checking). uplo and trans take the MKL enums used by the compact
+ * gemm/trsm, not LAPACK char codes. alpha and beta are passed by value, as in
+ * mkl_?gemm_compact. Matrices are packed with mkl_?gepack_compact; obtain the
+ * opaque `format` from mkl_get_format_compact() and pass the batch size `nm`.
+ *
+ * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
+ * uplo = MKL_UPPER or MKL_LOWER, trans = MKL_NOTRANS or MKL_TRANS (MKL_CONJTRANS
+ * folds to MKL_TRANS for the real types), for FP64 and FP32. Complex conjugated
+ * updates are ?herk, a distinct routine, and are out of scope here. As in BLAS
+ * ?syrk, beta = 0 overwrites C (its prior contents, even NaN, are not read). */
+
+void cqr_mkl_dsyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
+                           MKL_INT n, MKL_INT k,
+                           double alpha, const double *ap, MKL_INT ldap,
+                           double beta,        double *cp, MKL_INT ldcp,
+                           MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_ssyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
+                           MKL_INT n, MKL_INT k,
+                           float alpha, const float *ap, MKL_INT ldap,
+                           float beta,        float *cp, MKL_INT ldcp,
+                           MKL_COMPACT_PACK format, MKL_INT nm);
+
 #ifdef __cplusplus
 }
 #endif

@@ -105,6 +105,14 @@ if(CQR_BUILD_TESTS)
       PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
     add_test(NAME mkl_compact_suites COMMAND test_cqr_mkl_ext)
 
+    # MKL-backed validation of cqr_mkl_?syrk_compact, cross-checked against
+    # both per-matrix cblas_?syrk and mkl_?gemm_compact.
+    add_executable(test_cqr_syrk_ext src/test_cqr_syrk_ext.cpp)
+    target_link_libraries(test_cqr_syrk_ext
+      PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
+    target_compile_features(test_cqr_syrk_ext PRIVATE cxx_std_20)  # std::span / std::ranges
+    add_test(NAME mkl_compact_syrk COMMAND test_cqr_syrk_ext)
+
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
 

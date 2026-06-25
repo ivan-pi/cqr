@@ -31,6 +31,7 @@
 
 #include "cqr_mkl_ext.h"
 #include "cqr_compact.hpp"
+#include "cqr_syrk_compact.hpp"
 
 namespace {
 
@@ -80,6 +81,42 @@ void run(MKL_LAYOUT layout, char side, char trans,
     if (info) *info = status;
 }
 
+/* Thin adapter for the symmetric rank-k update: format -> V and a forward to
+ * the templated kernel. Like the compact BLAS-3 routines it mirrors, it has no
+ * workspace, no info, and no argument validation. */
+template <typename T>
+void run_syrk(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
+              MKL_INT n, MKL_INT k, T alpha,
+              const T *ap, MKL_INT ldap, T beta,
+              T *cp, MKL_INT ldcp,
+              MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    /* Empty problem: no output to produce. n == 0 leaves nothing to update;
+     * nm == 0 means no matrices (also keeps the kernel's nm >= 1 invariant).
+     * k == 0 and alpha == 0 are NOT short-circuited: both still scale C by beta,
+     * which the kernel performs (an empty contraction yields the zero update). */
+    if (n == 0 || nm == 0) return;
+
+    using cqr::detail::Uplo;
+    using cqr::detail::Op;
+    using cqr::detail::Layout;
+
+    const Layout lay = (layout == MKL_ROW_MAJOR) ? Layout::RowMajor : Layout::ColMajor;
+    const Uplo   ul  = (uplo   == MKL_LOWER)     ? Uplo::Lower      : Uplo::Upper;
+    /* real ?syrk: A^T only -- MKL_CONJTRANS folds to MKL_TRANS (conjugation is
+     * ?herk). NOTRANS gives A*A^T, anything else A^T*A. */
+    const Op     op  = (trans  == MKL_NOTRANS)   ? Op::NoTrans      : Op::Trans;
+
+    /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
+    switch (vlen_for_format<T>(format)) {
+    case 2:  cqr::detail::syrk_compact_general<T, 2,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 4:  cqr::detail::syrk_compact_general<T, 4,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 8:  cqr::detail::syrk_compact_general<T, 8,  MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    case 16: cqr::detail::syrk_compact_general<T, 16, MKL_INT>(ul, op, lay, n, k, alpha, ap, ldap, beta, cp, ldcp, nm); break;
+    default: break;   /* unrecognised pack format: no kernel, leave C untouched */
+    }
+}
+
 } /* anonymous namespace */
 
 extern "C" void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
@@ -104,4 +141,26 @@ extern "C" void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
 {
     run<float>(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp,
                work, lwork, info, format, nm);
+}
+
+extern "C" void cqr_mkl_dsyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo,
+                                      MKL_TRANSPOSE trans,
+                                      MKL_INT n, MKL_INT k,
+                                      double alpha, const double *ap, MKL_INT ldap,
+                                      double beta,        double *cp, MKL_INT ldcp,
+                                      MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    run_syrk<double>(layout, uplo, trans, n, k, alpha, ap, ldap, beta, cp, ldcp,
+                     format, nm);
+}
+
+extern "C" void cqr_mkl_ssyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo,
+                                      MKL_TRANSPOSE trans,
+                                      MKL_INT n, MKL_INT k,
+                                      float alpha, const float *ap, MKL_INT ldap,
+                                      float beta,        float *cp, MKL_INT ldcp,
+                                      MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    run_syrk<float>(layout, uplo, trans, n, k, alpha, ap, ldap, beta, cp, ldcp,
+                    format, nm);
 }
