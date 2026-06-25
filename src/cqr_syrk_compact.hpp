@@ -261,18 +261,22 @@ void syrk_compact_general(Uplo uplo, Op op, Layout layout,
 
     const bool tuned = (op == Op::NoTrans && layout == Layout::ColMajor);
 
+    /* Hoist the tuned-vs-strided choice out of the group loop: it is invariant
+     * across groups, so each branch gets its own loop rather than a per-group
+     * test. Costs one duplicated loop header; leaves the compiler no chance to
+     * keep the dispatch in the hot path. */
     const Int ngroups = (nm + V - 1) / V;
-    for (Int g = 0; g < ngroups; ++g) {
-        const T *a = ap + g * str_a;
-        T       *c = cp + g * str_c;
-        if (tuned)
+    if (tuned) {
+        for (Int g = 0; g < ngroups; ++g)
             syrk_compact_group<T, V, Int>(uplo, n, k, alpha, beta,
-                                          a, ldap, c, ldcp);
-        else
+                                          ap + g * str_a, ldap,
+                                          cp + g * str_c, ldcp);
+    } else {
+        for (Int g = 0; g < ngroups; ++g)
             syrk_compact_group_strided<T, V, Int>(
                 uplo, n, k, alpha, beta,
-                make_const_view<T, V, Int>(a, a_nidx, a_kidx),
-                make_view<T, V, Int>(c, c_row, c_col));
+                make_const_view<T, V, Int>(ap + g * str_a, a_nidx, a_kidx),
+                make_view<T, V, Int>(cp + g * str_c, c_row, c_col));
     }
 }
 
