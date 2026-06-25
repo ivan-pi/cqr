@@ -369,10 +369,21 @@ template <typename T>
 int run_precision()
 {
     int fails = 0;
-    /* (nm, n, k); the nm=11 row gives a padded partial last group */
-    const int shapes[][3] = { {8, 9, 4}, {16, 5, 7}, {11, 12, 3} };
-    /* (alpha, beta): identity, scaled-accumulate, and the beta=0 overwrite */
-    const T coeffs[][2] = { {T(1), T(0)}, {T(2), T(0.5)}, {T(-1.5), T(1)} };
+    /* (nm, n, k), spanning ordinary shapes and corner cases */
+    const int shapes[][3] = {
+        { 8,  9, 4},   /* baseline; one full group at V=8 (double)            */
+        {16,  5, 7},   /* wide factor (k > n), nm a multiple of V             */
+        {11, 12, 3},   /* tall factor (k < n), padded partial last group      */
+        { 1,  5, 3},   /* nm = 1: smallest batch (a single partial group)     */
+        { 5,  1, 4},   /* n = 1: degenerate single-element triangle           */
+        { 4,  6, 1},   /* k = 1: rank-1 update                                */
+        {17,  4, 4},   /* nm one past a full group; n = k = the JB=4 width    */
+    };
+    /* (alpha, beta): identity, scaled-accumulate, beta=0 overwrite, and
+     * alpha=0 (the product is skipped; C := beta*C). */
+    const T coeffs[][2] = {
+        {T(1), T(0)}, {T(2), T(0.5)}, {T(-1.5), T(1)}, {T(0), T(0.5)},
+    };
 
     for (bool rowmajor : {false, true})
         for (bool lower : {false, true})
