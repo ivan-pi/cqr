@@ -46,12 +46,15 @@ namespace {
 /* carries no pointer to overload on).                                  */
 /* ------------------------------------------------------------------ */
 
-template <typename T> MKL_INT compact_size(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm);
-template <> MKL_INT compact_size<double>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
+template <typename T>
+MKL_INT compact_size(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm);
+template <>
+MKL_INT compact_size<double>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
 {
     return mkl_dget_size_compact(m, n, f, nm);
 }
-template <> MKL_INT compact_size<float>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
+template <>
+MKL_INT compact_size<float>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
 {
     return mkl_sget_size_compact(m, n, f, nm);
 }
@@ -156,16 +159,19 @@ struct MatrixView {
     }
 };
 
-template <class T> std::span<const T> cspan(const T *p, size_t n) { return {p, n}; }
+template <class T>
+std::span<const T> cspan(const T *p, size_t n) { return {p, n}; }
 
-/* index of the max-magnitude element (BLAS i?amax), precision-dispatched */
-CBLAS_INDEX iamax(MKL_INT n, const float *x)
+/* index of the max-magnitude element (BLAS i?amax), precision-dispatched.
+ * CBLAS i?amax is 0-based (unlike Fortran's 1-based), so the result indexes
+ * the span directly. */
+CBLAS_INDEX iamax(std::span<const float> x)
 {
-    return cblas_isamax(n, x, 1);
+    return cblas_isamax(static_cast<MKL_INT>(x.size()), x.data(), 1);
 }
-CBLAS_INDEX iamax(MKL_INT n, const double *x)
+CBLAS_INDEX iamax(std::span<const double> x)
 {
-    return cblas_idamax(n, x, 1);
+    return cblas_idamax(static_cast<MKL_INT>(x.size()), x.data(), 1);
 }
 
 /* Reductions stay in the operand precision T (no float -> double promotion):
@@ -175,7 +181,7 @@ template <class T>
 T maxabs(std::span<const T> a)
 {
     if (a.empty()) return T(0);
-    const CBLAS_INDEX i = iamax(static_cast<MKL_INT>(a.size()), a.data());
+    const CBLAS_INDEX i = iamax(a);
     return std::abs(a[i]);
 }
 
