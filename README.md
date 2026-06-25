@@ -23,6 +23,14 @@ The `*_compact` symbols are reached through the BLAS link line, so the BLAS is
 selected with CMake's standard `BLA_VENDOR` mechanism (only MKL provides the
 compact API; other vendors stop with a fatal error).
 
+`libcqr_mkl_ext` itself calls no MKL functions - it uses MKL only for the
+*types* in its public header - so it depends on MKL's **headers, not its link
+line** (`find_package(MKLCompact)` exposes a headers-only `MKL::CompactHeaders`
+target for exactly this). Linking `cqr::mkl_ext` therefore does **not** drag in
+MKL: code that *calls* the MKL compact routines (or uses the `cqr_mkl_alloc.h`
+buffer helpers) is responsible for linking MKL itself, via the full
+`MKL::Compact` target.
+
 ```sh
 cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
@@ -65,6 +73,7 @@ not part of the supported interface:
 | `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
 | `src/cqr_compact_dispatch.cpp` | Portable C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
+| `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. Kept separate from `cqr_mkl_ext.h` so the public header carries no MKL *link* dependency; including this header does require linking MKL. |
 | `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
 

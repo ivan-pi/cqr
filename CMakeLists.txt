@@ -58,8 +58,14 @@ if(CQR_WITH_MKL)
   target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
+  # The library uses MKL only for its *types* (the public header names MKL_INT,
+  # MKL_COMPACT_PACK, ...) and calls no MKL functions, so it needs MKL's headers
+  # but not its link line. Depend on the headers-only target and propagate it
+  # PUBLICly so consumers of cqr_mkl_ext.h get the MKL include path; callers
+  # that invoke MKL (or the cqr_mkl_alloc.h helpers) link MKL::Compact
+  # themselves.
   target_link_libraries(cqr_mkl_ext
-    PUBLIC  MKL::Compact          # MKL types in the public header
+    PUBLIC  MKL::CompactHeaders   # MKL types in the public header (no link dep)
     PRIVATE cqr_compact cqr_flags)
   add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
 endif()

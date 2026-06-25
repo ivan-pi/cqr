@@ -29,6 +29,7 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
+#include "cqr_mkl_alloc.h"   /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
 
 #include <chrono>
 #include <cmath>

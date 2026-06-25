@@ -1,7 +1,18 @@
 # FindMKLCompact.cmake
 #
-# Locate the Intel MKL Compact-format API and expose it as the imported target
-#   MKL::Compact  (BLAS link libraries + the include dir with mkl_compact.h).
+# Locate the Intel MKL Compact-format API and expose it as two imported targets:
+#
+#   MKL::CompactHeaders  -- the include dir with mkl_compact.h only (no link).
+#                           Use this when you only need MKL's *types* (e.g. a
+#                           public header that names MKL_INT / MKL_COMPACT_PACK)
+#                           and do not call any MKL runtime functions.
+#   MKL::Compact         -- MKL::CompactHeaders plus the BLAS link line that
+#                           provides the compact routines. Use this when you
+#                           *call* MKL (the compact API, mkl_malloc, ...).
+#
+# Splitting the two lets a library that merely uses MKL types compile against
+# the headers without inheriting a link dependency on MKL; calling code links
+# MKL::Compact itself.
 #
 # The compact routines (mkl_get_format_compact, mkl_?geqrf_compact, ...) are an
 # Intel MKL extension: they are reached through the ordinary BLAS link line, so
@@ -76,8 +87,15 @@ find_package_handle_standard_args(MKLCompact
 
 if(MKLCompact_FOUND)
   find_package(Threads QUIET)
+
+  # Headers-only target: the include dir with mkl_compact.h, no link line.
+  add_library(MKL::CompactHeaders INTERFACE IMPORTED)
+  set_target_properties(MKL::CompactHeaders PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${MKLCompact_INCLUDE_DIR}")
+
+  # Full target: the headers plus the BLAS link line for the compact routines.
   add_library(MKL::Compact INTERFACE IMPORTED)
-  set(_link ${_blas_link})
+  set(_link MKL::CompactHeaders ${_blas_link})
   if(Threads_FOUND)
     list(APPEND _link Threads::Threads)
   endif()
@@ -86,7 +104,6 @@ if(MKLCompact_FOUND)
   endif()
   list(APPEND _link m)
   set_target_properties(MKL::Compact PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${MKLCompact_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES "${_link}")
 endif()
 
