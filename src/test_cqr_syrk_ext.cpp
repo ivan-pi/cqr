@@ -118,50 +118,56 @@ std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
 }
 
 /* Minimal layout-aware view of a single dense matrix: (i,j) indexing that
- * hides the column-major vs row-major offset arithmetic. */
-template <class T>
+ * hides the column-major vs row-major offset arithmetic. The layout is a
+ * template parameter, so each access resolves at compile time (no per-element
+ * branch) -- the two layouts are simply two instantiations. */
+template <class T, bool RowMajor>
 struct MatrixView {
-    T  *data;
-    int ld;
-    bool rowmajor;
+    T  *const  data;
+    const int  ld;
     T &operator()(int i, int j) const
     {
-        return data[rowmajor ? static_cast<size_t>(i) * ld + j
-                             : static_cast<size_t>(j) * ld + i];
+        if constexpr (RowMajor) return data[static_cast<size_t>(i) * ld + j];
+        else                    return data[static_cast<size_t>(j) * ld + i];
     }
 };
 
 template <class T> std::span<const T> cspan(const T *p, size_t n) { return {p, n}; }
 
+/* index of the max-magnitude element (BLAS i?amax), precision-dispatched */
+CBLAS_INDEX iamax(MKL_INT n, const float  *x) { return cblas_isamax(n, x, 1); }
+CBLAS_INDEX iamax(MKL_INT n, const double *x) { return cblas_idamax(n, x, 1); }
+
+/* Reductions stay in the operand precision T (no float -> double promotion):
+ * maxabs is exactly |x[i?amax]|; maxdiff has no single BLAS call, so it folds
+ * the elementwise |a-b| in T. */
 template <class T>
-double maxabs(std::span<const T> a)
+T maxabs(std::span<const T> a)
 {
-    return std::transform_reduce(
-        a.begin(), a.end(), 0.0,
-        [](double x, double y) { return std::max(x, y); },
-        [](T v) { return std::abs(static_cast<double>(v)); });
+    if (a.empty()) return T(0);
+    return std::abs(a[iamax(static_cast<MKL_INT>(a.size()), a.data())]);
 }
 
 template <class T>
-double maxdiff(std::span<const T> a, std::span<const T> b)
+T maxdiff(std::span<const T> a, std::span<const T> b)
 {
     return std::transform_reduce(
-        a.begin(), a.end(), b.begin(), 0.0,
-        [](double x, double y) { return std::max(x, y); },
-        [](T x, T y) { return std::abs(static_cast<double>(x) - static_cast<double>(y)); });
+        a.begin(), a.end(), b.begin(), T(0),
+        [](T x, T y) { return std::max(x, y); },
+        [](T x, T y) { return std::abs(x - y); });
 }
 
 /* max |X - Y| over the active uplo triangle of an n x n matrix */
-template <class T>
-double tri_maxdiff(const MatrixView<const T> &X, const MatrixView<const T> &Y,
-                   int n, bool lower)
+template <class T, bool RowMajor>
+T tri_maxdiff(const MatrixView<const T, RowMajor> &X,
+              const MatrixView<const T, RowMajor> &Y, int n, bool lower)
 {
-    double d = 0;
+    T d = 0;
     for (int i = 0; i < n; ++i) {
-        const int jlo = lower ? 0 : i, jhi = lower ? i + 1 : n;
+        const int jlo = lower ? 0 : i;
+        const int jhi = lower ? i + 1 : n;
         for (int j = jlo; j < jhi; ++j)
-            d = std::max(d, std::abs(static_cast<double>(X(i, j)) -
-                                     static_cast<double>(Y(i, j))));
+            d = std::max(d, std::abs(X(i, j) - Y(i, j)));
     }
     return d;
 }
@@ -193,6 +199,9 @@ int suiteA(bool rowmajor, bool lower, bool trans,
     const int ldC   = n;                           /* C is n x n in both layouts   */
     const size_t sA = static_cast<size_t>(Arows) * Acols, sC = static_cast<size_t>(n) * n;
 
+    /* A is a general rectangular operand; C is filled non-symmetrically on
+     * purpose. syrk only ever references the active uplo triangle, so checking
+     * the whole matrix below also confirms the opposite triangle is untouched. */
     std::vector<T> A(nm * sA), C(nm * sC), Cref(nm * sC), Cout(nm * sC);
     fill_random(A);
     fill_random(C);
@@ -201,27 +210,31 @@ int suiteA(bool rowmajor, bool lower, bool trans,
         syrk(cl, cu, ctr, n, k, alpha, A.data() + v * sA, ldA,
              beta, Cref.data() + v * sC, ldC);
 
-    auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
-    auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
-
     auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
     auto cp_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
     T *ap = ap_buf.get(), *cp = cp_buf.get();
 
-    pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-    pack(ml, n, n, Cp.data(), ldC, cp, ldC, fmt, nm);
+    {
+        auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
+        auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
+        pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
+        pack(ml, n, n, Cp.data(), ldC, cp, ldC, fmt, nm);
+    }
 
     syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cp, ldC, fmt, nm);
 
-    auto Op = batch_ptrs<T>(Cout.data(), nm, sC);
-    unpack(ml, n, n, Op.data(), ldC, cp, ldC, fmt, nm);
+    {
+        auto Op = batch_ptrs<T>(Cout.data(), nm, sC);
+        unpack(ml, n, n, Op.data(), ldC, cp, ldC, fmt, nm);
+    }
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
         /* whole matrix: active triangle correctness + opposite triangle intact */
-        double rel = maxdiff(cspan(Cout.data() + v * sC, sC),
-                             cspan(Cref.data() + v * sC, sC)) /
-                     std::max(maxabs(cspan(Cref.data() + v * sC, sC)), 1e-300);
+        double rel = static_cast<double>(maxdiff(cspan(Cout.data() + v * sC, sC),
+                                                 cspan(Cref.data() + v * sC, sC))) /
+                     std::max(static_cast<double>(maxabs(cspan(Cref.data() + v * sC, sC))),
+                              1e-300);
         worst = std::max(worst, rel);
     }
     const double rtol = 32.0 * (k + 1) * static_cast<double>(eps);
@@ -259,38 +272,49 @@ int suiteB(bool rowmajor, bool lower, bool trans,
     const int ldC   = n;
     const size_t sA = static_cast<size_t>(Arows) * Acols, sC = static_cast<size_t>(n) * n;
 
+    /* A general, C non-symmetric (see Suite A); the triangle-only comparison
+     * below is valid because syrk and gemm share the same packed C(i,j) there. */
     std::vector<T> A(nm * sA), C(nm * sC);
     fill_random(A);
     fill_random(C);
-
-    auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
-    auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
 
     auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
     auto cs_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
     auto cg_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
     T *ap = ap_buf.get(), *cs = cs_buf.get(), *cg = cg_buf.get();
 
-    pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-    pack(ml, n, n, Cp.data(), ldC, cs, ldC, fmt, nm);   /* C copy for syrk */
-    pack(ml, n, n, Cp.data(), ldC, cg, ldC, fmt, nm);   /* C copy for gemm */
+    {
+        auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
+        auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
+        pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
+        pack(ml, n, n, Cp.data(), ldC, cs, ldC, fmt, nm);   /* C copy for syrk */
+        pack(ml, n, n, Cp.data(), ldC, cg, ldC, fmt, nm);   /* C copy for gemm */
+    }
 
     syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cs, ldC, fmt, nm);
     gemm_compact(ml, ga, gb, n, n, k, alpha, ap, ldA, ap, ldA, beta, cg, ldC, fmt, nm);
 
     std::vector<T> Sout(nm * sC), Gout(nm * sC);
-    auto Sp = batch_ptrs<T>(Sout.data(), nm, sC);
-    auto Gp = batch_ptrs<T>(Gout.data(), nm, sC);
-    unpack(ml, n, n, Sp.data(), ldC, cs, ldC, fmt, nm);
-    unpack(ml, n, n, Gp.data(), ldC, cg, ldC, fmt, nm);
+    {
+        auto Sp = batch_ptrs<T>(Sout.data(), nm, sC);
+        auto Gp = batch_ptrs<T>(Gout.data(), nm, sC);
+        unpack(ml, n, n, Sp.data(), ldC, cs, ldC, fmt, nm);
+        unpack(ml, n, n, Gp.data(), ldC, cg, ldC, fmt, nm);
+    }
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
-        /* compare only the triangle syrk wrote (gemm filled the whole matrix) */
-        MatrixView<const T> Sv{Sout.data() + v * sC, ldC, rowmajor};
-        MatrixView<const T> Gv{Gout.data() + v * sC, ldC, rowmajor};
-        double rel = tri_maxdiff(Sv, Gv, n, lower) /
-                     std::max(maxabs(cspan(Gout.data() + v * sC, sC)), 1e-300);
+        const T *sp = Sout.data() + v * sC;
+        const T *gp = Gout.data() + v * sC;
+        /* compare only the triangle syrk wrote (gemm filled the whole matrix);
+         * the layout is a compile-time view parameter, picked once per matrix */
+        T diff = rowmajor
+            ? tri_maxdiff(MatrixView<const T, true >{sp, ldC},
+                          MatrixView<const T, true >{gp, ldC}, n, lower)
+            : tri_maxdiff(MatrixView<const T, false>{sp, ldC},
+                          MatrixView<const T, false>{gp, ldC}, n, lower);
+        double rel = static_cast<double>(diff) /
+                     std::max(static_cast<double>(maxabs(cspan(gp, sC))), 1e-300);
         worst = std::max(worst, rel);
     }
     const double rtol = 32.0 * (k + 1) * static_cast<double>(eps);
