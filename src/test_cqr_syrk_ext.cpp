@@ -341,10 +341,10 @@ int run_precision()
     for (bool rowmajor : {false, true})
         for (bool lower : {false, true})
             for (bool trans : {false, true})
-                for (auto &s : shapes)
-                    for (auto &c : coeffs) {
-                        fails += suiteA<T>(rowmajor, lower, trans, s[0], s[1], s[2], c[0], c[1]);
-                        fails += suiteB<T>(rowmajor, lower, trans, s[0], s[1], s[2], c[0], c[1]);
+                for (auto &[nm, n, k] : shapes)
+                    for (auto &[alpha, beta] : coeffs) {
+                        fails += suiteA<T>(rowmajor, lower, trans, nm, n, k, alpha, beta);
+                        fails += suiteB<T>(rowmajor, lower, trans, nm, n, k, alpha, beta);
                     }
     return fails;
 }
