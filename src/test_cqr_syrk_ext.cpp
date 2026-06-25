@@ -3,8 +3,8 @@
  * Validation of cqr_mkl_?syrk_compact against real Intel MKL, in two
  * independent ways, over the full feature matrix (precision x layout x uplo x
  * trans) and a range of alpha/beta and batch shapes (including a padded
- * partial last group). Both suites pack with mkl_?gepack_compact, run the
- * routine under test on the compact buffers, and unpack to compare.
+ * partial last group). Both suites pack the inputs into MKL Compact format,
+ * run the routine under test on the compact buffers, and unpack to compare.
  *
  * Suite A -- vs dense cblas_?syrk (per matrix):
  *   The compact result is checked, element for element over the *whole* n x n
@@ -28,106 +28,140 @@
 #include "cqr_mkl_ext.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <span>
+#include <random>
+#include <numeric>
 #include <algorithm>
 #include <type_traits>
 
 namespace {
 
 /* ------------------------------------------------------------------ */
-/* Precision-dispatched MKL / CBLAS wrappers. Overloaded on the scalar */
-/* pointer type where the argument disambiguates; templated for the    */
-/* size query, which carries no pointer.                               */
+/* Precision-dispatched MKL / CBLAS wrappers. Each names the generic    */
+/* operation; the s/d variant is picked by overload on the scalar       */
+/* pointer type, or by explicit specialization for the size query (which */
+/* carries no pointer to overload on).                                  */
 /* ------------------------------------------------------------------ */
 
-template <typename T> MKL_INT cmp_size(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm);
-template <> MKL_INT cmp_size<double>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
+template <typename T> MKL_INT compact_size(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm);
+template <> MKL_INT compact_size<double>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
 { return mkl_dget_size_compact(m, n, f, nm); }
-template <> MKL_INT cmp_size<float>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
+template <> MKL_INT compact_size<float>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
 { return mkl_sget_size_compact(m, n, f, nm); }
 
-void gepack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const double *const *a, MKL_INT lda,
-            double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
+void pack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const double *const *a, MKL_INT lda,
+          double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_dgepack_compact(l, m, n, const_cast<const double **>(a), lda, ap, ldap, f, nm); }
-void gepack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const float *const *a, MKL_INT lda,
-            float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
+void pack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const float *const *a, MKL_INT lda,
+          float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_sgepack_compact(l, m, n, const_cast<const float **>(a), lda, ap, ldap, f, nm); }
 
-void geunpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, double **a, MKL_INT lda,
-              const double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
+void unpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, double **a, MKL_INT lda,
+            const double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_dgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm); }
-void geunpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, float **a, MKL_INT lda,
-              const float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
+void unpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, float **a, MKL_INT lda,
+            const float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_sgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm); }
 
-void gemm_cmp(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
-              MKL_INT m, MKL_INT n, MKL_INT k, double alpha,
-              const double *ap, MKL_INT ldap, const double *bp, MKL_INT ldbp,
-              double beta, double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
+void gemm_compact(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
+                  MKL_INT m, MKL_INT n, MKL_INT k, double alpha,
+                  const double *ap, MKL_INT ldap, const double *bp, MKL_INT ldbp,
+                  double beta, double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_dgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm); }
-void gemm_cmp(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
-              MKL_INT m, MKL_INT n, MKL_INT k, float alpha,
-              const float *ap, MKL_INT ldap, const float *bp, MKL_INT ldbp,
-              float beta, float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
+void gemm_compact(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
+                  MKL_INT m, MKL_INT n, MKL_INT k, float alpha,
+                  const float *ap, MKL_INT ldap, const float *bp, MKL_INT ldbp,
+                  float beta, float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
 { mkl_sgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm); }
 
-void ref_syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
-              double alpha, const double *a, MKL_INT lda, double beta, double *c, MKL_INT ldc)
+/* dense per-matrix reference */
+void syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
+          double alpha, const double *a, MKL_INT lda, double beta, double *c, MKL_INT ldc)
 { cblas_dsyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc); }
-void ref_syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
-              float alpha, const float *a, MKL_INT lda, float beta, float *c, MKL_INT ldc)
+void syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
+          float alpha, const float *a, MKL_INT lda, float beta, float *c, MKL_INT ldc)
 { cblas_ssyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc); }
 
-void uut_syrk(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
-              double alpha, const double *ap, MKL_INT ldap, double beta,
-              double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
+/* routine under test */
+void syrk_compact(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
+                  double alpha, const double *ap, MKL_INT ldap, double beta,
+                  double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
 { cqr_mkl_dsyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm); }
-void uut_syrk(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
-              float alpha, const float *ap, MKL_INT ldap, float beta,
-              float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
+void syrk_compact(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
+                  float alpha, const float *ap, MKL_INT ldap, float beta,
+                  float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
 { cqr_mkl_ssyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm); }
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-double frand() { return 2.0 * std::rand() / (double)RAND_MAX - 1.0; }
+std::mt19937 rng;   /* seeded in main for reproducibility */
+
+template <class T>
+void fill_random(std::vector<T> &v)
+{
+    std::uniform_real_distribution<double> dist(-1.0, 1.0);
+    std::ranges::generate(v, [&] { return static_cast<T>(dist(rng)); });
+}
 
 /* matrix base pointers into one contiguous batch buffer (matrix v at v*stride) */
 template <class T>
 std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
 {
     std::vector<T *> p(nm);
-    for (int v = 0; v < nm; ++v) p[v] = base + (size_t)v * stride;
+    for (int v = 0; v < nm; ++v) p[v] = base + static_cast<size_t>(v) * stride;
     return p;
 }
 
-/* element offset of C(i,j) for an n x n matrix in the given layout */
-inline size_t cidx(int i, int j, int ld, bool rowmajor)
-{ return rowmajor ? (size_t)i * ld + j : (size_t)j * ld + i; }
+/* Minimal layout-aware view of a single dense matrix: (i,j) indexing that
+ * hides the column-major vs row-major offset arithmetic. */
+template <class T>
+struct MatrixView {
+    T  *data;
+    int ld;
+    bool rowmajor;
+    T &operator()(int i, int j) const
+    {
+        return data[rowmajor ? static_cast<size_t>(i) * ld + j
+                             : static_cast<size_t>(j) * ld + i];
+    }
+};
+
+template <class T> std::span<const T> cspan(const T *p, size_t n) { return {p, n}; }
 
 template <class T>
-double maxabs(const T *a, size_t n)
-{ double d = 0; for (size_t i = 0; i < n; ++i) d = std::max(d, std::abs((double)a[i])); return d; }
+double maxabs(std::span<const T> a)
+{
+    return std::transform_reduce(
+        a.begin(), a.end(), 0.0,
+        [](double x, double y) { return std::max(x, y); },
+        [](T v) { return std::abs(static_cast<double>(v)); });
+}
 
 template <class T>
-double maxdiff(const T *a, const T *b, size_t n)
-{ double d = 0; for (size_t i = 0; i < n; ++i) d = std::max(d, std::abs((double)a[i] - (double)b[i])); return d; }
+double maxdiff(std::span<const T> a, std::span<const T> b)
+{
+    return std::transform_reduce(
+        a.begin(), a.end(), b.begin(), 0.0,
+        [](double x, double y) { return std::max(x, y); },
+        [](T x, T y) { return std::abs(static_cast<double>(x) - static_cast<double>(y)); });
+}
 
 /* max |X - Y| over the active uplo triangle of an n x n matrix */
 template <class T>
-double tri_maxdiff(const T *X, const T *Y, int n, bool lower, int ld, bool rowmajor)
+double tri_maxdiff(const MatrixView<const T> &X, const MatrixView<const T> &Y,
+                   int n, bool lower)
 {
     double d = 0;
     for (int i = 0; i < n; ++i) {
         const int jlo = lower ? 0 : i, jhi = lower ? i + 1 : n;
-        for (int j = jlo; j < jhi; ++j) {
-            const size_t o = cidx(i, j, ld, rowmajor);
-            d = std::max(d, std::abs((double)X[o] - (double)Y[o]));
-        }
+        for (int j = jlo; j < jhi; ++j)
+            d = std::max(d, std::abs(static_cast<double>(X(i, j)) -
+                                     static_cast<double>(Y(i, j))));
     }
     return d;
 }
@@ -146,56 +180,57 @@ int suiteA(bool rowmajor, bool lower, bool trans,
     const int V = cqr::detail::vlen_for_format<T>(fmt);
     const T   eps = std::numeric_limits<T>::epsilon();
 
-    const MKL_LAYOUT     ml  = rowmajor ? MKL_ROW_MAJOR : MKL_COL_MAJOR;
-    const CBLAS_LAYOUT   cl  = rowmajor ? CblasRowMajor : CblasColMajor;
-    const MKL_UPLO       mu  = lower ? MKL_LOWER : MKL_UPPER;
-    const CBLAS_UPLO     cu  = lower ? CblasLower : CblasUpper;
-    const MKL_TRANSPOSE  mtr = trans ? MKL_TRANS : MKL_NOTRANS;
+    const MKL_LAYOUT      ml  = rowmajor ? MKL_ROW_MAJOR : MKL_COL_MAJOR;
+    const CBLAS_LAYOUT    cl  = rowmajor ? CblasRowMajor : CblasColMajor;
+    const MKL_UPLO        mu  = lower ? MKL_LOWER : MKL_UPPER;
+    const CBLAS_UPLO      cu  = lower ? CblasLower : CblasUpper;
+    const MKL_TRANSPOSE   mtr = trans ? MKL_TRANS : MKL_NOTRANS;
     const CBLAS_TRANSPOSE ctr = trans ? CblasTrans : CblasNoTrans;
 
     /* A is n x k (notrans) or k x n (trans); leading dim along the stored axis */
     const int Arows = trans ? k : n, Acols = trans ? n : k;
     const int ldA   = rowmajor ? Acols : Arows;   /* dense == compact leading dim */
     const int ldC   = n;                           /* C is n x n in both layouts   */
-    const size_t sA = (size_t)Arows * Acols, sC = (size_t)n * n;
+    const size_t sA = static_cast<size_t>(Arows) * Acols, sC = static_cast<size_t>(n) * n;
 
     std::vector<T> A(nm * sA), C(nm * sC), Cref(nm * sC), Cout(nm * sC);
-    for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA, *Cv = C.data() + v * sC, *Rv = Cref.data() + v * sC;
-        for (size_t i = 0; i < sA; ++i) Av[i] = (T)frand();
-        for (size_t i = 0; i < sC; ++i) Cv[i] = (T)frand();
-        std::copy(Cv, Cv + sC, Rv);
-        ref_syrk(cl, cu, ctr, n, k, alpha, Av, ldA, beta, Rv, ldC);
-    }
+    fill_random(A);
+    fill_random(C);
+    Cref = C;
+    for (int v = 0; v < nm; ++v)
+        syrk(cl, cu, ctr, n, k, alpha, A.data() + v * sA, ldA,
+             beta, Cref.data() + v * sC, ldC);
 
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
 
-    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(cmp_size<T>(Arows, Acols, fmt, nm));
-    auto cp_buf = cqr::detail::mkl_alloc_bytes<T>(cmp_size<T>(n, n, fmt, nm));
+    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
+    auto cp_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
     T *ap = ap_buf.get(), *cp = cp_buf.get();
 
-    gepack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-    gepack(ml, n, n, Cp.data(), ldC, cp, ldC, fmt, nm);
+    pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
+    pack(ml, n, n, Cp.data(), ldC, cp, ldC, fmt, nm);
 
-    uut_syrk(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cp, ldC, fmt, nm);
+    syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cp, ldC, fmt, nm);
 
     auto Op = batch_ptrs<T>(Cout.data(), nm, sC);
-    geunpack(ml, n, n, Op.data(), ldC, cp, ldC, fmt, nm);
+    unpack(ml, n, n, Op.data(), ldC, cp, ldC, fmt, nm);
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
-        const T *Co = Cout.data() + v * sC, *Rv = Cref.data() + v * sC;
         /* whole matrix: active triangle correctness + opposite triangle intact */
-        double rel = maxdiff(Co, Rv, sC) / std::max(maxabs(Rv, sC), 1e-300);
+        double rel = maxdiff(cspan(Cout.data() + v * sC, sC),
+                             cspan(Cref.data() + v * sC, sC)) /
+                     std::max(maxabs(cspan(Cref.data() + v * sC, sC)), 1e-300);
         worst = std::max(worst, rel);
     }
-    const double rtol = 32.0 * (k + 1) * (double)eps;
+    const double rtol = 32.0 * (k + 1) * static_cast<double>(eps);
     bool ok = (worst <= rtol);
     std::printf("  [A:cblas] %s%s uplo=%c trans=%c V=%-2d nm=%-2d n=%-3d k=%-3d a=%+.1f b=%+.1f | rel %.2e (rtol %.2e) %s\n",
                 pname(std::is_same<T, double>::value), rowmajor ? "/row" : "/col",
                 lower ? 'L' : 'U', trans ? 'T' : 'N', V, nm, n, k,
-                (double)alpha, (double)beta, worst, rtol, ok ? "OK" : "FAIL");
+                static_cast<double>(alpha), static_cast<double>(beta),
+                worst, rtol, ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
 }
 
@@ -214,58 +249,57 @@ int suiteB(bool rowmajor, bool lower, bool trans,
     const MKL_LAYOUT    ml  = rowmajor ? MKL_ROW_MAJOR : MKL_COL_MAJOR;
     const MKL_UPLO      mu  = lower ? MKL_LOWER : MKL_UPPER;
     const MKL_TRANSPOSE mtr = trans ? MKL_TRANS : MKL_NOTRANS;
-    /* gemm forms the same product: C = alpha*op(A)*op(A)^... For A*A^T use
-     * (NoTrans, Trans); for A^T*A use (Trans, NoTrans). */
+    /* gemm forms the same product: for A*A^T use (NoTrans, Trans); for A^T*A
+     * use (Trans, NoTrans). */
     const MKL_TRANSPOSE ga = trans ? MKL_TRANS   : MKL_NOTRANS;
     const MKL_TRANSPOSE gb = trans ? MKL_NOTRANS : MKL_TRANS;
 
     const int Arows = trans ? k : n, Acols = trans ? n : k;
     const int ldA   = rowmajor ? Acols : Arows;
     const int ldC   = n;
-    const size_t sA = (size_t)Arows * Acols, sC = (size_t)n * n;
+    const size_t sA = static_cast<size_t>(Arows) * Acols, sC = static_cast<size_t>(n) * n;
 
-    std::vector<T> A(nm * sA), C(nm * sC), Csyrk(nm * sC), Cgemm(nm * sC);
-    for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA, *Cv = C.data() + v * sC;
-        for (size_t i = 0; i < sA; ++i) Av[i] = (T)frand();
-        for (size_t i = 0; i < sC; ++i) Cv[i] = (T)frand();
-    }
+    std::vector<T> A(nm * sA), C(nm * sC);
+    fill_random(A);
+    fill_random(C);
 
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
 
-    auto ap_buf  = cqr::detail::mkl_alloc_bytes<T>(cmp_size<T>(Arows, Acols, fmt, nm));
-    auto cs_buf  = cqr::detail::mkl_alloc_bytes<T>(cmp_size<T>(n, n, fmt, nm));
-    auto cg_buf  = cqr::detail::mkl_alloc_bytes<T>(cmp_size<T>(n, n, fmt, nm));
+    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
+    auto cs_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
+    auto cg_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
     T *ap = ap_buf.get(), *cs = cs_buf.get(), *cg = cg_buf.get();
 
-    gepack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-    gepack(ml, n, n, Cp.data(), ldC, cs, ldC, fmt, nm);   /* C copy for syrk */
-    gepack(ml, n, n, Cp.data(), ldC, cg, ldC, fmt, nm);   /* C copy for gemm */
+    pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
+    pack(ml, n, n, Cp.data(), ldC, cs, ldC, fmt, nm);   /* C copy for syrk */
+    pack(ml, n, n, Cp.data(), ldC, cg, ldC, fmt, nm);   /* C copy for gemm */
 
-    uut_syrk(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cs, ldC, fmt, nm);
-    gemm_cmp(ml, ga, gb, n, n, k, alpha, ap, ldA, ap, ldA, beta, cg, ldC, fmt, nm);
+    syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cs, ldC, fmt, nm);
+    gemm_compact(ml, ga, gb, n, n, k, alpha, ap, ldA, ap, ldA, beta, cg, ldC, fmt, nm);
 
     std::vector<T> Sout(nm * sC), Gout(nm * sC);
     auto Sp = batch_ptrs<T>(Sout.data(), nm, sC);
     auto Gp = batch_ptrs<T>(Gout.data(), nm, sC);
-    geunpack(ml, n, n, Sp.data(), ldC, cs, ldC, fmt, nm);
-    geunpack(ml, n, n, Gp.data(), ldC, cg, ldC, fmt, nm);
+    unpack(ml, n, n, Sp.data(), ldC, cs, ldC, fmt, nm);
+    unpack(ml, n, n, Gp.data(), ldC, cg, ldC, fmt, nm);
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
-        const T *Sv = Sout.data() + v * sC, *Gv = Gout.data() + v * sC;
         /* compare only the triangle syrk wrote (gemm filled the whole matrix) */
-        double rel = tri_maxdiff(Sv, Gv, n, lower, ldC, rowmajor) /
-                     std::max(maxabs(Gv, sC), 1e-300);
+        MatrixView<const T> Sv{Sout.data() + v * sC, ldC, rowmajor};
+        MatrixView<const T> Gv{Gout.data() + v * sC, ldC, rowmajor};
+        double rel = tri_maxdiff(Sv, Gv, n, lower) /
+                     std::max(maxabs(cspan(Gout.data() + v * sC, sC)), 1e-300);
         worst = std::max(worst, rel);
     }
-    const double rtol = 32.0 * (k + 1) * (double)eps;
+    const double rtol = 32.0 * (k + 1) * static_cast<double>(eps);
     bool ok = (worst <= rtol);
     std::printf("  [B:gemm ] %s%s uplo=%c trans=%c V=%-2d nm=%-2d n=%-3d k=%-3d a=%+.1f b=%+.1f | rel %.2e (rtol %.2e) %s\n",
                 pname(std::is_same<T, double>::value), rowmajor ? "/row" : "/col",
                 lower ? 'L' : 'U', trans ? 'T' : 'N', V, nm, n, k,
-                (double)alpha, (double)beta, worst, rtol, ok ? "OK" : "FAIL");
+                static_cast<double>(alpha), static_cast<double>(beta),
+                worst, rtol, ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
 }
 
@@ -294,7 +328,7 @@ int run_precision()
 
 int main()
 {
-    std::srand(42);
+    rng.seed(42);
     std::printf("MKL compact format = %d, V(double) = %d, V(float) = %d\n",
                 (int)mkl_get_format_compact(),
                 cqr::detail::vlen_for_format<double>(mkl_get_format_compact()),
