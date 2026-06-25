@@ -174,9 +174,8 @@ CBLAS_INDEX iamax(std::span<const double> x)
     return cblas_idamax(static_cast<MKL_INT>(x.size()), x.data(), 1);
 }
 
-/* Reductions stay in the operand precision T (no float -> double promotion):
- * maxabs is exactly |x[i?amax]|; maxdiff has no single BLAS call, so it folds
- * the elementwise |a-b| in T. */
+/* Both reductions stay in the operand precision T (no float -> double
+ * promotion). maxabs is exactly |x[i?amax]|. */
 template <class T>
 T maxabs(std::span<const T> a)
 {
@@ -185,6 +184,7 @@ T maxabs(std::span<const T> a)
     return std::abs(a[i]);
 }
 
+/* maxdiff has no single BLAS call, so it folds the elementwise |a-b| in T. */
 template <class T>
 T maxdiff(std::span<const T> a, std::span<const T> b)
 {
