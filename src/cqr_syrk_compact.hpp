@@ -120,15 +120,15 @@ void syrk_compact_group(Uplo uplo, Int n, Int k, T alpha, T beta,
                      *Aj2 = A + (j + 2), *Aj3 = A + (j + 3);
             VT w0{}, w1{}, w2{}, w3{};
             for (Int p = 0; p < k; ++p) {
-                const std::size_t pp  = static_cast<std::size_t>(p) * ldap;
-                const VT          aip = Ai[pp];
+                const Int pp  = p * ldap;
+                const VT  aip = Ai[pp];
                 w0 += aip * Aj0[pp]; w1 += aip * Aj1[pp];
                 w2 += aip * Aj2[pp]; w3 += aip * Aj3[pp];
             }
-            VT &c0 = C[i + static_cast<std::size_t>(j + 0) * ldcp];
-            VT &c1 = C[i + static_cast<std::size_t>(j + 1) * ldcp];
-            VT &c2 = C[i + static_cast<std::size_t>(j + 2) * ldcp];
-            VT &c3 = C[i + static_cast<std::size_t>(j + 3) * ldcp];
+            VT &c0 = C[i + (j + 0) * ldcp];
+            VT &c1 = C[i + (j + 1) * ldcp];
+            VT &c2 = C[i + (j + 2) * ldcp];
+            VT &c3 = C[i + (j + 3) * ldcp];
             if (overwrite) {
                 c0 = alpha * w0; c1 = alpha * w1;
                 c2 = alpha * w2; c3 = alpha * w3;
@@ -143,10 +143,10 @@ void syrk_compact_group(Uplo uplo, Int n, Int k, T alpha, T beta,
             const VT *Aj = A + j;
             VT w{};
             for (Int p = 0; p < k; ++p) {
-                const std::size_t pp = static_cast<std::size_t>(p) * ldap;
+                const Int pp = p * ldap;
                 w += Ai[pp] * Aj[pp];
             }
-            VT &cij = C[i + static_cast<std::size_t>(j) * ldcp];
+            VT &cij = C[i + j * ldcp];
             cij = overwrite ? (alpha * w) : (alpha * w + beta * cij);
         }
     }
@@ -240,24 +240,24 @@ void syrk_compact_general(Uplo uplo, Op op, Layout layout,
 
     /* A element strides (in VT units): one along the C-index (n) axis, one
      * along the contraction (k) axis. Column-major makes A's first declared
-     * axis unit-stride, row-major its second; trans swaps which is which. */
-    const std::size_t a_nidx = trans ? (rowmajor ? 1 : (std::size_t)ldap)
-                                     : (rowmajor ? (std::size_t)ldap : 1);
-    const std::size_t a_kidx = trans ? (rowmajor ? (std::size_t)ldap : 1)
-                                     : (rowmajor ? 1 : (std::size_t)ldap);
+     * axis unit-stride, row-major its second; trans swaps which is which.
+     * (BatchView does the index*stride product in size_t, so these per-matrix
+     * strides need no widening cast of their own.) */
+    const Int a_nidx = trans ? (rowmajor ? 1 : ldap) : (rowmajor ? ldap : 1);
+    const Int a_kidx = trans ? (rowmajor ? ldap : 1) : (rowmajor ? 1 : ldap);
 
     /* C is symmetric n x n: row index i, column index j. The uplo triangle is
      * defined on the math indices (i,j) regardless of layout; only the strides
      * differ. */
-    const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
-    const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
+    const Int c_row = rowmajor ? ldcp : 1;
+    const Int c_col = rowmajor ? 1 : ldcp;
 
     /* group strides (scalar T units). A's packed per-matrix extent is ldap
-     * times the count of its non-leading axis; C's is ldcp*n. */
-    const std::size_t a_lines = rowmajor ? (trans ? (std::size_t)k : (std::size_t)n)
-                                         : (trans ? (std::size_t)n : (std::size_t)k);
-    const std::size_t str_a = (std::size_t)ldap * a_lines * V;
-    const std::size_t str_c = (std::size_t)ldcp * n * V;
+     * times the count of its non-leading axis; C's is ldcp*n. These span the
+     * whole batch, so widen to size_t before the product to avoid overflow. */
+    const Int a_lines = rowmajor ? (trans ? k : n) : (trans ? n : k);
+    const std::size_t str_a = static_cast<std::size_t>(ldap) * a_lines * V;
+    const std::size_t str_c = static_cast<std::size_t>(ldcp) * n * V;
 
     const bool tuned = (op == Op::NoTrans && layout == Layout::ColMajor);
 
