@@ -145,7 +145,8 @@ template <class T>
 T maxabs(std::span<const T> a)
 {
     if (a.empty()) return T(0);
-    return std::abs(a[iamax(static_cast<MKL_INT>(a.size()), a.data())]);
+    const CBLAS_INDEX i = iamax(static_cast<MKL_INT>(a.size()), a.data());
+    return std::abs(a[i]);
 }
 
 template <class T>
