@@ -23,20 +23,17 @@
 namespace cqr {
 namespace detail {
 
-/* Stateless deleter calling mkl_free -- usable as a zero-size unique_ptr
- * deleter, so the owning handle is no larger than a bare pointer. */
+/* mkl_free deleter (stateless, so mkl_buffer is pointer-sized). */
 struct mkl_deleter {
     void operator()(void *p) const noexcept { mkl_free(p); }
 };
 
-/* Owning handle for an mkl_malloc'd buffer of T, freed automatically. */
+/* Owning handle for an mkl_malloc'd buffer of T. */
 template <typename T>
 using mkl_buffer = std::unique_ptr<T[], mkl_deleter>;
 
-/* Allocate `bytes` of `align`-aligned storage via mkl_malloc, wrapped for
- * RAII. Sized in bytes (not elements) to match mkl_?get_size_compact(),
- * whose return value already accounts for the compact format's interleave
- * padding. Throws std::bad_alloc on allocation failure. */
+/* Allocate `bytes` of `align`-aligned storage via mkl_malloc (sized in bytes
+ * to match mkl_?get_size_compact). Throws std::bad_alloc on failure. */
 template <typename T>
 mkl_buffer<T> mkl_alloc_bytes(std::size_t bytes, int align = 64)
 {
