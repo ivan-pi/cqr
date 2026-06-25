@@ -23,7 +23,6 @@
 namespace cqr {
 namespace detail {
 
-/* mkl_free deleter (stateless, so mkl_buffer is pointer-sized). */
 struct mkl_deleter {
     void operator()(void *p) const noexcept { mkl_free(p); }
 };
