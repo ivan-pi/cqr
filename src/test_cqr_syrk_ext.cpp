@@ -144,6 +144,26 @@ std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
     return p;
 }
 
+/* RAII compact-format batch: owns the packed buffer for nm rows x cols matrices
+ * and moves dense <-> compact in the stored layout (the dense side is contiguous,
+ * per-matrix stride rows*cols, so column- and row-major differ only by ld). */
+template <class T>
+struct CompactBatch {
+    MKL_LAYOUT layout; MKL_COMPACT_PACK fmt;
+    MKL_INT rows, cols, ld, nm;
+    cqr::detail::mkl_buffer<T> buf;
+
+    CompactBatch(MKL_LAYOUT lay, MKL_COMPACT_PACK f, MKL_INT n, MKL_INT r, MKL_INT c, MKL_INT ld_)
+        : layout(lay), fmt(f), rows(r), cols(c), ld(ld_), nm(n),
+          buf(cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(r, c, f, n))) {}
+
+    T *data() { return buf.get(); }
+    void pack_from(const std::vector<T> &d)
+    { pack(layout, rows, cols, batch_ptrs<const T>(d.data(), nm, (size_t)rows * cols).data(), ld, buf.get(), ld, fmt, nm); }
+    void unpack_to(std::vector<T> &d) const
+    { unpack(layout, rows, cols, batch_ptrs<T>(d.data(), nm, (size_t)rows * cols).data(), ld, buf.get(), ld, fmt, nm); }
+};
+
 /* Minimal layout-aware view of a single dense matrix: (i,j) indexing that
  * hides the column-major vs row-major offset arithmetic. The layout is a
  * template parameter, so each access resolves at compile time (no per-element
@@ -247,23 +267,12 @@ int suiteA(bool rowmajor, bool lower, bool trans,
         syrk(cl, cu, ctr, n, k, alpha, A.data() + v * sA, ldA,
              beta, Cref.data() + v * sC, ldC);
 
-    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
-    auto cp_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
-    T *ap = ap_buf.get(), *cp = cp_buf.get();
+    auto Ac = CompactBatch<T>(ml, fmt, nm, Arows, Acols, ldA);  Ac.pack_from(A);
+    auto Cc = CompactBatch<T>(ml, fmt, nm, n, n, ldC);          Cc.pack_from(C);
 
-    {
-        auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
-        auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
-        pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-        pack(ml, n, n, Cp.data(), ldC, cp, ldC, fmt, nm);
-    }
+    syrk_compact(ml, mu, mtr, n, k, alpha, Ac.data(), ldA, beta, Cc.data(), ldC, fmt, nm);
 
-    syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cp, ldC, fmt, nm);
-
-    {
-        auto Op = batch_ptrs<T>(Cout.data(), nm, sC);
-        unpack(ml, n, n, Op.data(), ldC, cp, ldC, fmt, nm);
-    }
+    Cc.unpack_to(Cout);
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
@@ -315,29 +324,17 @@ int suiteB(bool rowmajor, bool lower, bool trans,
     fill_random(A);
     fill_random(C);
 
-    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(Arows, Acols, fmt, nm));
-    auto cs_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
-    auto cg_buf = cqr::detail::mkl_alloc_bytes<T>(compact_size<T>(n, n, fmt, nm));
-    T *ap = ap_buf.get(), *cs = cs_buf.get(), *cg = cg_buf.get();
+    auto Ac = CompactBatch<T>(ml, fmt, nm, Arows, Acols, ldA);  Ac.pack_from(A);
+    auto Cs = CompactBatch<T>(ml, fmt, nm, n, n, ldC);          Cs.pack_from(C); /* syrk */
+    auto Cg = CompactBatch<T>(ml, fmt, nm, n, n, ldC);          Cg.pack_from(C); /* gemm */
 
-    {
-        auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
-        auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
-        pack(ml, Arows, Acols, Ap.data(), ldA, ap, ldA, fmt, nm);
-        pack(ml, n, n, Cp.data(), ldC, cs, ldC, fmt, nm);   /* C copy for syrk */
-        pack(ml, n, n, Cp.data(), ldC, cg, ldC, fmt, nm);   /* C copy for gemm */
-    }
-
-    syrk_compact(ml, mu, mtr, n, k, alpha, ap, ldA, beta, cs, ldC, fmt, nm);
-    gemm_compact(ml, ga, gb, n, n, k, alpha, ap, ldA, ap, ldA, beta, cg, ldC, fmt, nm);
+    syrk_compact(ml, mu, mtr, n, k, alpha, Ac.data(), ldA, beta, Cs.data(), ldC, fmt, nm);
+    gemm_compact(ml, ga, gb, n, n, k, alpha,
+                 Ac.data(), ldA, Ac.data(), ldA, beta, Cg.data(), ldC, fmt, nm);
 
     std::vector<T> Sout(nm * sC), Gout(nm * sC);
-    {
-        auto Sp = batch_ptrs<T>(Sout.data(), nm, sC);
-        auto Gp = batch_ptrs<T>(Gout.data(), nm, sC);
-        unpack(ml, n, n, Sp.data(), ldC, cs, ldC, fmt, nm);
-        unpack(ml, n, n, Gp.data(), ldC, cg, ldC, fmt, nm);
-    }
+    Cs.unpack_to(Sout);
+    Cg.unpack_to(Gout);
 
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
