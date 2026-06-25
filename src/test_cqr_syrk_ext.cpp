@@ -48,52 +48,76 @@ namespace {
 
 template <typename T> MKL_INT compact_size(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm);
 template <> MKL_INT compact_size<double>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
-{ return mkl_dget_size_compact(m, n, f, nm); }
+{
+    return mkl_dget_size_compact(m, n, f, nm);
+}
 template <> MKL_INT compact_size<float>(MKL_INT m, MKL_INT n, MKL_COMPACT_PACK f, MKL_INT nm)
-{ return mkl_sget_size_compact(m, n, f, nm); }
+{
+    return mkl_sget_size_compact(m, n, f, nm);
+}
 
 void pack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const double *const *a, MKL_INT lda,
           double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_dgepack_compact(l, m, n, const_cast<const double **>(a), lda, ap, ldap, f, nm); }
+{
+    mkl_dgepack_compact(l, m, n, const_cast<const double **>(a), lda, ap, ldap, f, nm);
+}
 void pack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, const float *const *a, MKL_INT lda,
           float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_sgepack_compact(l, m, n, const_cast<const float **>(a), lda, ap, ldap, f, nm); }
+{
+    mkl_sgepack_compact(l, m, n, const_cast<const float **>(a), lda, ap, ldap, f, nm);
+}
 
 void unpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, double **a, MKL_INT lda,
             const double *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_dgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm); }
+{
+    mkl_dgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm);
+}
 void unpack(MKL_LAYOUT l, MKL_INT m, MKL_INT n, float **a, MKL_INT lda,
             const float *ap, MKL_INT ldap, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_sgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm); }
+{
+    mkl_sgeunpack_compact(l, m, n, a, lda, ap, ldap, f, nm);
+}
 
 void gemm_compact(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
                   MKL_INT m, MKL_INT n, MKL_INT k, double alpha,
                   const double *ap, MKL_INT ldap, const double *bp, MKL_INT ldbp,
                   double beta, double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_dgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm); }
+{
+    mkl_dgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm);
+}
 void gemm_compact(MKL_LAYOUT l, MKL_TRANSPOSE ta, MKL_TRANSPOSE tb,
                   MKL_INT m, MKL_INT n, MKL_INT k, float alpha,
                   const float *ap, MKL_INT ldap, const float *bp, MKL_INT ldbp,
                   float beta, float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
-{ mkl_sgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm); }
+{
+    mkl_sgemm_compact(l, ta, tb, m, n, k, alpha, ap, ldap, bp, ldbp, beta, cp, ldcp, f, nm);
+}
 
 /* dense per-matrix reference */
 void syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
           double alpha, const double *a, MKL_INT lda, double beta, double *c, MKL_INT ldc)
-{ cblas_dsyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc); }
+{
+    cblas_dsyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc);
+}
 void syrk(CBLAS_LAYOUT l, CBLAS_UPLO u, CBLAS_TRANSPOSE t, MKL_INT n, MKL_INT k,
           float alpha, const float *a, MKL_INT lda, float beta, float *c, MKL_INT ldc)
-{ cblas_ssyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc); }
+{
+    cblas_ssyrk(l, u, t, n, k, alpha, a, lda, beta, c, ldc);
+}
 
 /* routine under test */
 void syrk_compact(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
                   double alpha, const double *ap, MKL_INT ldap, double beta,
                   double *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
-{ cqr_mkl_dsyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm); }
+{
+    cqr_mkl_dsyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm);
+}
 void syrk_compact(MKL_LAYOUT l, MKL_UPLO u, MKL_TRANSPOSE t, MKL_INT n, MKL_INT k,
                   float alpha, const float *ap, MKL_INT ldap, float beta,
                   float *cp, MKL_INT ldcp, MKL_COMPACT_PACK f, MKL_INT nm)
-{ cqr_mkl_ssyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm); }
+{
+    cqr_mkl_ssyrk_compact(l, u, t, n, k, alpha, ap, ldap, beta, cp, ldcp, f, nm);
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -135,8 +159,14 @@ struct MatrixView {
 template <class T> std::span<const T> cspan(const T *p, size_t n) { return {p, n}; }
 
 /* index of the max-magnitude element (BLAS i?amax), precision-dispatched */
-CBLAS_INDEX iamax(MKL_INT n, const float  *x) { return cblas_isamax(n, x, 1); }
-CBLAS_INDEX iamax(MKL_INT n, const double *x) { return cblas_idamax(n, x, 1); }
+CBLAS_INDEX iamax(MKL_INT n, const float *x)
+{
+    return cblas_isamax(n, x, 1);
+}
+CBLAS_INDEX iamax(MKL_INT n, const double *x)
+{
+    return cblas_idamax(n, x, 1);
+}
 
 /* Reductions stay in the operand precision T (no float -> double promotion):
  * maxabs is exactly |x[i?amax]|; maxdiff has no single BLAS call, so it folds
