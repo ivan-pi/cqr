@@ -1,7 +1,9 @@
 # FindMKLCompact.cmake
 #
-# Locate the Intel MKL Compact-format API and expose it as the imported target
-#   MKL::Compact  (BLAS link libraries + the include dir with mkl_compact.h).
+# Locate the Intel MKL Compact-format API and expose two imported targets:
+#
+#   MKL::CompactHeaders  -- the MKL include dir only (no link line).
+#   MKL::Compact         -- the headers plus the BLAS link line.
 #
 # The compact routines (mkl_get_format_compact, mkl_?geqrf_compact, ...) are an
 # Intel MKL extension: they are reached through the ordinary BLAS link line, so
@@ -76,8 +78,15 @@ find_package_handle_standard_args(MKLCompact
 
 if(MKLCompact_FOUND)
   find_package(Threads QUIET)
+
+  # Headers-only target: the include dir with mkl_compact.h, no link line.
+  add_library(MKL::CompactHeaders INTERFACE IMPORTED)
+  set_target_properties(MKL::CompactHeaders PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${MKLCompact_INCLUDE_DIR}")
+
+  # Full target: the headers plus the BLAS link line for the compact routines.
   add_library(MKL::Compact INTERFACE IMPORTED)
-  set(_link ${_blas_link})
+  set(_link MKL::CompactHeaders ${_blas_link})
   if(Threads_FOUND)
     list(APPEND _link Threads::Threads)
   endif()
@@ -86,7 +95,6 @@ if(MKLCompact_FOUND)
   endif()
   list(APPEND _link m)
   set_target_properties(MKL::Compact PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${MKLCompact_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES "${_link}")
 endif()
 

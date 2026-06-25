@@ -65,6 +65,7 @@ not part of the supported interface:
 | `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
 | `src/cqr_compact_dispatch.cpp` | Portable C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the kernel. |
+| `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 | `src/test_cqr_compact.cpp` | Self-contained correctness/bench test (no BLAS). |
 | `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
 

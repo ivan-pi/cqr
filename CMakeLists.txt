@@ -59,7 +59,7 @@ if(CQR_WITH_MKL)
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
   target_link_libraries(cqr_mkl_ext
-    PUBLIC  MKL::Compact          # MKL types in the public header
+    PUBLIC  MKL::CompactHeaders   # MKL types in the public header (no link dep)
     PRIVATE cqr_compact cqr_flags)
   add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
 endif()
