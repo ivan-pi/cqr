@@ -32,6 +32,7 @@
 #include "cqr_mkl_ext.h"
 #include "cqr_mkl_alloc.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -226,9 +227,7 @@ int main(int argc, char **argv)
 
     /* Square sizes spanning the target range (dense in the emphasized region
      * below 170, then a few larger to show where the crossover happens). */
-    const int sizes[] = {8, 16, 24, 32, 48, 64, 96, 128, 170, 256, 384, 500};
-    const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
-    const double eps = std::numeric_limits<double>::epsilon();
+    constexpr std::array sizes = {8, 16, 24, 32, 48, 64, 96, 128, 170, 256, 384, 500};
 
     std::printf("QR factorization throughput: cqr_mkl_dgeqrf_compact vs "
                 "mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf\n");
@@ -241,8 +240,8 @@ int main(int argc, char **argv)
                 "---+---------+------------\n");
 
     double log_speed_vs_lapack = 0.0;
-    for (int si = 0; si < nsizes; ++si) {
-        const int n = sizes[si], m = n, k = n;
+    for (int n : sizes) {
+        const int m = n, k = n;
         Pool P(m, n, nmat);
         const int ngroups = (nmat + V - 1) / V;
 
@@ -271,18 +270,18 @@ int main(int argc, char **argv)
 
         std::vector<double> pool_work; /* standard-layout copy */
 
-        double t_cqr = best_time(
-            reps, [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); },
-            [&] {
-                factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
-                               lwork_cqr);
-            });
-        double t_mkl = best_time(
-            reps, [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); },
-            [&] {
-                factor_compact(false, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
-                               lwork_mkl);
-            });
+        /* both compact paths factor in place, so restore the packed input
+         * (untimed) before each timed pass */
+        auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
+
+        double t_cqr = best_time(reps, restore, [&] {
+            factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
+                           lwork_cqr);
+        });
+        double t_mkl = best_time(reps, restore, [&] {
+            factor_compact(false, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
+                           lwork_mkl);
+        });
         double t_lap = best_time(
             reps, [&] { pool_work = P.a; },
             [&] { factor_unbatched(pool_work.data(), m, n, nmat); });
@@ -296,12 +295,11 @@ int main(int argc, char **argv)
         std::printf("%4d | %11.2f | %11.2f | %10.2f | %13.2f | %9.2fx | %6.2fx | %.2e\n",
                     n, gflops_cqr, nmat / t_cqr / 1e6, nmat / t_mkl / 1e6,
                     nmat / t_lap / 1e6, sp_lap, sp_mkl, rel);
-        (void)eps;
     }
 
     std::printf("-----+-------------+-------------+------------+---------------+---------"
                 "---+---------+------------\n");
     std::printf("geometric-mean speedup (cqr compact vs per-matrix LAPACK): %.2fx\n",
-                std::exp(log_speed_vs_lapack / nsizes));
+                std::exp(log_speed_vs_lapack / sizes.size()));
     return 0;
 }

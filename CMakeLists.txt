@@ -23,7 +23,7 @@ endif()
 # extensions are needed (the kernel's vector_size attribute compiles under
 # strict -std=c++17). Optimization flags are the caller's to choose: for a
 # performance build pass them through CMAKE_CXX_FLAGS, e.g.
-#   cmake -S . -B build -DCMAKE_CXX_FLAGS="-march=native"
+#   cmake -S . -B build -DCMAKE_CXX_FLAGS="-O3 -march=native"
 # so the SIMD kernels target the host's widest vectors.
 
 # ---------------------------------------------------------------------------

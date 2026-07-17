@@ -263,6 +263,6 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
 The compact batched factorization is benchmarked against a one-matrix-at-a-time
 `LAPACKE_dgeqrf` loop (the standard layout) and, when available, against MKL's
 own `mkl_dgeqrf_compact`, over pools of small matrices across the target size
-range. It reports per-size throughput and a geometric-mean speedup, and is
-accuracy-gated against per-matrix LAPACK so it doubles as an integration test.
-The outer batch loop is parallelized with OpenMP.
+range. It reports per-size throughput and a geometric-mean speedup, and checks
+the compact factors against per-matrix LAPACK so it doubles as an integration
+test. The outer batch loop is parallelized with OpenMP.

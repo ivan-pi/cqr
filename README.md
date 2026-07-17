@@ -48,7 +48,7 @@ same AVX-512 MKL selects at runtime):
 
 ```sh
 cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CXX_FLAGS="-march=native"
+      -DCMAKE_CXX_FLAGS="-O3 -march=native"
 ```
 
 Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
@@ -60,12 +60,13 @@ Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
   -> `mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
 * `bench_qr_compact [nmat] [reps]` - throughput of the batched *solve* pipeline
   vs. the one-matrix-at-a-time LAPACK path over pools of small matrices (order
-  10-100), reporting a geometric-mean speedup. Accuracy-gated.
+  10-100), reporting a geometric-mean speedup. Both paths are checked against the
+  known solution.
 * `bench_geqrf_compact [nmat] [reps]` - throughput of the *factorization*:
   `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs per-matrix
   `LAPACKE_dgeqrf`, across the target square-size range, reporting GFLOP/s and a
-  geometric-mean speedup. Accuracy-gated against LAPACK. For a fair comparison,
-  build with host-tuned flags (e.g. `-DCMAKE_CXX_FLAGS="-march=native"`) so the
+  geometric-mean speedup, checked against LAPACK. For a fair comparison, build
+  with host-tuned flags (e.g. `-DCMAKE_CXX_FLAGS="-O3 -march=native"`) so the
   compact kernel uses the full vector width, as MKL's runtime dispatch does.
 
 All are registered with CTest (`example_solve_qr_compact`,

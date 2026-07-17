@@ -24,7 +24,7 @@ target the host's widest vectors:
 
 ```sh
 cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CXX_FLAGS="-march=native"
+      -DCMAKE_CXX_FLAGS="-O3 -march=native"
 ```
 
 Correctness is independent of these flags; only throughput changes.
@@ -38,7 +38,9 @@ enforced by `.clang-format`. Format changed C++ before committing:
 clang-format -i src/*.h src/*.hpp src/*.cpp examples/*.cpp
 ```
 
-Keep formatting-only changes in their own commit, separate from content.
+Run it before committing so changes land already formatted. Hand-aligned tables
+and compact one-liners that clang-format would expand are fenced with
+`// clang-format off` / `// clang-format on`; leave those fences in place.
 
 ## Conventions worth knowing
 

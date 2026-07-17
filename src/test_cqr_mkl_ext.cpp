@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <limits>
+#include <random>
 #include <vector>
 #include <algorithm>
 
@@ -47,9 +48,12 @@ int vlen(MKL_COMPACT_PACK fmt)
     return cqr::detail::vlen_for_format<double>(fmt);
 }
 
+std::mt19937_64 rng(42);
+
 double frand()
 {
-    return 2.0 * std::rand() / (double)RAND_MAX - 1.0;
+    static std::uniform_real_distribution<double> dist(-1.0, 1.0);
+    return dist(rng);
 }
 
 /* L1 (max column sum) norm of a column-major m x n matrix */
@@ -297,7 +301,6 @@ int suite2(int nm, int n, int nrhs)
 
 int main()
 {
-    std::srand(42);
     std::printf("MKL compact format = %d, V(double) = %d\n",
                 (int)mkl_get_format_compact(), vlen(mkl_get_format_compact()));
 
