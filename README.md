@@ -14,8 +14,9 @@ an Intel MKL-style API:
   is no supported way to apply `Q` (or `Q^T`) to a batch. cqr fills that gap. See
   its [design document](cqr_mkl_dormqr_compact_design.md).
 
-Together (`?geqrf` -> `?ormqr` -> `?trsm`) they form an all-open Compact-format
-QR pipeline. FP64 is the focus; FP32 is provided for symmetry.
+Both routines come in single and double precision. Paired with MKL's own
+`mkl_?trsm_compact`, they factor and solve batched systems in the compact
+format.
 
 ## Prerequisites
 

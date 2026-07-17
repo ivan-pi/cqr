@@ -12,8 +12,9 @@ AVX-512 registers -- so it can be used, studied, and tuned without depending on
 MKL's closed compact kernels.
 
 The routine produces the reflectors `(H, tau)` that `cqr_mkl_?ormqr_compact`
-(also in this project) applies; followed by a triangular solve, the three chain
-into a complete Compact-format QR pipeline:
+(also in this project) applies; with MKL's own `mkl_?trsm_compact` for the
+triangular solve, the three together factor and solve batched systems in the
+compact format:
 
 ```
 cqr_mkl_dgeqrf_compact(A -> H, tau);          // A = Q R
@@ -41,7 +42,7 @@ void cqr_mkl_dgeqrf_compact (
 The signature is identical to
 [`mkl_dgeqrf_compact`](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/mkl-geqrf-compact.html),
 so the routine is a drop-in alternative within the MKL Compact ecosystem. Both
-real precisions are provided: `cqr_mkl_dgeqrf_compact` (double, the focus) and
+real precisions are provided: `cqr_mkl_dgeqrf_compact` (double) and
 `cqr_mkl_sgeqrf_compact` (single).
 
 ## 3. Description

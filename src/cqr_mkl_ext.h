@@ -16,10 +16,10 @@
  * application of its reflectors. cqr_mkl_?geqrf_compact is a portable, open
  * alternative to mkl_?geqrf_compact producing those reflectors -- signature- and
  * storage-compatible, so the two can be mixed freely with MKL's native compact
- * routines. Together (?geqrf -> ?ormqr -> mkl_?trsm_compact) they form an
- * all-open Compact-format QR pipeline. The API mirrors MKL's native compact
- * ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference
- * in cqr_mkl_dormqr_compact_design.md and cqr_mkl_dgeqrf_compact_design.md.
+ * routines. With MKL's own mkl_?trsm_compact they factor and solve batched
+ * systems in the compact format. The API mirrors MKL's native compact ecosystem
+ * (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference in
+ * cqr_mkl_dormqr_compact_design.md and cqr_mkl_dgeqrf_compact_design.md.
  *
  * Typical use -- the batched AX = B solver:
  *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
