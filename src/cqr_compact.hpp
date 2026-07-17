@@ -189,9 +189,9 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
 
     assert(k <= m && ldap >= m && ldbp >= m);
 
-    const VT *A   = reinterpret_cast<const VT *>(a_);
-    const VT *tau = reinterpret_cast<const VT *>(tau_);
-    VT       *B   = reinterpret_cast<VT *>(b_);
+    const VT *__restrict A   = reinterpret_cast<const VT *>(a_);
+    const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
+    VT       *__restrict B   = reinterpret_cast<VT *>(b_);
 
     const bool fwd = (dir == Direction::Forward);
 
@@ -267,7 +267,7 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
     assert(k <= spec_len);
     assert(A.special && A.panel && C.special && C.panel);
 
-    const VT *tau = reinterpret_cast<const VT *>(tau_);
+    const VT *__restrict tau = reinterpret_cast<const VT *>(tau_);
     const bool fwd = (dir == Direction::Forward);
 
     for (Int s = 0; s < k; ++s) {
