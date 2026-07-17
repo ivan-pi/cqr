@@ -54,13 +54,12 @@ using clk = std::chrono::steady_clock;
 using batmat::index_t;
 using batmat::real_t;                       /* double in batmat's default config */
 using batmat::linalg::StorageOrder;
-using batmat::matrix::Matrix;
+using batmat::linalg::matrix;               /* matrix<T, Abi, Order> alias (uview.hpp) */
 using cqr::detail::vlen_for_format;
 
-/* AVX-512 double lane width (8); batmat and cqr both interleave 8 matrices. */
+/* AVX-512 double lane width (8); batmat and cqr both interleave 8 matrices.
+ * These are exactly the types batmat's own benchmarks/geqrf.cpp uses. */
 using abi8 = batmat::datapar::deduced_abi<real_t, 8>;
-template <StorageOrder O>
-using bmat = Matrix<real_t, index_t, typename abi8::size_type, index_t, O>;
 
 static_assert(std::is_same_v<real_t, double>,
               "this benchmark compares double precision; build batmat with real_t=double");
@@ -89,10 +88,10 @@ double run_batmat(int n, int depth, int reps)
     std::mt19937 rng{12345};
     std::uniform_real_distribution<real_t> uni{-1, 1};
 
-    bmat<StorageOrder::ColMajor> A{{.depth = depth, .rows = n, .cols = n}};
-    bmat<StorageOrder::ColMajor> B{{.depth = depth, .rows = n, .cols = n}};
+    matrix<real_t, abi8, StorageOrder::ColMajor> A{{.depth = depth, .rows = n, .cols = n}};
+    matrix<real_t, abi8, StorageOrder::ColMajor> B{{.depth = depth, .rows = n, .cols = n}};
     auto [rw, cw] = batmat::linalg::geqrf_size_W(A.batch(0));
-    Matrix<real_t, index_t, typename abi8::size_type, index_t> W{{.depth = depth, .rows = rw, .cols = cw}};
+    matrix<real_t, abi8> W{{.depth = depth, .rows = rw, .cols = cw}};
     std::ranges::generate(A, [&] { return uni(rng); });
 
     return best_time(reps, [&] {
