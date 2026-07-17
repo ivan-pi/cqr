@@ -77,22 +77,37 @@ std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
     return p;
 }
 
-/* build a random, reasonably-conditioned m x n matrix (column-major), with the
- * competition's column-scaling knob cond (columns *= logspace(0,-cond,n)). */
-void gen_matrix(double *A, int m, int n, double cond)
+/* Input structures (a subset of the GPU competition's stress set). The QR
+ * residual and orthogonality are backward-stable quantities, so they must hold
+ * to working precision for every structure -- rank deficiency and near-collinear
+ * columns included -- exactly as they do for dense LAPACK. */
+enum Structure { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
+
+/* build a random m x n matrix (column-major). For DENSE, a diagonal boost tames
+ * the conditioning and cond applies the competition's column scaling
+ * (columns *= logspace(0,-cond,n)). The structured variants make the last column
+ * a (near-)copy of the first, so the trailing reflector sees a (near-)zero
+ * sub-diagonal norm -- the branch the masked larfg must get right. */
+void gen_matrix(double *A, int m, int n, double cond, Structure s = DENSE)
 {
     for (int i = 0; i < m * n; ++i) A[i] = frand();
-    for (int i = 0; i < std::min(m, n); ++i) A[i + (size_t)i * m] += 2.0;  /* tame */
-    if (cond > 0.0)
-        for (int j = 0; j < n; ++j) {
-            double s = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
-            for (int i = 0; i < m; ++i) A[i + (size_t)j * m] *= s;
-        }
+    if (s == DENSE) {
+        for (int i = 0; i < std::min(m, n); ++i) A[i + (size_t)i * m] += 2.0;
+        if (cond > 0.0)
+            for (int j = 0; j < n; ++j) {
+                double sc = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
+                for (int i = 0; i < m; ++i) A[i + (size_t)j * m] *= sc;
+            }
+    } else if (n >= 2) {
+        const double noise = (s == NEAR_COLLINEAR) ? 1e-9 : 0.0;   /* exact dup if 0 */
+        for (int i = 0; i < m; ++i)
+            A[i + (size_t)(n - 1) * m] = A[i] * (1.0 + noise * frand());
+    }
 }
 
 /* ---------------- Suite 1: invariants vs dense LAPACK (col-major) ------ */
 
-int suite1(int nm, int m, int n, double cond)
+int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = vlen(fmt);
@@ -100,7 +115,7 @@ int suite1(int nm, int m, int n, double cond)
     const size_t sA = (size_t)m * n, sT = (size_t)k;
 
     std::vector<double> A(nm * sA);
-    for (int v = 0; v < nm; ++v) gen_matrix(A.data() + v * sA, m, n, cond);
+    for (int v = 0; v < nm; ++v) gen_matrix(A.data() + v * sA, m, n, cond, structure);
 
     /* pack A, factor with the routine under test, unpack (H, tau) */
     auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
@@ -165,8 +180,10 @@ int suite1(int nm, int m, int n, double cond)
     const double rtol_res = 20.0 * n * eps, rtol_orth = 100.0 * n * eps;
     bool ok = (worst_res <= rtol_res) && (worst_orth <= rtol_orth);
     fails += !ok;
-    std::printf("  [suite1] V=%-2d nm=%-2d m=%-3d n=%-3d cond=%.0f | res %.2e (%.1e) orth %.2e (%.1e) el %.1e %s\n",
-                V, nm, m, n, cond, worst_res, rtol_res, worst_orth, rtol_orth, worst_el,
+    const char *sname = structure == DENSE ? "dense" :
+                        structure == RANK_DEFICIENT ? "rankdef" : "collin";
+    std::printf("  [suite1] V=%-2d nm=%-2d m=%-3d n=%-3d cond=%.0f %-8s| res %.2e (%.1e) orth %.2e (%.1e) el %.1e %s\n",
+                V, nm, m, n, cond, sname, worst_res, rtol_res, worst_orth, rtol_orth, worst_el,
                 ok ? "OK" : "FAIL");
     return fails;
 }
@@ -310,6 +327,10 @@ int main()
     fails += suite1(8,  20, 64, 0.0);      /* wide */
     fails += suite1(8,  30, 30, 4.0);      /* column-scaled (dynamic range) */
     fails += suite1(8,  128, 128, 0.0);
+    /* conditioning-robustness stress: backward-stable gates must still hold */
+    fails += suite1(8,  40, 40, 0.0, RANK_DEFICIENT);
+    fails += suite1(8,  40, 40, 0.0, NEAR_COLLINEAR);
+    fails += suite1(11, 60, 24, 0.0, RANK_DEFICIENT);   /* wide-ish, padded group */
 
     /* Suite 2: cross-check vs mkl_dgeqrf_compact, both layouts */
     fails += suite2(MKL_COL_MAJOR, 8,  30, 30);
