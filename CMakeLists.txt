@@ -99,6 +99,15 @@ if(CQR_WITH_MKL)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
   endif()
+
+  # Throughput benchmark of the QR factorization itself: cqr_mkl_dgeqrf_compact
+  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (design doc benchmark 1).
+  add_executable(bench_geqrf_compact examples/bench_geqrf_compact.cpp)
+  target_link_libraries(bench_geqrf_compact
+    PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -143,5 +152,11 @@ if(CQR_BUILD_TESTS)
     # the SIMD vector length, so the partial last group is exercised too.
     add_test(NAME bench_qr_compact_integration COMMAND bench_qr_compact 33 1)
     set_tests_properties(bench_qr_compact_integration PROPERTIES LABELS "integration")
+
+    # The factorization benchmark is accuracy-gated against per-matrix LAPACK,
+    # so register a small, quick run as an integration test too. 33 exercises a
+    # padded final group.
+    add_test(NAME bench_geqrf_compact_integration COMMAND bench_geqrf_compact 33 1)
+    set_tests_properties(bench_geqrf_compact_integration PROPERTIES LABELS "integration")
   endif()
 endif()
