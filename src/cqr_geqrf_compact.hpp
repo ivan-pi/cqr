@@ -61,48 +61,46 @@ template <typename T> using int_bits_t = typename int_bits<T>::type;
 template <typename T, int V>
 using mask_t = typename pack<int_bits_t<T>, V>::type;
 
-template <typename T, int V>
-inline typename pack<T, V>::type vzero() noexcept
-{
-    typename pack<T, V>::type z{};   /* value-initialization zeroes every lane */
-    return z;
-}
+/* These V-wide helpers take and return their vectors by reference. Passing a
+ * GNU vector by value would, without -march, commit the base-ISA vector
+ * argument/return ABI, which GCC and Clang (rightly) flag via -Wpsabi; a
+ * reference is just a pointer, so there is no such boundary -- and once inlined
+ * the codegen is identical -- keeping the build warning-clean with no compiler
+ * flag. Results are written through an out-parameter (named first). */
 
-/* sqrt: a short lane loop the compiler lowers to one vsqrt* (validated on GCC
- * and Clang). Only ever called once per column, so its cost is negligible next
- * to the O(n^2)/O(n^3) vector arithmetic. */
+/* r := sqrt(x), lane-wise. The short loop lowers to one vsqrt* on GCC/Clang; it
+ * runs once per column, negligible next to the O(n^2)/O(n^3) vector arithmetic. */
 template <typename T, int V>
-inline typename pack<T, V>::type vsqrt(typename pack<T, V>::type x) noexcept
+inline void vsqrt(typename pack<T, V>::type &r,
+                  const typename pack<T, V>::type &x) noexcept
 {
-    typename pack<T, V>::type r;
     for (int v = 0; v < V; ++v) r[v] = std::sqrt(x[v]);
-    return r;
 }
 
-/* Mask lanes are all-ones (true) or zero (false), as produced by the GNU
- * vector relational operators. Returns `a` where the mask is true, else `b`.
- * The blend runs on the may-alias integer view, so it survives on any T-aligned
- * buffer without a strict-aliasing violation. */
+/* r := mask ? a : b, lane-wise. Mask lanes are all-ones (true) or zero (false),
+ * as produced by the GNU vector relational operators. The blend runs on the
+ * may-alias integer view, so it survives on any T-aligned buffer without a
+ * strict-aliasing violation. */
 template <typename T, int V>
-inline typename pack<T, V>::type
-vselect(mask_t<T, V> mask,
-        typename pack<T, V>::type a,
-        typename pack<T, V>::type b) noexcept
+inline void vselect(typename pack<T, V>::type &r,
+                    const mask_t<T, V> &mask,
+                    const typename pack<T, V>::type &a,
+                    const typename pack<T, V>::type &b) noexcept
 {
     using MT = mask_t<T, V>;
-    MT ai = reinterpret_cast<MT &>(a);
-    MT bi = reinterpret_cast<MT &>(b);
-    MT r  = (ai & mask) | (bi & ~mask);
-    return reinterpret_cast<typename pack<T, V>::type &>(r);
+    const MT ai = reinterpret_cast<const MT &>(a);
+    const MT bi = reinterpret_cast<const MT &>(b);
+    const MT rr = (ai & mask) | (bi & ~mask);
+    r = reinterpret_cast<const typename pack<T, V>::type &>(rr);
 }
 
 /* ------------------------------------------------------------------ */
 /* Branch-free larfg for one pack (V matrices at once).                */
 /*                                                                     */
 /* Given the diagonal x0 = A(kk,kk) and tail = sum_{i>kk} A(i,kk)^2     */
-/* (the squared norm of the sub-diagonal part of column kk), produce    */
-/* per lane the LAPACK dlarfg quantities, with the xnorm==0 branch      */
-/* folded into a mask so divergent lanes cost nothing:                  */
+/* (the squared norm of the sub-diagonal part of column kk), write per   */
+/* lane the LAPACK dlarfg quantities, with the xnorm==0 branch folded    */
+/* into a mask so divergent lanes cost nothing:                          */
 /*   rdiag -> A(kk,kk) on exit  (beta if there is a reflector, else x0),*/
 /*   tau   -> the reflector scalar (0 if the column is already zeroed),  */
 /*   inv   -> 1/(x0 - beta) to scale the reflector body (0 when tau=0).  */
@@ -112,22 +110,22 @@ vselect(mask_t<T, V> mask,
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V>
-struct reflector { typename pack<T, V>::type rdiag, tau, inv; };
-
-template <typename T, int V>
-inline reflector<T, V> larfg_pack(typename pack<T, V>::type x0,
-                                  typename pack<T, V>::type tail) noexcept
+inline void larfg_pack(const typename pack<T, V>::type &x0,
+                       const typename pack<T, V>::type &tail,
+                       typename pack<T, V>::type &rdiag,
+                       typename pack<T, V>::type &tau,
+                       typename pack<T, V>::type &inv) noexcept
 {
     using VT = typename pack<T, V>::type;
-    const VT zero = vzero<T, V>();
-    const VT norm = vsqrt<T, V>(x0 * x0 + tail);
-    const VT beta = vselect<T, V>(x0 >= 0, -norm, norm);   /* -copysign(norm, x0) */
-    const mask_t<T, V> has = (tail > 0);                   /* is there anything to zero? */
-    reflector<T, V> h;
-    h.tau   = vselect<T, V>(has, (beta - x0) / beta, zero);
-    h.inv   = vselect<T, V>(has, T(1) / (x0 - beta), zero);
-    h.rdiag = vselect<T, V>(has, beta, x0);
-    return h;
+    const VT zero = VT{};
+    VT norm;
+    vsqrt<T, V>(norm, x0 * x0 + tail);
+    VT beta;
+    vselect<T, V>(beta, x0 >= 0, -norm, norm);      /* beta = -copysign(norm, x0) */
+    const mask_t<T, V> has = (tail > 0);            /* is there anything to zero? */
+    vselect<T, V>(tau,   has, (beta - x0) / beta, zero);
+    vselect<T, V>(inv,   has, T(1) / (x0 - beta), zero);
+    vselect<T, V>(rdiag, has, beta, x0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -155,13 +153,13 @@ void geqrf_compact_group(Int m, Int n, T *a_, Int ldap, T *tau_)
 
         /* build reflector H(kk) from column kk, rows kk..m-1 */
         const VT x0 = akk[kk];
-        VT tail = vzero<T, V>();
+        VT tail = VT{};
         for (Int i = kk + 1; i < m; ++i) { const VT a = akk[i]; tail += a * a; }
-        const reflector<T, V> h = larfg_pack<T, V>(x0, tail);
-        const VT t = h.tau;
+        VT rdiag, t, inv;
+        larfg_pack<T, V>(x0, tail, rdiag, t, inv);
         tau[kk] = t;
-        for (Int i = kk + 1; i < m; ++i) akk[i] = akk[i] * h.inv;  /* reflector body */
-        akk[kk] = h.rdiag;                                         /* R diagonal */
+        for (Int i = kk + 1; i < m; ++i) akk[i] = akk[i] * inv;  /* reflector body */
+        akk[kk] = rdiag;                                         /* R diagonal */
 
         /* apply H(kk) = I - t v v^T (v(kk)=1 implicit) to trailing columns;
          * 4 columns at a time so each reflector load akk[i] is reused 4x */
@@ -222,13 +220,13 @@ void geqrf_compact_group_strided(Int m, Int n,
     for (Int kk = 0; kk < k; ++kk) {
         /* build reflector H(kk) from column kk, rows kk..m-1 */
         const VT x0 = A(kk, kk);
-        VT tail = vzero<T, V>();
+        VT tail = VT{};
         for (Int i = kk + 1; i < m; ++i) { const VT a = A(i, kk); tail += a * a; }
-        const reflector<T, V> h = larfg_pack<T, V>(x0, tail);
-        const VT t = h.tau;
+        VT rdiag, t, inv;
+        larfg_pack<T, V>(x0, tail, rdiag, t, inv);
         tau[kk] = t;
-        for (Int i = kk + 1; i < m; ++i) A(i, kk) = A(i, kk) * h.inv;
-        A(kk, kk) = h.rdiag;
+        for (Int i = kk + 1; i < m; ++i) A(i, kk) = A(i, kk) * inv;
+        A(kk, kk) = rdiag;
 
         /* apply H(kk) to trailing columns, 4 at a time */
         Int j = kk + 1;

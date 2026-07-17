@@ -26,18 +26,8 @@ endif()
 
 # Host-tuned codegen for the SIMD kernel (opt-in; correctness is independent).
 add_library(cqr_flags INTERFACE)
-
-# The geqrf larfg helpers return V-wide GNU vectors by value; without -march the
-# base-ISA vector-return ABI differs, which GCC/Clang note via -Wpsabi. These are
-# internal detail:: inlines (the public API is plain double*/int), so there is no
-# real ABI surface -- silence the benign note to keep the build clean.
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-Wno-psabi" CQR_HAS_WNO_PSABI)
-if(CQR_HAS_WNO_PSABI)
-  target_compile_options(cqr_flags INTERFACE -Wno-psabi)
-endif()
-
 if(CQR_ENABLE_NATIVE)
+  include(CheckCXXCompilerFlag)
   check_cxx_compiler_flag("-march=native" CQR_HAS_MARCH_NATIVE)
   if(CQR_HAS_MARCH_NATIVE)
     target_compile_options(cqr_flags INTERFACE -march=native)
