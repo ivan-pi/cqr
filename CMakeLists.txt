@@ -15,6 +15,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(CQR_WITH_MKL        "Build the Intel MKL compact extension + MKL tests" ON)
 option(CQR_BUILD_TESTS     "Build tests and register them with CTest"          ON)
 option(CQR_ENABLE_NATIVE   "Compile for the host CPU (-march/-mcpu=native)"    OFF)
+# Optional external yardstick: the batmat comparison benchmark (design doc
+# benchmark 2). OFF by default -- it needs a C++23 toolchain and a batmat install
+# (batmat::batmat + guanaqo::blas), usually provisioned via batmat's Conan flow.
+option(CQR_WITH_BATMAT     "Build the optional batmat comparison benchmark"    OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -107,6 +111,18 @@ if(CQR_WITH_MKL)
     PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
+
+  # Optional benchmark 2: head-to-head vs the batmat project's geqrf. Opt-in
+  # (CQR_WITH_BATMAT) because batmat brings a C++23 toolchain and its own
+  # dependency stack; not part of the default build or CTest.
+  if(CQR_WITH_BATMAT)
+    find_package(batmat REQUIRED)
+    find_package(guanaqo REQUIRED COMPONENTS BLAS)
+    add_executable(bench_geqrf_batmat examples/bench_geqrf_batmat.cpp)
+    target_link_libraries(bench_geqrf_batmat
+      PRIVATE cqr_mkl_ext MKL::Compact cqr_flags batmat::batmat guanaqo::blas)
+    target_compile_features(bench_geqrf_batmat PRIVATE cxx_std_23)
   endif()
 endif()
 
