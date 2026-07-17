@@ -92,15 +92,14 @@ namespace detail {
  * compiler that supplies these attributes -- GCC, Clang, Intel icpx/icpc --
  * uses the vector type; any other stops at the #error below. */
 #if defined(__has_attribute)
-#  if __has_attribute(vector_size) && __has_attribute(__may_alias__)
-#    define CQR_HAS_GNU_VECTORS 1
-#  endif
+#if __has_attribute(vector_size) && __has_attribute(__may_alias__)
+#define CQR_HAS_GNU_VECTORS 1
+#endif
 #endif
 
 #if defined(CQR_HAS_GNU_VECTORS)
 
-template <typename T, int V>
-struct pack {
+template <typename T, int V> struct pack {
     /* GNU vector_size requires a power-of-two byte width; the supported
      * interleave widths are 2/4/8/16, matching the C API. Check it here -- the
      * single chokepoint -- so a bad width fails with this message instead of a
@@ -111,8 +110,8 @@ struct pack {
      * is valid on any T-aligned buffer (unaligned vector loads are free
      * on all modern hardware); may_alias exempts it from strict-aliasing
      * violations when viewing a plain T array. */
-    using type __attribute__((vector_size(V * sizeof(T)),
-                              aligned(alignof(T)), may_alias)) = T;
+    using type
+        __attribute__((vector_size(V * sizeof(T)), aligned(alignof(T)), may_alias)) = T;
 };
 
 #else
@@ -147,30 +146,32 @@ enum class Direction { Forward, Backward };
 /*   panel   -- the orthogonal axis, register-blocked 4 at a time.     */
 /* ------------------------------------------------------------------ */
 
-template <typename VT, typename Int = int>
-struct BatchView {
-    VT          *const data    = nullptr;
-    const std::size_t  special = 0;   /* stride along the swept (reflector) axis */
-    const std::size_t  panel   = 0;   /* stride along the orthogonal panel axis  */
+template <typename VT, typename Int = int> struct BatchView {
+    VT *const data = nullptr;
+    const std::size_t special = 0; /* stride along the swept (reflector) axis */
+    const std::size_t panel = 0;   /* stride along the orthogonal panel axis  */
 
-    VT &operator()(Int i, Int p) const noexcept {
-        return data[static_cast<std::size_t>(i) * special
-                  + static_cast<std::size_t>(p) * panel];
+    VT &operator()(Int i, Int p) const noexcept
+    {
+        return data[static_cast<std::size_t>(i) * special +
+                    static_cast<std::size_t>(p) * panel];
     }
 };
 
 /* Reinterpret a packed T buffer as a group view of V-wide pack elements. */
 template <typename T, int V, typename Int = int>
 BatchView<const typename pack<T, V>::type, Int>
-make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept {
+make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept
+{
     using VT = typename pack<T, V>::type;
-    return { reinterpret_cast<const VT *>(p), special, panel };
+    return {reinterpret_cast<const VT *>(p), special, panel};
 }
 template <typename T, int V, typename Int = int>
-BatchView<typename pack<T, V>::type, Int>
-make_view(T *p, std::size_t special, std::size_t panel) noexcept {
+BatchView<typename pack<T, V>::type, Int> make_view(T *p, std::size_t special,
+                                                    std::size_t panel) noexcept
+{
     using VT = typename pack<T, V>::type;
-    return { reinterpret_cast<VT *>(p), special, panel };
+    return {reinterpret_cast<VT *>(p), special, panel};
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,10 +179,8 @@ make_view(T *p, std::size_t special, std::size_t panel) noexcept {
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
-                         const T *a_, Int ldap,
-                         const T *tau_,
-                         T *b_, Int ldbp)
+void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k, const T *a_, Int ldap,
+                         const T *tau_, T *b_, Int ldbp)
 {
     using VT = typename pack<T, V>::type;
     static_assert(std::is_floating_point<T>::value,
@@ -189,16 +188,16 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
 
     assert(k <= m && ldap >= m && ldbp >= m);
 
-    const VT *A   = reinterpret_cast<const VT *>(a_);
+    const VT *A = reinterpret_cast<const VT *>(a_);
     const VT *tau = reinterpret_cast<const VT *>(tau_);
-    VT       *B   = reinterpret_cast<VT *>(b_);
+    VT *B = reinterpret_cast<VT *>(b_);
 
     const bool fwd = (dir == Direction::Forward);
 
     for (Int s = 0; s < k; ++s) {
-        const Int kk = fwd ? s : k - 1 - s;     /* Q^T: ascending, Q: descending */
+        const Int kk = fwd ? s : k - 1 - s; /* Q^T: ascending, Q: descending */
         const VT *ak = A + static_cast<std::size_t>(kk) * ldap;
-        const VT  t  = tau[kk];
+        const VT t = tau[kk];
 
         Int j = 0;
 
@@ -212,24 +211,33 @@ void ormqr_compact_group(Direction dir, Int m, Int nrhs, Int k,
             VT w0 = b0[kk], w1 = b1[kk], w2 = b2[kk], w3 = b3[kk];
             for (Int i = kk + 1; i < m; ++i) {
                 const VT av = ak[i];
-                w0 += av * b0[i]; w1 += av * b1[i];
-                w2 += av * b2[i]; w3 += av * b3[i];
+                w0 += av * b0[i];
+                w1 += av * b1[i];
+                w2 += av * b2[i];
+                w3 += av * b3[i];
             }
-            b0[kk] -= t * w0; b1[kk] -= t * w1;
-            b2[kk] -= t * w2; b3[kk] -= t * w3;
+            b0[kk] -= t * w0;
+            b1[kk] -= t * w1;
+            b2[kk] -= t * w2;
+            b3[kk] -= t * w3;
 
-            w0 *= t; w1 *= t; w2 *= t; w3 *= t;  /* fold tau into w */
+            w0 *= t;
+            w1 *= t;
+            w2 *= t;
+            w3 *= t; /* fold tau into w */
             for (Int i = kk + 1; i < m; ++i) {
                 const VT av = ak[i];
-                b0[i] -= av * w0; b1[i] -= av * w1;
-                b2[i] -= av * w2; b3[i] -= av * w3;
+                b0[i] -= av * w0;
+                b1[i] -= av * w1;
+                b2[i] -= av * w2;
+                b3[i] -= av * w3;
             }
         }
 
         /* remainder columns */
         for (; j < nrhs; ++j) {
             VT *bj = B + static_cast<std::size_t>(j) * ldbp;
-            VT  w  = bj[kk];
+            VT w = bj[kk];
             for (Int i = kk + 1; i < m; ++i)
                 w += ak[i] * bj[i];
             bj[kk] -= t * w;
@@ -271,8 +279,8 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
     const bool fwd = (dir == Direction::Forward);
 
     for (Int s = 0; s < k; ++s) {
-        const Int kk = fwd ? s : k - 1 - s;     /* Q^T: ascending, Q: descending */
-        const VT  t  = tau[kk];
+        const Int kk = fwd ? s : k - 1 - s; /* Q^T: ascending, Q: descending */
+        const VT t = tau[kk];
 
         Int p = 0;
 
@@ -281,21 +289,29 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
          * and the panel offset p*stride is loop-invariant across i, so the
          * codegen matches the hand-strided version. */
         for (; p + 4 <= panel_cnt; p += 4) {
-            VT w0 = C(kk, p + 0), w1 = C(kk, p + 1),
-               w2 = C(kk, p + 2), w3 = C(kk, p + 3);
+            VT w0 = C(kk, p + 0), w1 = C(kk, p + 1), w2 = C(kk, p + 2), w3 = C(kk, p + 3);
             for (Int i = kk + 1; i < spec_len; ++i) {
                 const VT av = A(i, kk);
-                w0 += av * C(i, p + 0); w1 += av * C(i, p + 1);
-                w2 += av * C(i, p + 2); w3 += av * C(i, p + 3);
+                w0 += av * C(i, p + 0);
+                w1 += av * C(i, p + 1);
+                w2 += av * C(i, p + 2);
+                w3 += av * C(i, p + 3);
             }
-            C(kk, p + 0) -= t * w0; C(kk, p + 1) -= t * w1;
-            C(kk, p + 2) -= t * w2; C(kk, p + 3) -= t * w3;
+            C(kk, p + 0) -= t * w0;
+            C(kk, p + 1) -= t * w1;
+            C(kk, p + 2) -= t * w2;
+            C(kk, p + 3) -= t * w3;
 
-            w0 *= t; w1 *= t; w2 *= t; w3 *= t;  /* fold tau into w */
+            w0 *= t;
+            w1 *= t;
+            w2 *= t;
+            w3 *= t; /* fold tau into w */
             for (Int i = kk + 1; i < spec_len; ++i) {
                 const VT av = A(i, kk);
-                C(i, p + 0) -= av * w0; C(i, p + 1) -= av * w1;
-                C(i, p + 2) -= av * w2; C(i, p + 3) -= av * w3;
+                C(i, p + 0) -= av * w0;
+                C(i, p + 1) -= av * w1;
+                C(i, p + 2) -= av * w2;
+                C(i, p + 3) -= av * w3;
             }
         }
 
@@ -318,18 +334,15 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void ormqr_compact(char trans, Int m, Int nrhs, Int k,
-                   const T *ap, Int ldap,
-                   const T *taup,
-                   T *bp, Int ldbp,
-                   Int nm)
+void ormqr_compact(char trans, Int m, Int nrhs, Int k, const T *ap, Int ldap,
+                   const T *taup, T *bp, Int ldbp, Int nm)
 {
     assert(trans == 'T' || trans == 't' || trans == 'N' || trans == 'n');
     assert(ldap >= m && ldbp >= m && k <= m && nm >= 1);
 
-    const Direction dir = (trans == 'T' || trans == 't')
-                              ? Direction::Forward : Direction::Backward;
-    const Int ngroups   = (nm + V - 1) / V;
+    const Direction dir =
+        (trans == 'T' || trans == 't') ? Direction::Forward : Direction::Backward;
+    const Int ngroups = (nm + V - 1) / V;
     /* A is (ldap, k): the per-matrix column extent is k, so the group stride
      * is ldap*k*V (matches LAPACK ?ormqr's A(LDA,K) declaration). */
     const std::size_t str_a = static_cast<std::size_t>(ldap) * k * V;
@@ -337,10 +350,8 @@ void ormqr_compact(char trans, Int m, Int nrhs, Int k,
     const std::size_t str_b = static_cast<std::size_t>(ldbp) * nrhs * V;
 
     for (Int g = 0; g < ngroups; ++g)
-        ormqr_compact_group<T, V, Int>(dir, m, nrhs, k,
-                                       ap + g * str_a, ldap,
-                                       taup + g * str_t,
-                                       bp + g * str_b, ldbp);
+        ormqr_compact_group<T, V, Int>(dir, m, nrhs, k, ap + g * str_a, ldap,
+                                       taup + g * str_t, bp + g * str_b, ldbp);
 }
 
 /* ------------------------------------------------------------------ */
@@ -354,24 +365,19 @@ void ormqr_compact(char trans, Int m, Int nrhs, Int k,
 /* ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
-void ormqr_compact_general(bool left, bool rowmajor, char trans,
-                           Int m, Int n, Int k,
-                           const T *ap, Int ldap,
-                           const T *taup,
-                           T *cp, Int ldcp,
-                           Int nm)
+void ormqr_compact_general(bool left, bool rowmajor, char trans, Int m, Int n, Int k,
+                           const T *ap, Int ldap, const T *taup, T *cp, Int ldcp, Int nm)
 {
-    assert(trans == 'T' || trans == 't' || trans == 'N' || trans == 'n' ||
-           trans == 'C' || trans == 'c');
+    assert(trans == 'T' || trans == 't' || trans == 'N' || trans == 'n' || trans == 'C' ||
+           trans == 'c');
     assert(nm >= 1);
 
-    const bool tran = (trans == 'T' || trans == 't' ||
-                       trans == 'C' || trans == 'c');
+    const bool tran = (trans == 'T' || trans == 't' || trans == 'C' || trans == 'c');
     /* dorm2r ordering: side='L' applies ascending for Q^T, side='R' flips. */
-    const bool fwd       = left ? tran : !tran;
-    const Direction dir  = fwd ? Direction::Forward : Direction::Backward;
-    const Int  spec_len  = left ? m : n;
-    const Int  panel_cnt = left ? n : m;
+    const bool fwd = left ? tran : !tran;
+    const Direction dir = fwd ? Direction::Forward : Direction::Backward;
+    const Int spec_len = left ? m : n;
+    const Int panel_cnt = left ? n : m;
 
     /* Q has order spec_len, so there cannot be more reflectors than that. */
     assert(m >= 0 && n >= 0 && k >= 0 && k <= spec_len);
@@ -383,24 +389,22 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans,
     const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
     const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
     const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1;
-    const std::size_t a_panel   = rowmajor ? 1 : (std::size_t)ldap;
+    const std::size_t a_panel = rowmajor ? 1 : (std::size_t)ldap;
     const std::size_t c_special = left ? c_row : c_col;
-    const std::size_t c_panel   = left ? c_col : c_row;
+    const std::size_t c_panel = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ldap*(complementary extent) -- the column count k for col-major (A is
      * (ldap, k)), the row count spec_len for row-major. */
-    const std::size_t str_a = (rowmajor ? (size_t)ldap * spec_len
-                                        : (size_t)ldap * k) * V;
+    const std::size_t str_a = (rowmajor ? (size_t)ldap * spec_len : (size_t)ldap * k) * V;
     const std::size_t str_t = (size_t)k * V;
-    const std::size_t str_c = (rowmajor ? (size_t)ldcp * m
-                                        : (size_t)ldcp * n) * V;
+    const std::size_t str_c = (rowmajor ? (size_t)ldcp * m : (size_t)ldcp * n) * V;
 
     const Int ngroups = (nm + V - 1) / V;
     for (Int g = 0; g < ngroups; ++g) {
-        const T *a  = ap   + g * str_a;
+        const T *a = ap + g * str_a;
         const T *tg = taup + g * str_t;
-        T       *c  = cp   + g * str_c;
+        T *c = cp + g * str_c;
         if (left && !rowmajor)
             ormqr_compact_group<T, V, Int>(dir, m, n, k, a, ldap, tg, c, ldcp);
         else

@@ -18,19 +18,18 @@ namespace {
  * order) had an illegal value. Pointer arguments are not inspected, matching
  * LAPACK; never aborts the host process. */
 template <typename T>
-int dispatch(char layout, int m, int n,
-             T *ap, int ldap, T *taup, int V, int nm)
+int dispatch(char layout, int m, int n, T *ap, int ldap, T *taup, int V, int nm)
 {
     const bool col = (layout == 'C' || layout == 'c');
     const bool row = (layout == 'R' || layout == 'r');
-    const int  ldmin = row ? (n < 1 ? 1 : n) : (m < 1 ? 1 : m);  /* max(1, .) */
+    const int ldmin = row ? (n < 1 ? 1 : n) : (m < 1 ? 1 : m); /* max(1, .) */
 
-    if (!col && !row)                           return -1;
-    if (m < 0)                                  return -2;
-    if (n < 0)                                  return -3;
-    if (ldap < ldmin)                           return -5;
-    if (V != 2 && V != 4 && V != 8 && V != 16)  return -7;
-    if (nm < 0)                                 return -8;
+    if (!col && !row) return -1;
+    if (m < 0) return -2;
+    if (n < 0) return -3;
+    if (ldap < ldmin) return -5;
+    if (V != 2 && V != 4 && V != 8 && V != 16) return -7;
+    if (nm < 0) return -8;
 
     /* Nothing to compute for an empty problem (also keeps the kernel's
      * nm >= 1 invariant satisfied below). */
@@ -47,25 +46,31 @@ int dispatch(char layout, int m, int n,
      * legal 1024-bit vector lowered to two AVX-512 ZMM ops). MKL's format -> V
      * mapping only ever selects 2/4/8 for double and 4/8/16 for float. */
     switch (V) {
-    case 2:  cqr::detail::geqrf_compact_general<T, 2>(row, m, n, ap, ldap, taup, nm); break;
-    case 4:  cqr::detail::geqrf_compact_general<T, 4>(row, m, n, ap, ldap, taup, nm); break;
-    case 8:  cqr::detail::geqrf_compact_general<T, 8>(row, m, n, ap, ldap, taup, nm); break;
-    case 16: cqr::detail::geqrf_compact_general<T, 16>(row, m, n, ap, ldap, taup, nm); break;
+    case 2:
+        cqr::detail::geqrf_compact_general<T, 2>(row, m, n, ap, ldap, taup, nm);
+        break;
+    case 4:
+        cqr::detail::geqrf_compact_general<T, 4>(row, m, n, ap, ldap, taup, nm);
+        break;
+    case 8:
+        cqr::detail::geqrf_compact_general<T, 8>(row, m, n, ap, ldap, taup, nm);
+        break;
+    case 16:
+        cqr::detail::geqrf_compact_general<T, 16>(row, m, n, ap, ldap, taup, nm);
+        break;
     }
     return 0;
 }
 
 } /* anonymous namespace */
 
-extern "C" int dgeqrf_compact(char layout, int m, int n,
-                              double *ap, int ldap, double *taup,
-                              int V, int nm)
+extern "C" int dgeqrf_compact(char layout, int m, int n, double *ap, int ldap,
+                              double *taup, int V, int nm)
 {
     return dispatch<double>(layout, m, n, ap, ldap, taup, V, nm);
 }
 
-extern "C" int sgeqrf_compact(char layout, int m, int n,
-                              float *ap, int ldap, float *taup,
+extern "C" int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, float *taup,
                               int V, int nm)
 {
     return dispatch<float>(layout, m, n, ap, ldap, taup, V, nm);

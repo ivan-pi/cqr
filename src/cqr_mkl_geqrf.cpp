@@ -39,16 +39,14 @@ using cqr::detail::vlen_for_format;
  * forward to the templated kernel. No argument validation (MKL Compact
  * convention); info is a single scalar status. */
 template <typename T>
-void run(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
-         T *ap, MKL_INT ldap, T *taup,
-         T *work, MKL_INT lwork, MKL_INT *info,
-         MKL_COMPACT_PACK format, MKL_INT nm)
+void run(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap, MKL_INT ldap, T *taup, T *work,
+         MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
 {
     /* Workspace query: the unblocked kernel needs no scratch, so the optimal
      * (and minimum) lwork is 1. */
     if (lwork == -1) {
         if (work) work[0] = T(1);
-        if (info)  *info  = 0;
+        if (info) *info = 0;
         return;
     }
 
@@ -63,11 +61,23 @@ void run(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
     MKL_INT status = 0;
     /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
     switch (vlen_for_format<T>(format)) {
-    case 2:  cqr::detail::geqrf_compact_general<T, 2, MKL_INT>(rowmajor, m, n, ap, ldap, taup, nm); break;
-    case 4:  cqr::detail::geqrf_compact_general<T, 4, MKL_INT>(rowmajor, m, n, ap, ldap, taup, nm); break;
-    case 8:  cqr::detail::geqrf_compact_general<T, 8, MKL_INT>(rowmajor, m, n, ap, ldap, taup, nm); break;
-    case 16: cqr::detail::geqrf_compact_general<T, 16, MKL_INT>(rowmajor, m, n, ap, ldap, taup, nm); break;
-    default: status = -1;   /* unrecognised pack format: cannot select a kernel */
+    case 2:
+        cqr::detail::geqrf_compact_general<T, 2, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
+                                                          nm);
+        break;
+    case 4:
+        cqr::detail::geqrf_compact_general<T, 4, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
+                                                          nm);
+        break;
+    case 8:
+        cqr::detail::geqrf_compact_general<T, 8, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
+                                                          nm);
+        break;
+    case 16:
+        cqr::detail::geqrf_compact_general<T, 16, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
+                                                           nm);
+        break;
+    default: status = -1; /* unrecognised pack format: cannot select a kernel */
     }
     if (info) *info = status;
 }
@@ -82,9 +92,9 @@ extern "C" void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
     run<double>(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);
 }
 
-extern "C" void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
-                                       float *ap, MKL_INT ldap, float *taup,
-                                       float *work, MKL_INT lwork, MKL_INT *info,
+extern "C" void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, float *ap,
+                                       MKL_INT ldap, float *taup, float *work,
+                                       MKL_INT lwork, MKL_INT *info,
                                        MKL_COMPACT_PACK format, MKL_INT nm)
 {
     run<float>(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);

@@ -29,7 +29,7 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h"   /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
 
 #include <chrono>
 #include <cmath>
@@ -51,7 +51,10 @@ using clk = std::chrono::steady_clock;
 /* Report and abort on the spot if cond is false. */
 void check(bool cond, const char *what)
 {
-    if (!cond) { std::printf("FAILED: %s\n", what); std::exit(1); }
+    if (!cond) {
+        std::printf("FAILED: %s\n", what);
+        std::exit(1);
+    }
 }
 
 /* Interleave width V for the active compact format (doubles): MKL packs
@@ -63,10 +66,10 @@ using cqr::detail::vlen_for_format;
 const char *compact_format_name(MKL_COMPACT_PACK format)
 {
     switch (format) {
-    case MKL_COMPACT_SSE:    return "SSE";
-    case MKL_COMPACT_AVX:    return "AVX";
+    case MKL_COMPACT_SSE: return "SSE";
+    case MKL_COMPACT_AVX: return "AVX";
     case MKL_COMPACT_AVX512: return "AVX512";
-    default:                 return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -76,23 +79,26 @@ const char *compact_format_name(MKL_COMPACT_PACK format)
  * the row sum b_v = A_v 1, and a correct solve returns all ones. */
 struct Pool {
     int n, nmat;
-    std::vector<double> a;   /* nmat * n*n */
-    std::vector<double> b;   /* nmat * n   */
+    std::vector<double> a; /* nmat * n*n */
+    std::vector<double> b; /* nmat * n   */
 
-    Pool(int n_, int nmat_) : n(n_), nmat(nmat_),
-        a((size_t)nmat_ * n_ * n_), b((size_t)nmat_ * n_)
+    Pool(int n_, int nmat_)
+        : n(n_), nmat(nmat_), a((size_t)nmat_ * n_ * n_), b((size_t)nmat_ * n_)
     {
         std::mt19937_64 rng(42);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
         for (int v = 0; v < nmat; ++v) {
             double *A = a.data() + (size_t)v * n * n;
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) A[i + (size_t)j * n] = dist(rng);
-            for (int i = 0; i < n; ++i) A[i + (size_t)i * n] += 2.0 * n; /* diag dominant */
+                for (int i = 0; i < n; ++i)
+                    A[i + (size_t)j * n] = dist(rng);
+            for (int i = 0; i < n; ++i)
+                A[i + (size_t)i * n] += 2.0 * n; /* diag dominant */
             double *B = b.data() + (size_t)v * n;
-            for (int i = 0; i < n; ++i) {                 /* B = A * ones */
+            for (int i = 0; i < n; ++i) { /* B = A * ones */
                 double s = 0.0;
-                for (int j = 0; j < n; ++j) s += A[i + (size_t)j * n];
+                for (int j = 0; j < n; ++j)
+                    s += A[i + (size_t)j * n];
                 B[i] = s;
             }
         }
@@ -103,7 +109,8 @@ struct Pool {
 double sol_error(const double *x, int n)
 {
     double e = 0.0;
-    for (int i = 0; i < n; ++i) e = std::max(e, std::fabs(x[i] - 1.0));
+    for (int i = 0; i < n; ++i)
+        e = std::max(e, std::fabs(x[i] - 1.0));
     return e;
 }
 
@@ -120,25 +127,28 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     {
         /* Per-thread compact buffers, sized for a full group of V. */
         const int align = 64;
-        auto ap_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, n,    fmt, V), align);
-        auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, 1,    fmt, V), align);
-        auto bp_buf   = cqr::detail::mkl_alloc_bytes<double>(mkl_dget_size_compact(n, nrhs, fmt, V), align);
+        auto ap_buf = cqr::detail::mkl_alloc_bytes<double>(
+            mkl_dget_size_compact(n, n, fmt, V), align);
+        auto taup_buf = cqr::detail::mkl_alloc_bytes<double>(
+            mkl_dget_size_compact(n, 1, fmt, V), align);
+        auto bp_buf = cqr::detail::mkl_alloc_bytes<double>(
+            mkl_dget_size_compact(n, nrhs, fmt, V), align);
         double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
-        MKL_INT info[1];   /* compact status: a single scalar (MKL convention) */
+        MKL_INT info[1]; /* compact status: a single scalar (MKL convention) */
         double wq;
         mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info, fmt, V);
         const MKL_INT lwork = (MKL_INT)wq;
         std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
 
-        std::vector<double *> Aptr(V), Bptr(V);   /* per-matrix base pointers */
-        std::vector<double>   xout((size_t)V * n);  /* unpacked solutions      */
+        std::vector<double *> Aptr(V), Bptr(V);  /* per-matrix base pointers */
+        std::vector<double> xout((size_t)V * n); /* unpacked solutions      */
         std::vector<double *> Xptr(V);
 
 #pragma omp for schedule(static)
         for (int g = 0; g < ngroups; ++g) {
             const int base = g * V;
-            const MKL_INT cnt = std::min(V, nmat - base);   /* last group may be short */
+            const MKL_INT cnt = std::min(V, nmat - base); /* last group may be short */
 
             for (int s = 0; s < cnt; ++s) {
                 Aptr[s] = const_cast<double *>(P.a.data()) + (size_t)(base + s) * n * n;
@@ -146,18 +156,19 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
                 Xptr[s] = xout.data() + (size_t)s * n;
             }
 
-            mkl_dgepack_compact(MKL_COL_MAJOR, n, n,    Aptr.data(), n, ap, n, fmt, cnt);
+            mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Aptr.data(), n, ap, n, fmt, cnt);
             mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, cnt);
 
-            mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup,
-                               work.data(), lwork, info, fmt, cnt);
+            mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info,
+                               fmt, cnt);
             double dummy;
-            cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                                   ap, n, taup, bp, n, &dummy, 1, info, fmt, cnt);
-            mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT,
-                              n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
+            cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n, ap, n, taup, bp,
+                                   n, &dummy, 1, info, fmt, cnt);
+            mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
+                              MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
 
-            mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xptr.data(), n, bp, n, fmt, cnt);
+            mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xptr.data(), n, bp, n, fmt,
+                                  cnt);
             for (int s = 0; s < cnt; ++s)
                 maxerr = std::max(maxerr, sol_error(Xptr[s], n));
         }
@@ -184,12 +195,12 @@ double run_unbatched(int n, int nmat, double *a, double *b)
 
 #pragma omp for schedule(static)
         for (int v = 0; v < nmat; ++v) {
-            double *A = a + (size_t)v * n * n;     /* dgeqrf overwrites A */
-            double *B = b + (size_t)v * n;         /* dormqr/dtrsm overwrite B */
+            double *A = a + (size_t)v * n * n; /* dgeqrf overwrites A */
+            double *B = b + (size_t)v * n;     /* dormqr/dtrsm overwrite B */
 
             LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, A, n, tau.data());
-            LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n,
-                           A, n, tau.data(), B, n);
+            LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', n, nrhs, n, A, n, tau.data(), B,
+                           n);
             cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasNoTrans, CblasNonUnit,
                         n, nrhs, 1.0, A, n, B, n);
 
@@ -205,13 +216,14 @@ double run_unbatched(int n, int nmat, double *a, double *b)
 template <typename Reset, typename Timed>
 double best_time(int reps, Reset &&reset, Timed &&timed)
 {
-    reset(); timed();                         /* warm-up (untimed) */
+    reset();
+    timed(); /* warm-up (untimed) */
     double best = std::numeric_limits<double>::infinity();
     for (int r = 0; r < reps; ++r) {
-        reset();                              /* not clocked */
+        reset(); /* not clocked */
         auto t0 = clk::now();
         timed();
-        const std::chrono::duration<double> elapsed = clk::now() - t0;  /* seconds */
+        const std::chrono::duration<double> elapsed = clk::now() - t0; /* seconds */
         best = std::min(best, elapsed.count());
     }
     return best;
@@ -249,16 +261,19 @@ int main(int argc, char **argv)
 
     std::printf("QR solve throughput: compact batched (mkl_dgeqrf_compact -> "
                 "cqr_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
-    std::printf("            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
+    std::printf(
+        "            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
 #ifdef _OPENMP
-    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
-                nmat, reps, V, compact_format_name(fmt), nthreads);
+    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n", nmat,
+                reps, V, compact_format_name(fmt), nthreads);
 #else
-    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  Sequential\n\n",
-                nmat, reps, V, compact_format_name(fmt));
+    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  Sequential\n\n", nmat, reps, V,
+                compact_format_name(fmt));
 #endif
-    std::printf("   n |  batched (s)  Mmat/s | unbatched (s) Mmat/s | speedup |  max fwd err\n");
-    std::printf("-----+----------------------+----------------------+---------+-------------\n");
+    std::printf(
+        "   n |  batched (s)  Mmat/s | unbatched (s) Mmat/s | speedup |  max fwd err\n");
+    std::printf(
+        "-----+----------------------+----------------------+---------+-------------\n");
 
     double log_speedup_sum = 0.0;
     for (int si = 0; si < nsizes; ++si) {
@@ -270,29 +285,32 @@ int main(int argc, char **argv)
          * factors in place, so refresh a destroyable working copy of the pool
          * before each pass -- untimed, mirroring an application that consumes
          * the matrix rather than copying it inside the solve. */
-        std::vector<double> wa, wb;   /* filled by the reset step below */
+        std::vector<double> wa, wb; /* filled by the reset step below */
 
         double err_b = 0.0, err_u = 0.0;
-        const double tb = best_time(reps,
-            [] {},
-            [&] { err_b = run_batched(P, fmt, V); });
-        const double tu = best_time(reps,
-            [&] { wa = P.a; wb = P.b; },
+        const double tb = best_time(reps, [] {}, [&] { err_b = run_batched(P, fmt, V); });
+        const double tu = best_time(
+            reps,
+            [&] {
+                wa = P.a;
+                wb = P.b;
+            },
             [&] { err_u = run_unbatched(n, nmat, wa.data(), wb.data()); });
 
-        const double rtol  = 100.0 * n * eps;
+        const double rtol = 100.0 * n * eps;
         const double maxerr = std::max(err_b, err_u);
         check(maxerr <= rtol, "solve accuracy within rtol");
 
         const double speedup = tu / tb;
         log_speedup_sum += std::log(speedup);
         std::printf("%4d | %12.4f  %6.2f | %12.4f  %6.2f | %6.2fx | %.2e (rtol %.1e)\n",
-                    n, tb, nmat / tb / 1e6, tu, nmat / tu / 1e6,
-                    speedup, maxerr, rtol);
+                    n, tb, nmat / tb / 1e6, tu, nmat / tu / 1e6, speedup, maxerr, rtol);
     }
 
     const double geomean = std::exp(log_speedup_sum / nsizes);
-    std::printf("-----+----------------------+----------------------+---------+-------------\n");
-    std::printf("geometric-mean speedup (batched vs unbatched) across sizes: %.2fx\n", geomean);
+    std::printf(
+        "-----+----------------------+----------------------+---------+-------------\n");
+    std::printf("geometric-mean speedup (batched vs unbatched) across sizes: %.2fx\n",
+                geomean);
     return 0;
 }

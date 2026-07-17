@@ -40,17 +40,15 @@ using cqr::detail::vlen_for_format;
  * forward to the templated kernel. No argument validation (MKL Compact
  * convention); info is a single scalar status. */
 template <typename T>
-void run(MKL_LAYOUT layout, char side, char trans,
-         MKL_INT m, MKL_INT n, MKL_INT k,
-         const T *ap, MKL_INT ldap, const T *taup,
-         T *cp, MKL_INT ldcp, T *work, MKL_INT lwork, MKL_INT *info,
-         MKL_COMPACT_PACK format, MKL_INT nm)
+void run(MKL_LAYOUT layout, char side, char trans, MKL_INT m, MKL_INT n, MKL_INT k,
+         const T *ap, MKL_INT ldap, const T *taup, T *cp, MKL_INT ldcp, T *work,
+         MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
 {
     /* Workspace query: the branch-free kernel needs no scratch, so the
      * optimal (and minimum) lwork is 1. */
     if (lwork == -1) {
         if (work) work[0] = T(1);
-        if (info)  *info  = 0;
+        if (info) *info = 0;
         return;
     }
 
@@ -61,21 +59,32 @@ void run(MKL_LAYOUT layout, char side, char trans,
     }
 
     const bool rowmajor = (layout == MKL_ROW_MAJOR);
-    const bool left     = (side == 'L' || side == 'l');
-    const bool tran     = (trans == 'T' || trans == 't' ||
-                           trans == 'C' || trans == 'c');
-    const char tr       = tran ? 'T' : 'N';
+    const bool left = (side == 'L' || side == 'l');
+    const bool tran = (trans == 'T' || trans == 't' || trans == 'C' || trans == 'c');
+    const char tr = tran ? 'T' : 'N';
 
     /* A is dimensioned (ldap, k) like LAPACK ?ormqr, so the kernel takes its
      * per-matrix column extent as k and forms the group stride internally. */
     MKL_INT status = 0;
     /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
     switch (vlen_for_format<T>(format)) {
-    case 2:  cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
-    case 4:  cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
-    case 8:  cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
-    case 16: cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k, ap, ldap, taup, cp, ldcp, nm); break;
-    default: status = -1;   /* unrecognised pack format: cannot select a kernel */
+    case 2:
+        cqr::detail::ormqr_compact_general<T, 2, MKL_INT>(left, rowmajor, tr, m, n, k, ap,
+                                                          ldap, taup, cp, ldcp, nm);
+        break;
+    case 4:
+        cqr::detail::ormqr_compact_general<T, 4, MKL_INT>(left, rowmajor, tr, m, n, k, ap,
+                                                          ldap, taup, cp, ldcp, nm);
+        break;
+    case 8:
+        cqr::detail::ormqr_compact_general<T, 8, MKL_INT>(left, rowmajor, tr, m, n, k, ap,
+                                                          ldap, taup, cp, ldcp, nm);
+        break;
+    case 16:
+        cqr::detail::ormqr_compact_general<T, 16, MKL_INT>(left, rowmajor, tr, m, n, k,
+                                                           ap, ldap, taup, cp, ldcp, nm);
+        break;
+    default: status = -1; /* unrecognised pack format: cannot select a kernel */
     }
     if (info) *info = status;
 }
@@ -83,25 +92,21 @@ void run(MKL_LAYOUT layout, char side, char trans,
 } /* anonymous namespace */
 
 extern "C" void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                                       MKL_INT m, MKL_INT n, MKL_INT k,
-                                       const double *ap, MKL_INT ldap,
-                                       const double *taup,
-                                       double *cp, MKL_INT ldcp,
-                                       double *work, MKL_INT lwork, MKL_INT *info,
-                                       MKL_COMPACT_PACK format, MKL_INT nm)
+                                       MKL_INT m, MKL_INT n, MKL_INT k, const double *ap,
+                                       MKL_INT ldap, const double *taup, double *cp,
+                                       MKL_INT ldcp, double *work, MKL_INT lwork,
+                                       MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
 {
-    run<double>(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp,
-                work, lwork, info, format, nm);
+    run<double>(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
+                format, nm);
 }
 
 extern "C" void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                                       MKL_INT m, MKL_INT n, MKL_INT k,
-                                       const float *ap, MKL_INT ldap,
-                                       const float *taup,
-                                       float *cp, MKL_INT ldcp,
-                                       float *work, MKL_INT lwork, MKL_INT *info,
-                                       MKL_COMPACT_PACK format, MKL_INT nm)
+                                       MKL_INT m, MKL_INT n, MKL_INT k, const float *ap,
+                                       MKL_INT ldap, const float *taup, float *cp,
+                                       MKL_INT ldcp, float *work, MKL_INT lwork,
+                                       MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
 {
-    run<float>(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp,
-               work, lwork, info, format, nm);
+    run<float>(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
+               format, nm);
 }

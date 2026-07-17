@@ -67,31 +67,25 @@ extern "C" {
  * info is a single scalar status (0 on success). With lwork = -1 the call is a
  * workspace query returning the optimal lwork in work[0] (this kernel needs
  * none, so 1). See cqr_mkl_dgeqrf_compact_design.md. */
-void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
-                            double *ap, MKL_INT ldap, double *taup,
-                            double *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, double *ap,
+                            MKL_INT ldap, double *taup, double *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
 
-void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
-                            float *ap, MKL_INT ldap, float *taup,
-                            float *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, float *ap,
+                            MKL_INT ldap, float *taup, float *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
 
-void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                            MKL_INT m, MKL_INT n, MKL_INT k,
-                            const double *ap, MKL_INT ldap,
-                            const double *taup,
-                            double *cp, MKL_INT ldcp,
-                            double *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const double *ap, MKL_INT ldap,
+                            const double *taup, double *cp, MKL_INT ldcp, double *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
 
-void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                            MKL_INT m, MKL_INT n, MKL_INT k,
-                            const float *ap, MKL_INT ldap,
-                            const float *taup,
-                            float *cp, MKL_INT ldcp,
-                            float *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const float *ap, MKL_INT ldap,
+                            const float *taup, float *cp, MKL_INT ldcp, float *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
 
 #ifdef __cplusplus
 }
@@ -118,15 +112,14 @@ namespace detail {
  * MKL packs V = (SIMD register bytes) / sizeof(T):
  *   SSE = 16 B, AVX = 32 B, AVX512 = 64 B.
  * Returns 0 for an unrecognised format. */
-template <typename T>
-inline int vlen_for_format(MKL_COMPACT_PACK format)
+template <typename T> inline int vlen_for_format(MKL_COMPACT_PACK format)
 {
     int bytes;
     switch (format) {
-    case MKL_COMPACT_SSE:    bytes = 16; break;
-    case MKL_COMPACT_AVX:    bytes = 32; break;
+    case MKL_COMPACT_SSE: bytes = 16; break;
+    case MKL_COMPACT_AVX: bytes = 32; break;
     case MKL_COMPACT_AVX512: bytes = 64; break;
-    default:                 return 0;
+    default: return 0;
     }
     return bytes / static_cast<int>(sizeof(T));
 }

@@ -52,17 +52,11 @@
 extern "C" {
 #endif
 
-int dormqr_compact(char trans, int m, int nrhs, int k,
-                   const double *ap, int ldap,
-                   const double *taup,
-                   double *bp, int ldbp,
-                   int V, int nm);
+int dormqr_compact(char trans, int m, int nrhs, int k, const double *ap, int ldap,
+                   const double *taup, double *bp, int ldbp, int V, int nm);
 
-int sormqr_compact(char trans, int m, int nrhs, int k,
-                   const float *ap, int ldap,
-                   const float *taup,
-                   float *bp, int ldbp,
-                   int V, int nm);
+int sormqr_compact(char trans, int m, int nrhs, int k, const float *ap, int ldap,
+                   const float *taup, float *bp, int ldbp, int V, int nm);
 
 #ifdef __cplusplus
 }

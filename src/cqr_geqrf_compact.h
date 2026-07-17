@@ -50,13 +50,11 @@
 extern "C" {
 #endif
 
-int dgeqrf_compact(char layout, int m, int n,
-                   double *ap, int ldap, double *taup,
-                   int V, int nm);
+int dgeqrf_compact(char layout, int m, int n, double *ap, int ldap, double *taup, int V,
+                   int nm);
 
-int sgeqrf_compact(char layout, int m, int n,
-                   float *ap, int ldap, float *taup,
-                   int V, int nm);
+int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, float *taup, int V,
+                   int nm);
 
 #ifdef __cplusplus
 }
