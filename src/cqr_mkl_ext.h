@@ -1,20 +1,25 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- the MKL Compact routines this project adds that are
- * missing from Intel MKL's own compact API.
+/* cqr_mkl_ext.h -- MKL Compact-format QR routines this project supplies, using
+ * MKL's own compact types and packing but its own portable SIMD kernels.
  *
+ * cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
  * cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *
- * This is the missing mkl_?ormqr_compact. It multiplies a Compact-format
- * batch of general matrices C by the orthogonal factor Q (or Q^T) produced by
- * mkl_?geqrf_compact, filling the gap between the compact QR factorization and
- * the application of its reflectors. The API mirrors MKL's native compact
+ * cqr_mkl_?ormqr_compact is the missing mkl_?ormqr_compact: it multiplies a
+ * Compact-format batch of general matrices C by the orthogonal factor Q (or
+ * Q^T), filling the gap between MKL's compact QR factorization and the
+ * application of its reflectors. cqr_mkl_?geqrf_compact is a portable, open
+ * alternative to mkl_?geqrf_compact producing those reflectors -- signature- and
+ * storage-compatible, so the two can be mixed freely with MKL's native compact
+ * routines. Together (?geqrf -> ?ormqr -> mkl_?trsm_compact) they form an
+ * all-open Compact-format QR pipeline. The API mirrors MKL's native compact
  * ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference
- * in cqr_mkl_dormqr_compact_design.md.
+ * in cqr_mkl_dormqr_compact_design.md and cqr_mkl_dgeqrf_compact_design.md.
  *
  * Typical use -- the batched AX = B solver:
- *     mkl_dgeqrf_compact (..., A -> H, tau);          // A = Q R
+ *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
  *     cqr_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
  *     mkl_dtrsm_compact  (..., U, R, B);              // B := R^{-1} Q^T B = X
  *
@@ -53,6 +58,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* QR factorization: A -> (R, Householder vectors) in ap, tau in taup.
+ * Drop-in for mkl_?geqrf_compact (identical signature). No argument checking;
+ * info is a single scalar status (0 on success). With lwork = -1 the call is a
+ * workspace query returning the optimal lwork in work[0] (this kernel needs
+ * none, so 1). See cqr_mkl_dgeqrf_compact_design.md. */
+void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
+                            double *ap, MKL_INT ldap, double *taup,
+                            double *work, MKL_INT lwork, MKL_INT *info,
+                            MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n,
+                            float *ap, MKL_INT ldap, float *taup,
+                            float *work, MKL_INT lwork, MKL_INT *info,
+                            MKL_COMPACT_PACK format, MKL_INT nm);
 
 void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
                             MKL_INT m, MKL_INT n, MKL_INT k,

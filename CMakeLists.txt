@@ -26,8 +26,18 @@ endif()
 
 # Host-tuned codegen for the SIMD kernel (opt-in; correctness is independent).
 add_library(cqr_flags INTERFACE)
+
+# The geqrf larfg helpers return V-wide GNU vectors by value; without -march the
+# base-ISA vector-return ABI differs, which GCC/Clang note via -Wpsabi. These are
+# internal detail:: inlines (the public API is plain double*/int), so there is no
+# real ABI surface -- silence the benign note to keep the build clean.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-Wno-psabi" CQR_HAS_WNO_PSABI)
+if(CQR_HAS_WNO_PSABI)
+  target_compile_options(cqr_flags INTERFACE -Wno-psabi)
+endif()
+
 if(CQR_ENABLE_NATIVE)
-  include(CheckCXXCompilerFlag)
   check_cxx_compiler_flag("-march=native" CQR_HAS_MARCH_NATIVE)
   if(CQR_HAS_MARCH_NATIVE)
     target_compile_options(cqr_flags INTERFACE -march=native)
@@ -42,7 +52,9 @@ endif()
 # ---------------------------------------------------------------------------
 # Core kernel library (portable; no BLAS dependency)
 # ---------------------------------------------------------------------------
-add_library(cqr_compact src/cqr_compact_dispatch.cpp)
+add_library(cqr_compact
+  src/cqr_compact_dispatch.cpp
+  src/cqr_geqrf_compact_dispatch.cpp)
 target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(cqr_compact PUBLIC cxx_std_17)
 target_link_libraries(cqr_compact PRIVATE cqr_flags)
@@ -54,7 +66,9 @@ add_library(cqr::compact ALIAS cqr_compact)
 if(CQR_WITH_MKL)
   find_package(MKLCompact REQUIRED)
 
-  add_library(cqr_mkl_ext src/cqr_mkl_ext.cpp)
+  add_library(cqr_mkl_ext
+    src/cqr_mkl_ext.cpp
+    src/cqr_mkl_geqrf.cpp)
   target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
@@ -98,12 +112,26 @@ if(CQR_BUILD_TESTS)
   target_link_libraries(test_cqr_compact PRIVATE cqr_compact cqr_flags)
   add_test(NAME portable_kernel COMMAND test_cqr_compact)
 
+  # Portable self-contained QR factorization test (no BLAS): the compact geqrf
+  # kernel vs a scalar geqr2/larfg reference, plus C API validation.
+  add_executable(test_cqr_geqrf_compact src/test_cqr_geqrf_compact.cpp)
+  target_link_libraries(test_cqr_geqrf_compact PRIVATE cqr_compact cqr_flags)
+  add_test(NAME portable_geqrf COMMAND test_cqr_geqrf_compact)
+
   # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)
     add_executable(test_cqr_mkl_ext src/test_cqr_mkl_ext.cpp)
     target_link_libraries(test_cqr_mkl_ext
       PRIVATE cqr_mkl_ext MKL::Compact cqr_flags)
     add_test(NAME mkl_compact_suites COMMAND test_cqr_mkl_ext)
+
+    # MKL + dense LAPACK validation of cqr_mkl_dgeqrf_compact (design doc
+    # section 7): factorization invariants, cross-check vs mkl_dgeqrf_compact,
+    # and the end-to-end solve. Needs cqr_compact for the ormqr apply step.
+    add_executable(test_cqr_geqrf_mkl src/test_cqr_geqrf_mkl.cpp)
+    target_link_libraries(test_cqr_geqrf_mkl
+      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact cqr_flags)
+    add_test(NAME mkl_geqrf_suites COMMAND test_cqr_geqrf_mkl)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
