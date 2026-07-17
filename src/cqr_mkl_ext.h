@@ -1,11 +1,14 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- MKL Compact-format QR routines this project supplies, using
- * MKL's own compact types and packing but its own portable SIMD kernels.
+/* cqr_mkl_ext.h -- batched QR for matrices in Intel MKL's Compact format.
  *
- * cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
- * cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+ *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
+ *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+ *
+ * Both use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
+ * MKL compact ecosystem, but are backed by this project's own portable SIMD
+ * kernels rather than MKL's.
  *
  * cqr_mkl_?ormqr_compact is the missing mkl_?ormqr_compact: it multiplies a
  * Compact-format batch of general matrices C by the orthogonal factor Q (or

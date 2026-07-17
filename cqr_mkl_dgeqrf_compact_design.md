@@ -8,13 +8,12 @@ This extension provides a fast batched **QR factorization** of a set of general
 `m x n` matrices stored in Intel MKL's Compact (interleaved-batch) format. It
 mirrors `mkl_?geqrf_compact` in signature and semantics but is a fully portable,
 open implementation built on GNU vector types -- specialized for SSE, AVX, and
-AVX-512 double-precision registers -- so it can be used, studied, and tuned
-without depending on MKL's closed compact kernels.
+AVX-512 registers -- so it can be used, studied, and tuned without depending on
+MKL's closed compact kernels.
 
-It is the natural companion to the `cqr_mkl_?ormqr_compact` routine this project
-already ships: `?geqrf` produces the reflectors `(H, tau)`, `?ormqr` applies
-them, and `?trsm` finishes the solve. Together they complete an all-open
-Compact-format QR pipeline:
+The routine produces the reflectors `(H, tau)` that `cqr_mkl_?ormqr_compact`
+(also in this project) applies; followed by a triangular solve, the three chain
+into a complete Compact-format QR pipeline:
 
 ```
 cqr_mkl_dgeqrf_compact(A -> H, tau);          // A = Q R
@@ -22,10 +21,10 @@ cqr_mkl_dormqr_compact('L','T', H, tau, B);   // B := Q^T B
 mkl_dtrsm_compact      (U, R, B);             // B := R^{-1} Q^T B = X
 ```
 
-The primary target is many small-to-medium matrices: both dimensions in `3..500`,
-with the emphasis on `n < 170` and common sizes such as 30 and 60. Square and
-rectangular shapes are supported; the tuned path is column-major, matching
-LAPACK and the natural QR data flow.
+The primary target is many small-to-medium matrices, with both dimensions in
+`3..500` and the emphasis on sizes below 170. Square and rectangular shapes are
+supported; the tuned path is column-major, matching LAPACK and the natural QR
+data flow.
 
 ## 2. Syntax
 
@@ -39,12 +38,11 @@ void cqr_mkl_dgeqrf_compact (
 );
 ```
 
-The signature is identical to `mkl_dgeqrf_compact` (see attached reference), so
-the routine is a drop-in alternative: existing packing (`mkl_?gepack_compact`),
-format discovery (`mkl_get_format_compact`), and unpacking
-(`mkl_?geunpack_compact`) all remain valid and reusable. A single-precision
-`cqr_mkl_sgeqrf_compact` is provided for symmetry; double precision is the
-focus.
+The signature is identical to
+[`mkl_dgeqrf_compact`](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/mkl-geqrf-compact.html),
+so the routine is a drop-in alternative within the MKL Compact ecosystem. Both
+real precisions are provided: `cqr_mkl_dgeqrf_compact` (double, the focus) and
+`cqr_mkl_sgeqrf_compact` (single).
 
 ## 3. Description
 
@@ -118,10 +116,9 @@ without the extra `larft`/`larfb` bookkeeping.
 Scalar `dlarfg` contains a data-dependent branch (`if xnorm == 0: tau = 0`) and
 the scalar special functions `hypot`, `copysign`, and a division. Across a pack
 the branch would diverge per lane, so it is rewritten branch-free with a mask
-and a select -- exactly the structure the reference GPU submission and the
-Gemini prototype use, but keyed on the LAPACK-correct quantity (the
-*below-diagonal* norm, so an already-triangular column yields `tau = 0` with the
-diagonal unchanged, identical to `dlarfg`):
+and a select, keyed on the LAPACK-correct quantity (the *below-diagonal* norm,
+so an already-triangular column yields `tau = 0` with the diagonal unchanged,
+identical to `dlarfg`):
 
 ```
 tail  = sum_{i>kk} A(i,kk)^2                 // vector reduction (below diagonal)
@@ -150,8 +147,7 @@ the reflector scaling, and the trailing-column update all walk contiguous
 pointers, register-blocked `JB = 4` trailing columns at a time so each reflector
 load is reused. Row-major is supported for MKL compatibility through a
 stride-generalized kernel over the same math (correctness-first; the strided
-inner sweep is not separately SIMD-tuned), mirroring how `cqr_mkl_?ormqr_compact`
-handles its non-contiguous side/layout combinations.
+inner sweep is not separately SIMD-tuned).
 
 ### 6.4 Padding and SIMD semantics
 
@@ -166,43 +162,49 @@ the padding (`tau = 0`, diagonal preserved), so no lane ever produces a NaN.
 ### 6.5 No argument checking (Compact convention)
 
 Like MKL's own compact routines -- which "skip error checking for performance
-reasons" and make "the user responsible for passing correct parameters" -- the
-MKL-style `cqr_mkl_?geqrf_compact` validates nothing and writes a single scalar
-`info = 0`. Callers who want defensive checking use the portable
-`dgeqrf_compact` / `sgeqrf_compact` C API (section 8), which performs LAPACK-style
-`info = -j` validation and never aborts the process.
+reasons" and make "the user responsible for passing correct parameters" --
+`cqr_mkl_?geqrf_compact` validates nothing and writes a single scalar
+`info = 0`.
 
 ### 6.6 Numerical scope
 
 The column norm is the direct `sqrt(sum of squares)` -- fast and vectorizable,
-and accurate to working precision across the target range, including the
-competition's stress structures (column-scaled/`logspace` dynamic range,
-rank-deficient, near-collinear, banded, upper-triangular, clustered-scale): all
-of those stay well inside the FP64 exponent range, and rank deficiency degrades
-gracefully through the `has` mask. The overflow/underflow-safe rescaling of
-LAPACK's `dlarfg` (triggered only near `1e+/-150`) is intentionally omitted, as
-is column pivoting; both are outside the stated small-well-scaled regime and are
-noted here as the scoped limitations, consistent with MKL's own "Numerical
-Limitations for Compact ... Routines".
+and accurate to working precision across the target range. Rank-deficient and
+already-triangular columns degrade gracefully through the `has` mask (`tau = 0`,
+diagonal preserved), and a wide dynamic range across columns (down to the FP64
+exponent limits) is handled correctly.
+
+Two of Intel's stated [numerical limitations for Compact BLAS and Compact LAPACK
+routines](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/numerical-limits-compact-blas-compact-lapack.html)
+apply here by the same design, and are the deliberate scope limits of this
+routine:
+
+* **Matrices scaled near underflow/overflow.** As Intel notes specifically for
+  `mkl_?geqrf_compact`, the compact QR does not provide safe handling of values
+  near underflow/overflow. This routine likewise omits the rescaling of LAPACK's
+  `dlarfg` (which triggers only near `1e+/-150`); such inputs are out of scope.
+* **No error checking and no pivoting.** No argument validation (section 6.5),
+  and the factorization is unpivoted -- pivoting needs comparisons that do not
+  vectorize across a pack. It is the caller's responsibility to pass inputs that
+  can be factorized within these limits.
 
 ## 7. Testing and Validation Methodology
 
-Correctness is a hard gate against standard dense LAPACK. SIMD, blocking, and
+Correctness is checked against standard dense LAPACK. SIMD, blocking, and
 lane-masking are internal strategies only: the returned `(H, tau, R)` must
 satisfy the same invariants as an unbatched `?geqrf`.
 
 ### 7.1 Suite 1 -- Factorization invariants vs dense LAPACK
 
-For each `(V, shape)` a batch of random `A` (with the competition's `cond`
-column-scaling and a diagonal boost to set conditioning) is factored by the
-routine under test, unpacked, and checked per matrix against the LAPACK-style
-QR contract used by the GPU competition checker:
+For each `(V, shape)` -- square, tall, and wide -- a batch of random `A` (with a
+`cond` column-scaling knob and a diagonal boost to set conditioning) is factored
+by the routine under test, unpacked, and checked per matrix against the LAPACK QR
+contract:
 
-* **Factorization residual.** Materialize `Q` from `(H, tau)` (via the project's
-  own `?ormqr` applied to `I`, and independently via dense `LAPACKE_dorgqr`),
-  take `R = triu(H)`, and gate `|| R - Q^T A ||_1 / ||A||_1 <= 20 * n * eps`.
-  Because `R` is the strict upper triangle, this simultaneously gates
-  lower-triangular leakage (triangularity).
+* **Factorization residual.** Materialize `Q` from `(H, tau)` via dense
+  `LAPACKE_dorgqr`, take `R = triu(H)`, and gate
+  `|| R - Q^T A ||_1 / ||A||_1 <= 20 * n * eps`. Because `R` is the strict upper
+  triangle, this simultaneously gates lower-triangular leakage (triangularity).
 * **Orthogonality.** Gate `|| Q^T Q - I ||_1 <= 100 * n * eps`.
 * **Elementwise vs LAPACK (diagnostic).** For well-conditioned inputs the
   reflectors are essentially unique, so `(H, tau)` are additionally compared
@@ -222,16 +224,18 @@ inputs (same sign convention, same unblocked math).
 Closing the pipeline: `B = A X` for a known `X`, then
 `cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T') -> mkl_dtrsm_compact`
 must recover `X`. Gate the forward error `Xhat - X` and the residual
-`A Xhat - B` at `100 * n * eps` (relative to the matrix L1 norm), exactly as the
-existing `?ormqr` Suite 2. This validates `?geqrf` in situ with the rest of the
-compact toolkit.
+`A Xhat - B` at `100 * n * eps` (relative to the matrix L1 norm). This validates
+`?geqrf` in situ with the rest of the compact toolkit.
 
-### 7.4 Portable self-test (no BLAS)
+### 7.4 Portable self-test
 
-A BLAS-free test (like `test_cqr_compact.cpp`) validates the templated kernel
-directly against a scalar reference (`ref_geqr2` / `ref_larfg`) across
-`(T, V)` combinations and partial (padded) final packs, plus the LAPACK-style
-argument validation of the portable C API.
+A self-contained test validates the templated kernel directly against a scalar
+reference (`ref_geqr2` / `ref_larfg`) across `(T, V)` combinations and partial
+(padded) final packs, plus the LAPACK-style argument validation of the portable
+C API. It needs no external libraries at all; only the suites above require an
+MKL installation (for the Compact API). BLAS and LAPACK themselves are assumed
+available, as they are on most platforms -- it is the MKL Compact extension that
+must be installed separately.
 
 ## 8. Implementation Strategy
 
@@ -241,35 +245,22 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
 
 ### 8.1 API boundary
 
+* **MKL-style API** (`cqr_mkl_ext.h`, the primary surface):
+  `cqr_mkl_dgeqrf_compact` / `cqr_mkl_sgeqrf_compact`, unwrapping
+  `MKL_COMPACT_PACK -> V` and instantiated on `MKL_INT` so ILP64 dimensions are
+  not narrowed.
 * **Portable C API** (`cqr_geqrf_compact.h`): `dgeqrf_compact` /
   `sgeqrf_compact`, taking an explicit interleave width `V` and no MKL
-  dependency, with LAPACK-style `info = -j` argument validation. Mirrors
-  `dormqr_compact` in `cqr_compact.h`.
-* **MKL-style API** (`cqr_mkl_ext.h`): `cqr_mkl_dgeqrf_compact` /
-  `cqr_mkl_sgeqrf_compact`, unwrapping `MKL_COMPACT_PACK -> V`, instantiated on
-  `MKL_INT` so ILP64 dimensions are not narrowed. Mirrors
-  `cqr_mkl_dormqr_compact`.
+  dependency, with LAPACK-style `info = -j` argument validation.
 * **Templated kernel** (`cqr_geqrf_compact.hpp`): `geqrf_compact<T,V>` over all
   packs; `geqrf_compact_group<T,V>` (tuned col-major) and
   `geqrf_compact_group_strided<T,V>` (general, via `BatchView`).
 
-### 8.2 Phases
+## 9. Benchmark
 
-1. **Skeleton + tests first (TDD).** Land the headers, dispatch, and a
-   deliberately-incomplete kernel body, then the Suite 1-3 tests, so the suite
-   compiles and fails (red).
-2. **Vectorized `geqr2`.** Implement the branch-free `larfg` + register-blocked
-   trailing update until all suites pass (green).
-3. **Benchmarks & robustness.** Two benchmarks (section 9), then a correctness,
-   API-robustness, and readability pass.
-
-## 9. Benchmarks
-
-1. **vs standard per-matrix LAPACK.** The compact batched factorization against
-   a one-matrix-at-a-time `LAPACKE_dgeqrf` loop (and, when available, MKL's own
-   `mkl_dgeqrf_compact`) over pools of small matrices across the target size
-   range, reporting a geometric-mean speedup and accuracy-gated so it doubles as
-   an integration test. Outer batch loop parallelized with OpenMP.
-2. **vs batmat.** Against the open-source `batmat` project's `geqrf` benchmark
-   (GPL; used only as an external yardstick in our own benchmark, not
-   distributed). Best-effort, gated on the dependency being fetchable.
+The compact batched factorization is benchmarked against a one-matrix-at-a-time
+`LAPACKE_dgeqrf` loop (the standard layout) and, when available, against MKL's
+own `mkl_dgeqrf_compact`, over pools of small matrices across the target size
+range. It reports per-size throughput and a geometric-mean speedup, and is
+accuracy-gated against per-matrix LAPACK so it doubles as an integration test.
+The outer batch loop is parallelized with OpenMP.

@@ -51,14 +51,12 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
   10-100), reporting a geometric-mean speedup. Accuracy-gated.
 * `bench_geqrf_compact [nmat] [reps]` - throughput of the *factorization*:
   `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs per-matrix
-  `LAPACKE_dgeqrf`, across the target square-size range. Accuracy-gated against
-  LAPACK. Build with `-DCQR_ENABLE_NATIVE=ON` for a fair comparison (so the
-  compact kernel uses the full vector width, as MKL's runtime dispatch does).
-* `bench_geqrf_batmat [depth]` - optional head-to-head vs. the
-  [batmat](https://github.com/tttapa/batmat) project's `geqrf`. Opt-in
-  (`-DCQR_WITH_BATMAT=ON`); needs a C++23 toolchain and a batmat install.
+  `LAPACKE_dgeqrf`, across the target square-size range, reporting GFLOP/s and a
+  geometric-mean speedup. Accuracy-gated against LAPACK. Build with
+  `-DCQR_ENABLE_NATIVE=ON` for a fair comparison (so the compact kernel uses the
+  full vector width, as MKL's runtime dispatch does).
 
-The first three are registered with CTest (`example_solve_qr_compact`,
+All are registered with CTest (`example_solve_qr_compact`,
 `bench_qr_compact_integration`, `bench_geqrf_compact_integration`).
 
 ## Layout
@@ -98,7 +96,6 @@ not part of the supported interface:
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
 | `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
-| `examples/bench_geqrf_batmat.cpp` | Optional head-to-head vs. the batmat project's `geqrf` (opt-in, `-DCQR_WITH_BATMAT=ON`). |
 
 ## Related work
 

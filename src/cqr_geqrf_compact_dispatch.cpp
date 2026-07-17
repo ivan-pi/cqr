@@ -10,6 +10,8 @@
 #include "cqr_geqrf_compact.h"
 #include "cqr_geqrf_compact.hpp"
 
+#include <cassert>
+
 namespace {
 
 /* Returns 0 on success, or -j if the j-th argument (1-based, in signature
@@ -34,6 +36,16 @@ int dispatch(char layout, int m, int n,
      * nm >= 1 invariant satisfied below). */
     if (m == 0 || n == 0 || nm == 0) return 0;
 
+    /* Non-empty problem: the buffers are about to be dereferenced. LAPACK does
+     * not inspect pointers, and neither does a release build, but a debug assert
+     * catches an accidental null before it becomes a wild write. */
+    assert(ap != nullptr && taup != nullptr);
+
+    /* V is the compact interleave width, not necessarily one hardware register:
+     * pack<T,V> is a GNU vector the compiler maps to registers or short unrolled
+     * bursts, so every width is valid for both types (e.g. V=16 doubles is a
+     * legal 1024-bit vector lowered to two AVX-512 ZMM ops). MKL's format -> V
+     * mapping only ever selects 2/4/8 for double and 4/8/16 for float. */
     switch (V) {
     case 2:  cqr::detail::geqrf_compact_general<T, 2>(row, m, n, ap, ldap, taup, nm); break;
     case 4:  cqr::detail::geqrf_compact_general<T, 4>(row, m, n, ap, ldap, taup, nm); break;

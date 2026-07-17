@@ -13,9 +13,6 @@
  *      recovers a known X from B = A X                 (in-situ with ormqr)
  * plus LAPACK-style argument validation of the C API.
  *
- * Build (native): g++ -O3 -march=native -std=c++17 cqr_compact_dispatch.cpp \
- *                 cqr_geqrf_compact_dispatch.cpp test_cqr_geqrf_compact.cpp -o t
- *
  * Assisted-by: Claude:claude-opus-4.8
  */
 

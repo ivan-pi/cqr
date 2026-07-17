@@ -18,14 +18,15 @@ vectorized `mkl_?geqrf_compact`. Status vs. its design document:
   layouts), closing the `AX=B` solve, and covering rank-deficient / near-collinear
   stress structures. All match LAPACK/MKL to machine precision.
 - **Benchmarked (design section 9):** `bench_geqrf_compact` (vs.
-  `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`) is built and CTest-gated;
-  `bench_geqrf_batmat` (vs. batmat) is provided opt-in but was not buildable in
-  the reference sandbox (batmat's Conan dependencies are unreachable there).
+  `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`) is built and CTest-gated,
+  reporting GFLOP/s and a geometric-mean speedup.
 - **Known gaps / scoped out (design section 6.6):** no overflow/underflow-safe
   `dlarfg` rescaling (matters only near `1e+/-150`), no column pivoting, and the
   row-major sweep is correctness-first, not separately SIMD-tuned (mirroring
   `ormqr`). Blocked (`larft`/`larfb`) factorization is intentionally not used at
   the target sizes. Complex precisions are out of scope, as for `ormqr`.
+- **Deferred:** a comparison benchmark against the open-source `batmat` project's
+  `geqrf` (same interleaved format) is left for a future change.
 
 ## Known gaps
 

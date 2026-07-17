@@ -56,6 +56,12 @@ void check(bool cond, const char *what)
     if (!cond) { std::printf("FAILED: %s\n", what); std::exit(1); }
 }
 
+/* Standard LAPACK ?geqrf flop count (m >= n), in GFLOP. */
+double geqrf_gflop(int m, int n)
+{
+    return (2.0 * m * n * (double)n - (2.0 / 3.0) * n * (double)n * n) * 1e-9;
+}
+
 const char *compact_format_name(MKL_COMPACT_PACK format)
 {
     switch (format) {
@@ -202,8 +208,9 @@ int main(int argc, char **argv)
     nthreads = omp_get_num_threads();
 #endif
 
-    /* Square sizes across the target range, emphasis on 30/60/100 (below 170). */
-    const int sizes[] = {16, 30, 60, 100, 150, 250};
+    /* Square sizes spanning the target range (dense in the emphasized region
+     * below 170, then a few larger to show where the crossover happens). */
+    const int sizes[] = {8, 16, 24, 32, 48, 64, 96, 128, 170, 256, 384, 500};
     const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
     const double eps = std::numeric_limits<double>::epsilon();
 
@@ -211,8 +218,8 @@ int main(int argc, char **argv)
                 "mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf\n");
     std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d  (square, pre-packed)\n\n",
                 nmat, reps, V, compact_format_name(fmt), nthreads);
-    std::printf("   n |  cqr Mmat/s | mkl Mmat/s | lapack Mmat/s | cqr/lapack | cqr/mkl | max rel err\n");
-    std::printf("-----+-------------+------------+---------------+------------+---------+------------\n");
+    std::printf("   n | cqr GFLOP/s |  cqr Mmat/s | mkl Mmat/s | lapack Mmat/s | cqr/lapack | cqr/mkl | max rel err\n");
+    std::printf("-----+-------------+-------------+------------+---------------+------------+---------+------------\n");
 
     double log_speed_vs_lapack = 0.0;
     for (int si = 0; si < nsizes; ++si) {
@@ -254,14 +261,15 @@ int main(int argc, char **argv)
         check(rel <= 1e-9, "compact factorization matches LAPACK");
 
         const double sp_lap = t_lap / t_cqr, sp_mkl = t_mkl / t_cqr;
+        const double gflops_cqr = nmat * geqrf_gflop(m, n) / t_cqr;
         log_speed_vs_lapack += std::log(sp_lap);
-        std::printf("%4d | %11.2f | %10.2f | %13.2f | %9.2fx | %6.2fx | %.2e\n",
-                    n, nmat / t_cqr / 1e6, nmat / t_mkl / 1e6, nmat / t_lap / 1e6,
+        std::printf("%4d | %11.2f | %11.2f | %10.2f | %13.2f | %9.2fx | %6.2fx | %.2e\n",
+                    n, gflops_cqr, nmat / t_cqr / 1e6, nmat / t_mkl / 1e6, nmat / t_lap / 1e6,
                     sp_lap, sp_mkl, rel);
         (void)eps;
     }
 
-    std::printf("-----+-------------+------------+---------------+------------+---------+------------\n");
+    std::printf("-----+-------------+-------------+------------+---------------+------------+---------+------------\n");
     std::printf("geometric-mean speedup (cqr compact vs per-matrix LAPACK): %.2fx\n",
                 std::exp(log_speed_vs_lapack / nsizes));
     return 0;

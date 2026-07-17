@@ -38,9 +38,10 @@
  *   -1 layout (not 'C'/'c'/'R'/'r')   -2 m (<0)       -3 n (<0)
  *   -5 ldap (< max(1,m) col-major / < max(1,n) row-major)
  *   -7 V (not 2/4/8/16)               -8 nm (<0)
- * Pointer arguments are not inspected (LAPACK convention). An empty problem
- * (m, n, or nm == 0) is a valid no-op returning 0. The routine never aborts the
- * calling process.
+ * Pointer arguments are not inspected in release builds (LAPACK convention); a
+ * debug-only assert guards against a null ap/taup on a non-empty problem. An
+ * empty problem (m, n, or nm == 0) is a valid no-op returning 0. The routine
+ * never aborts the calling process.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
