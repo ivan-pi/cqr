@@ -5,10 +5,9 @@ Batched QR for many small matrices, stored in Intel MKL's **Compact**
 an Intel MKL-style API:
 
 * **`cqr_mkl_?geqrf_compact`** - the QR *factorization* itself: an open,
-  vectorized alternative to `mkl_?geqrf_compact`, built on GNU vector types and
-  specialized for SSE/AVX/AVX-512. On this project's AVX-512 test machine it
-  outruns MKL's own compact `geqrf` and per-matrix LAPACK across the small-size
-  range. See its [design document](cqr_mkl_dgeqrf_compact_design.md).
+  vectorized alternative to `mkl_?geqrf_compact`. On this project's AVX-512 test
+  machine it outruns MKL's own compact `geqrf` and per-matrix LAPACK across the
+  small-size range. See its [design document](cqr_mkl_dgeqrf_compact_design.md).
 * **`cqr_mkl_?ormqr_compact`** - the *apply-Q* step MKL omits: MKL ships
   `mkl_?geqrf_compact` and `mkl_?trsm_compact` but no `?ormqr_compact`, so there
   is no supported way to apply `Q` (or `Q^T`) to a batch. cqr fills that gap. See
@@ -17,6 +16,10 @@ an Intel MKL-style API:
 Both routines come in single and double precision. Paired with MKL's own
 `mkl_?trsm_compact`, they factor and solve batched systems in the compact
 format.
+
+The kernels are written with GNU vector types (`__attribute__((vector_size))`),
+which the compiler lowers to SSE, AVX, or AVX-512 -- one portable source for
+every width. That is the project's central SIMD decision.
 
 ## Prerequisites
 
@@ -39,8 +42,16 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
-`-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
+For a performance build, pass host-tuned optimization flags through
+`CMAKE_CXX_FLAGS` so the SIMD kernels target the machine's widest vectors (the
+same AVX-512 MKL selects at runtime):
+
+```sh
+cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_FLAGS="-march=native"
+```
+
+Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 
 ## Examples
 
@@ -53,9 +64,9 @@ Useful options: `-DCQR_ENABLE_NATIVE=ON` (host-tuned codegen),
 * `bench_geqrf_compact [nmat] [reps]` - throughput of the *factorization*:
   `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs per-matrix
   `LAPACKE_dgeqrf`, across the target square-size range, reporting GFLOP/s and a
-  geometric-mean speedup. Accuracy-gated against LAPACK. Build with
-  `-DCQR_ENABLE_NATIVE=ON` for a fair comparison (so the compact kernel uses the
-  full vector width, as MKL's runtime dispatch does).
+  geometric-mean speedup. Accuracy-gated against LAPACK. For a fair comparison,
+  build with host-tuned flags (e.g. `-DCMAKE_CXX_FLAGS="-march=native"`) so the
+  compact kernel uses the full vector width, as MKL's runtime dispatch does.
 
 All are registered with CTest (`example_solve_qr_compact`,
 `bench_qr_compact_integration`, `bench_geqrf_compact_integration`).
@@ -70,8 +81,7 @@ include:
 | File | Role |
 |------|------|
 | `src/cqr_mkl_ext.h` | The MKL-style public API: `cqr_mkl_?geqrf_compact` (QR factorization, drop-in for `mkl_?geqrf_compact`) and `cqr_mkl_?ormqr_compact` (apply `Q`/`Q^T`, the missing `mkl_?ormqr_compact`). Takes `MKL_COMPACT_PACK` formats. |
-| `src/cqr_geqrf_compact.h` | The portable C API `dgeqrf_compact` / `sgeqrf_compact`: the QR factorization with an explicit interleave width `V` and no MKL dependency. |
-| `src/cqr_compact.h` | The portable C API `dormqr_compact` / `sormqr_compact`: the apply-`Q` operation from the left (`B := op(Q)*B`), explicit `V`, no MKL dependency. |
+| `src/cqr_compact.h` | The portable C API, all four exported functions: `dgeqrf_compact` / `sgeqrf_compact` (QR factorization) and `dormqr_compact` / `sormqr_compact` (apply `Q` / `Q^T`), with an explicit interleave width `V` and no MKL dependency. |
 
 Everything else under `src/` is internal - implementation details and tests,
 not part of the supported interface:

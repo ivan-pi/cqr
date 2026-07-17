@@ -24,9 +24,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "cqr_geqrf_compact.h"
-#include "cqr_geqrf_compact.hpp"
-#include "cqr_compact.h" /* dormqr_compact, to exercise the reflectors */
+#include "cqr_compact.h" /* dgeqrf_compact + dormqr_compact (all four C entry points) */
 
 /* ----------------------- reference kernels (scalar) ----------------- */
 

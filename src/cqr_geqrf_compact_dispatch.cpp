@@ -7,7 +7,7 @@
  * Assisted-by: Claude:claude-opus-4.8
  */
 
-#include "cqr_geqrf_compact.h"
+#include "cqr_compact.h"
 #include "cqr_geqrf_compact.hpp"
 
 #include <cassert>

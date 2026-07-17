@@ -250,9 +250,10 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
   `cqr_mkl_dgeqrf_compact` / `cqr_mkl_sgeqrf_compact`, unwrapping
   `MKL_COMPACT_PACK -> V` and instantiated on `MKL_INT` so ILP64 dimensions are
   not narrowed.
-* **Portable C API** (`cqr_geqrf_compact.h`): `dgeqrf_compact` /
-  `sgeqrf_compact`, taking an explicit interleave width `V` and no MKL
-  dependency, with LAPACK-style `info = -j` argument validation.
+* **Portable C API** (`cqr_compact.h`): `dgeqrf_compact` / `sgeqrf_compact`
+  (alongside the `?ormqr_compact` entry points), taking an explicit interleave
+  width `V` and no MKL dependency, with LAPACK-style `info = -j` argument
+  validation.
 * **Templated kernel** (`cqr_geqrf_compact.hpp`): `geqrf_compact<T,V>` over all
   packs; `geqrf_compact_group<T,V>` (tuned col-major) and
   `geqrf_compact_group_strided<T,V>` (general, via `BatchView`).
