@@ -11,7 +11,7 @@ ColumnLimit: 90
 PointerAlignment: Right
 BreakBeforeBraces: Stroustrup
 ReflowComments: false
-AllowShortFunctionsOnASingleLine: None
+AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: false
 AllowShortCaseLabelsOnASingleLine: true

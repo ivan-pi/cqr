@@ -47,19 +47,17 @@
 namespace cqr {
 namespace detail {
 
-/* ------------------------------------------------------------------ */
-/* V-wide helpers for the branch-free larfg.                           */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * V-wide helpers for the branch-free larfg.
+ * ------------------------------------------------------------------ */
 
 /* same-width signed integer for a floating type -- the lane type of the
  * masks the GNU vector relational operators yield, and of the bit-blend. */
+// clang-format off
 template <typename T> struct int_bits;
-template <> struct int_bits<float> {
-    using type = std::int32_t;
-};
-template <> struct int_bits<double> {
-    using type = std::int64_t;
-};
+template <> struct int_bits<float>  { using type = std::int32_t; };
+template <> struct int_bits<double> { using type = std::int64_t; };
+// clang-format on
 template <typename T> using int_bits_t = typename int_bits<T>::type;
 
 template <typename T, int V> using mask_t = typename pack<int_bits_t<T>, V>::type;
@@ -97,20 +95,20 @@ inline void vselect(typename pack<T, V>::type &r, const mask_t<T, V> &mask,
     r = reinterpret_cast<const typename pack<T, V>::type &>(rr);
 }
 
-/* ------------------------------------------------------------------ */
-/* Branch-free larfg for one pack (V matrices at once).                */
-/*                                                                     */
-/* Given the diagonal x0 = A(kk,kk) and tail = sum_{i>kk} A(i,kk)^2     */
-/* (the squared norm of the sub-diagonal part of column kk), write per   */
-/* lane the LAPACK dlarfg quantities, with the xnorm==0 branch folded    */
-/* into a mask so divergent lanes cost nothing:                          */
-/*   rdiag -> A(kk,kk) on exit  (beta if there is a reflector, else x0),*/
-/*   tau   -> the reflector scalar (0 if the column is already zeroed),  */
-/*   inv   -> 1/(x0 - beta) to scale the reflector body (0 when tau=0).  */
-/* The mask keys on tail>0 (below-diagonal norm), exactly as dlarfg, so  */
-/* an already-triangular column yields tau=0 with x0 unchanged and no    */
-/* lane ever forms 0/0 or 1/0.                                           */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * Branch-free larfg for one pack (V matrices at once).
+ *
+ * Given the diagonal x0 = A(kk,kk) and tail = sum_{i>kk} A(i,kk)^2
+ * (the squared norm of the sub-diagonal part of column kk), write per
+ * lane the LAPACK dlarfg quantities, with the xnorm==0 branch folded
+ * into a mask so divergent lanes cost nothing:
+ *   rdiag -> A(kk,kk) on exit  (beta if there is a reflector, else x0),
+ *   tau   -> the reflector scalar (0 if the column is already zeroed),
+ *   inv   -> 1/(x0 - beta) to scale the reflector body (0 when tau=0).
+ * The mask keys on tail>0 (below-diagonal norm), exactly as dlarfg, so
+ * an already-triangular column yields tau=0 with x0 unchanged and no
+ * lane ever forms 0/0 or 1/0.
+ * ------------------------------------------------------------------ */
 
 template <typename T, int V>
 inline void larfg_pack(const typename pack<T, V>::type &x0,
@@ -130,13 +128,13 @@ inline void larfg_pack(const typename pack<T, V>::type &x0,
     vselect<T, V>(rdiag, has, beta, x0);
 }
 
-/* ------------------------------------------------------------------ */
-/* One group of V interleaved matrices, column-major (tuned path).     */
-/*                                                                     */
-/* a_ points at element (0,0) of the group; column j is contiguous     */
-/* (row step = one V-wide pack), so the larfg reduction, the reflector  */
-/* scaling, and the trailing-column update all walk contiguous packs.   */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * One group of V interleaved matrices, column-major (tuned path).
+ *
+ * a_ points at element (0,0) of the group; column j is contiguous
+ * (row step = one V-wide pack), so the larfg reduction, the reflector
+ * scaling, and the trailing-column update all walk contiguous packs.
+ * ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
 void geqrf_compact_group(Int m, Int n, T *a_, Int ldap, T *tau_)
@@ -216,10 +214,10 @@ void geqrf_compact_group(Int m, Int n, T *a_, Int ldap, T *tau_)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* One group, fully general: column- or row-major via BatchView strides.*/
-/* Same geqr2 math; only the addressing differs.                        */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * One group, fully general: column- or row-major via BatchView strides.
+ * Same geqr2 math; only the addressing differs.
+ * ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
 void geqrf_compact_group_strided(Int m, Int n,
@@ -290,10 +288,10 @@ void geqrf_compact_group_strided(Int m, Int n,
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* All groups: nm matrices total (a padded partial last group is       */
-/* processed too, which is harmless -- identity factors to tau = 0).   */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * All groups: nm matrices total (a padded partial last group is
+ * processed too, which is harmless -- identity factors to tau = 0).
+ * ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
 void geqrf_compact(Int m, Int n, T *ap, Int ldap, T *taup, Int nm)
@@ -309,13 +307,13 @@ void geqrf_compact(Int m, Int n, T *ap, Int ldap, T *taup, Int nm)
         geqrf_compact_group<T, V, Int>(m, n, ap + g * str_a, ldap, taup + g * str_t);
 }
 
-/* ------------------------------------------------------------------ */
-/* All groups, fully general: column- or row-major.                    */
-/*                                                                     */
-/* Column-major routes to the tuned contiguous kernel; row-major uses   */
-/* the strided kernel (a row step is 1, a column step is ldap, so the   */
-/* reflector axis -- down a column -- has stride ldap).                 */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * All groups, fully general: column- or row-major.
+ *
+ * Column-major routes to the tuned contiguous kernel; row-major uses
+ * the strided kernel (a row step is 1, a column step is ldap, so the
+ * reflector axis -- down a column -- has stride ldap).
+ * ------------------------------------------------------------------ */
 
 template <typename T, int V, typename Int = int>
 void geqrf_compact_general(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm)

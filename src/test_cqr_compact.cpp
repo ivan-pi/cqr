@@ -408,22 +408,21 @@ static int test_validation()
                               ldbp_, V_, nm_);
     };
 
-    struct {
-        const char *what;
-        int got, want;
-    } t[] = {
-        {"valid", call('T', m, nrhs, k, ld, ld, V, nm), 0},
-        {"bad trans", call('X', m, nrhs, k, ld, ld, V, nm), -1},
-        {"m<0", call('T', -1, nrhs, k, ld, ld, V, nm), -2},
-        {"nrhs<0", call('T', m, -1, k, ld, ld, V, nm), -3},
-        {"k>m", call('T', m, nrhs, m + 1, ld, ld, V, nm), -4},
-        {"ldap<m", call('T', m, nrhs, k, m - 1, ld, V, nm), -6},
-        {"ldbp<m", call('T', m, nrhs, k, ld, m - 1, V, nm), -9},
-        {"bad V", call('T', m, nrhs, k, ld, ld, 3, nm), -10},
-        {"nm<0", call('T', m, nrhs, k, ld, ld, V, -1), -11},
-        {"empty m=0", call('T', 0, nrhs, 0, 1, 1, V, nm), 0},
-        {"empty nm=0", call('T', m, nrhs, k, ld, ld, V, 0), 0},
+    // clang-format off
+    struct { const char *what; int got, want; } t[] = {
+        {"valid",          call('T', m, nrhs, k,   ld,    ld,    V, nm),   0},
+        {"bad trans",      call('X', m, nrhs, k,   ld,    ld,    V, nm),  -1},
+        {"m<0",            call('T', -1, nrhs, k,  ld,    ld,    V, nm),  -2},
+        {"nrhs<0",         call('T', m, -1, k,     ld,    ld,    V, nm),  -3},
+        {"k>m",            call('T', m, nrhs, m+1, ld,    ld,    V, nm),  -4},
+        {"ldap<m",         call('T', m, nrhs, k,   m-1,   ld,    V, nm),  -6},
+        {"ldbp<m",         call('T', m, nrhs, k,   ld,    m-1,   V, nm),  -9},
+        {"bad V",          call('T', m, nrhs, k,   ld,    ld,    3, nm), -10},
+        {"nm<0",           call('T', m, nrhs, k,   ld,    ld,    V, -1), -11},
+        {"empty m=0",      call('T', 0, nrhs, 0,   1,     1,     V, nm),   0},
+        {"empty nm=0",     call('T', m, nrhs, k,   ld,    ld,    V, 0),    0},
     };
+    // clang-format on
     int bad = 0;
     for (auto &c : t)
         bad += (c.got != c.want);

@@ -286,21 +286,20 @@ static int test_validation()
     auto call = [&](char lay, int m_, int n_, int ldap_, int V_, int nm_) {
         return dgeqrf_compact(lay, m_, n_, ap.data(), ldap_, tau.data(), V_, nm_);
     };
-    struct {
-        const char *what;
-        int got, want;
-    } t[] = {
-        {"valid col", call('C', m, n, ld, V, nm), 0},
-        {"valid row", call('R', m, n, n, V, nm), 0}, /* row-major ld >= n */
-        {"bad layout", call('X', m, n, ld, V, nm), -1},
-        {"m<0", call('C', -1, n, ld, V, nm), -2},
-        {"n<0", call('C', m, -1, ld, V, nm), -3},
-        {"ldap<m", call('C', m, n, m - 1, V, nm), -5},
-        {"bad V", call('C', m, n, ld, 3, nm), -7},
-        {"nm<0", call('C', m, n, ld, V, -1), -8},
-        {"empty m=0", call('C', 0, n, 1, V, nm), 0},
-        {"empty nm=0", call('C', m, n, ld, V, 0), 0},
+    // clang-format off
+    struct { const char *what; int got, want; } t[] = {
+        {"valid col",   call('C', m, n,  ld,  V, nm),   0},
+        {"valid row",   call('R', m, n,  n,   V, nm),   0},   /* row-major ld >= n */
+        {"bad layout",  call('X', m, n,  ld,  V, nm),  -1},
+        {"m<0",         call('C', -1, n, ld,  V, nm),  -2},
+        {"n<0",         call('C', m, -1, ld,  V, nm),  -3},
+        {"ldap<m",      call('C', m, n,  m-1, V, nm),  -5},
+        {"bad V",       call('C', m, n,  ld,  3, nm),  -7},
+        {"nm<0",        call('C', m, n,  ld,  V, -1),  -8},
+        {"empty m=0",   call('C', 0, n,  1,   V, nm),   0},
+        {"empty nm=0",  call('C', m, n,  ld,  V, 0),    0},
     };
+    // clang-format on
     int bad = 0;
     for (auto &c : t)
         bad += (c.got != c.want);

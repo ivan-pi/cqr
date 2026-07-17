@@ -24,10 +24,7 @@ namespace cqr {
 namespace detail {
 
 struct mkl_deleter {
-    void operator()(void *p) const noexcept
-    {
-        mkl_free(p);
-    }
+    void operator()(void *p) const noexcept { mkl_free(p); }
 };
 
 /* Owning handle for an mkl_malloc'd buffer of T. */

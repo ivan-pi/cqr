@@ -71,9 +71,7 @@ void check_info(MKL_INT info, const char *what)
  * assumed to stay in int32 range. */
 class Matrix {
   public:
-    Matrix(int rows, int cols) : rows_(rows), cols_(cols), a_(rows * cols)
-    {
-    }
+    Matrix(int rows, int cols) : rows_(rows), cols_(cols), a_(rows * cols) {}
 
     /* Plain value type (rule of five, all defaulted): std::vector already
      * manages the storage, so no destructor is needed -- but once we spell
@@ -84,34 +82,15 @@ class Matrix {
     Matrix &operator=(const Matrix &) = default;
     Matrix &operator=(Matrix &&) = default;
 
-    int rows() const
-    {
-        return rows_;
-    }
-    int cols() const
-    {
-        return cols_;
-    }
-    int ld() const
-    {
-        return rows_;
-    }
-    double *data()
-    {
-        return a_.data();
-    }
-    const double *data() const
-    {
-        return a_.data();
-    }
-    double &operator()(int i, int j)
-    {
-        return a_[i + j * rows_];
-    }
-    double operator()(int i, int j) const
-    {
-        return a_[i + j * rows_];
-    }
+    // clang-format off
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
+    int ld()   const { return rows_; }
+    double       *data()       { return a_.data(); }
+    const double *data() const { return a_.data(); }
+    double &operator()(int i, int j)       { return a_[i + j * rows_]; }
+    double  operator()(int i, int j) const { return a_[i + j * rows_]; }
+    // clang-format on
 
   private:
     int rows_, cols_;
