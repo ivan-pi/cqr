@@ -272,58 +272,43 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
 
 /* Parsed command line: positional [nmat] [reps], plus the optional flags
  * --size-sweep=nmin:nmax[:stride] (cqr-only scan) and --simdlen=2|4|8 (force the
- * interleave width instead of the host default). Everything is validated in the
- * constructor, then const. simdlen == 0 means "use the host's widest". */
-struct Args {
-    const int nmat;
-    const int reps;
-    const int simdlen; /* forced interleave width, or 0 for the host default */
-    const bool sweep;
-    const int sweep_min, sweep_max, sweep_step;
+ * interleave width instead of the host default). The constructor parses and
+ * validates; hold the object const so the values cannot change afterward.
+ * simdlen == 0 means "use the host's widest". */
+struct CmdArgs {
+    int nmat = 512;
+    int reps = 3;
+    int simdlen = 0; /* forced interleave width, or 0 for the host default */
+    bool sweep = false;
+    int sweep_min = 0, sweep_max = 0, sweep_step = 1;
 
-    Args(int argc, char **argv) : Args(parse(argc, argv)) {}
-
-  private:
-    struct Parsed {
-        int nmat = 512, reps = 3, simdlen = 0;
-        bool sweep = false;
-        int smin = 0, smax = 0, sstep = 1;
-    };
-    explicit Args(const Parsed &p)
-        : nmat(p.nmat), reps(p.reps), simdlen(p.simdlen), sweep(p.sweep),
-          sweep_min(p.smin), sweep_max(p.smax), sweep_step(p.sstep)
+    CmdArgs(int argc, char **argv)
     {
-    }
-
-    static Parsed parse(int argc, char **argv)
-    {
-        Parsed p;
         std::vector<const char *> pos;
         for (int i = 1; i < argc; ++i) {
             if (std::strncmp(argv[i], "--size-sweep=", 13) == 0) {
-                int got =
-                    std::sscanf(argv[i] + 13, "%d:%d:%d", &p.smin, &p.smax, &p.sstep);
+                int got = std::sscanf(argv[i] + 13, "%d:%d:%d", &sweep_min, &sweep_max,
+                                      &sweep_step);
                 check(got >= 2, "usage: --size-sweep=nmin:nmax[:stride]");
-                if (got == 2) p.sstep = 1;
-                p.sweep = true;
+                if (got == 2) sweep_step = 1;
+                sweep = true;
             }
             else if (std::strncmp(argv[i], "--simdlen=", 10) == 0)
-                p.simdlen = std::atoi(argv[i] + 10);
+                simdlen = std::atoi(argv[i] + 10);
             else
                 pos.push_back(argv[i]);
         }
-        if (pos.size() > 0) p.nmat = std::atoi(pos[0]);
-        if (pos.size() > 1) p.reps = std::atoi(pos[1]);
-        check(p.nmat > 0 && p.reps > 0,
+        if (pos.size() > 0) nmat = std::atoi(pos[0]);
+        if (pos.size() > 1) reps = std::atoi(pos[1]);
+        check(nmat > 0 && reps > 0,
               "usage: bench_geqrf_compact [nmat>0] [reps>0] "
               "[--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8]");
-        check(!p.sweep || (p.smin > 0 && p.smax >= p.smin && p.sstep > 0),
+        check(!sweep || (sweep_min > 0 && sweep_max >= sweep_min && sweep_step > 0),
               "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
         /* Double compact widths are 2/4/8 (SSE/AVX/AVX512); 16 is float's AVX512
          * width and has no double format, so it is rejected here. */
-        check(p.simdlen == 0 || p.simdlen == 2 || p.simdlen == 4 || p.simdlen == 8,
+        check(simdlen == 0 || simdlen == 2 || simdlen == 4 || simdlen == 8,
               "usage: --simdlen must be 2, 4, or 8 (16 is float-only; this is double)");
-        return p;
     }
 };
 
@@ -331,7 +316,7 @@ struct Args {
 
 int main(int argc, char **argv)
 {
-    const Args args(argc, argv);
+    const CmdArgs args(argc, argv);
     const int nmat = args.nmat, reps = args.reps;
 
     /* Use the host's widest compact format unless --simdlen forces a narrower one.
