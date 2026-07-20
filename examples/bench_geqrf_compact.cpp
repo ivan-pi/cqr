@@ -18,7 +18,10 @@
  * over matrices the same way. The factorization is checked (untimed) against
  * per-matrix LAPACK, so the benchmark doubles as an integration test.
  *
- * Usage:  bench_geqrf_compact [nmat] [reps]      (defaults: 512 matrices, 3 reps)
+ * Usage:  bench_geqrf_compact [nmat] [reps]                    (3-way comparison)
+ *         bench_geqrf_compact [nmat] [reps] --size-sweep=nmin:nmax[:stride]
+ *                                             (cqr-only throughput scan)
+ *         defaults: 512 matrices, 3 reps
  *
  * Build: needs Intel MKL plus this repo's cqr_mkl_ext; wired up by CMakeLists.txt
  * as the `bench_geqrf_compact` target. OpenMP is used when available.
@@ -205,13 +208,81 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     return worst;
 }
 
+/* Single-kernel size sweep: factor a pre-packed pool with cqr at each n in
+ * [nmin, nmax] (step stride) and print throughput only -- no MKL/LAPACK
+ * cross-check, so it stays cheap and isolates the kernel. The point is the
+ * staircase: n that is / is not a multiple of the interleave width V. */
+void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_PACK fmt,
+               int V, int nthreads)
+{
+    std::printf("QR factorization size sweep: cqr_mkl_dgeqrf_compact only "
+                "(throughput, no cross-check)\n");
+    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d  (square, "
+                "pre-packed)\n\n",
+                nmat, reps, V, compact_format_name(fmt), nthreads);
+    std::printf("   n | cqr GFLOP/s |   cqr mat/s\n");
+    std::printf("-----+-------------+-------------\n");
+
+    for (int n = nmin; n <= nmax; n += stride) {
+        const int m = n, k = n;
+        Pool P(m, n, nmat);
+        const int ngroups = (nmat + V - 1) / V;
+
+        MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nmat);
+        MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nmat);
+        auto pristine = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+        auto work_ap = cqr::detail::mkl_alloc_bytes<double>(sz_a);
+        auto taup = cqr::detail::mkl_alloc_bytes<double>(sz_t);
+        std::vector<double *> Ap(nmat);
+        for (int v = 0; v < nmat; ++v)
+            Ap[v] = P.a.data() + (size_t)v * m * n;
+        mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, pristine.get(), m, fmt,
+                            nmat);
+
+        double wq;
+        MKL_INT info;
+        cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, work_ap.get(), m, taup.get(), &wq, -1,
+                               &info, fmt, V);
+        const MKL_INT lwork = (MKL_INT)wq;
+
+        auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
+        const double t = best_time(reps, restore, [&] {
+            factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt, lwork);
+        });
+        std::printf("%4d | %11.2f | %11.2e\n", n, nmat * geqrf_gflop(m, n) / t, nmat / t);
+    }
+    std::printf("-----+-------------+-------------\n");
+}
+
 } /* anonymous namespace */
 
 int main(int argc, char **argv)
 {
-    const int nmat = (argc > 1) ? std::atoi(argv[1]) : 512;
-    const int reps = (argc > 2) ? std::atoi(argv[2]) : 3;
-    check(nmat > 0 && reps > 0, "usage: bench_geqrf_compact [nmat>0] [reps>0]");
+    /* Positional [nmat] [reps]; the optional --size-sweep=nmin:nmax[:stride] flag
+     * switches to a cqr-only throughput scan (see run_sweep). reps is kept in
+     * sweep mode too: best-of-reps timing matters most at the small sizes, where a
+     * single pass is only microseconds. */
+    int sweep_min = 0, sweep_max = 0, sweep_step = 1;
+    bool sweep = false;
+    std::vector<const char *> pos;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], "--size-sweep=", 13) == 0) {
+            int got = std::sscanf(argv[i] + 13, "%d:%d:%d", &sweep_min, &sweep_max,
+                                  &sweep_step);
+            check(got >= 2, "usage: --size-sweep=nmin:nmax[:stride]");
+            if (got == 2) sweep_step = 1;
+            sweep = true;
+        }
+        else
+            pos.push_back(argv[i]);
+    }
+    const int nmat = pos.size() > 0 ? std::atoi(pos[0]) : 512;
+    const int reps = pos.size() > 1 ? std::atoi(pos[1]) : 3;
+    check(
+        nmat > 0 && reps > 0,
+        "usage: bench_geqrf_compact [nmat>0] [reps>0] [--size-sweep=nmin:nmax[:stride]]");
+    check(!sweep || (sweep_min > 0 && sweep_max >= sweep_min && sweep_step > 0),
+          "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
 
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = vlen_for_format<double>(fmt);
@@ -225,9 +296,18 @@ int main(int argc, char **argv)
     nthreads = omp_get_num_threads();
 #endif
 
-    /* Square sizes spanning the target range (dense in the emphasized region
-     * below 170, then a few larger to show where the crossover happens). */
-    constexpr std::array sizes = {8, 16, 24, 32, 48, 64, 96, 128, 170, 256, 384, 500};
+    if (sweep) {
+        run_sweep(nmat, reps, sweep_min, sweep_max, sweep_step, fmt, V, nthreads);
+        return 0;
+    }
+
+    /* Square sizes spanning the target range, dense below 170. Deliberately mixes
+     * sizes that are not multiples of the SIMD width V -- 30, 45, 60, 105, 168,
+     * from 2-D/3-D RBF-FD stencils -- with the round powers, so the remainder
+     * handling (the staircase SIMD effect) is visible; then a few larger sizes for
+     * the crossover. Use --size-sweep for a finer cqr-only scan. */
+    constexpr std::array sizes = {8,  16,  24,  30,  32,  45,  48,  60, 64,
+                                  96, 105, 128, 168, 170, 256, 384, 500};
 
     std::printf("QR factorization throughput: cqr_mkl_dgeqrf_compact vs "
                 "mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf\n");
