@@ -18,11 +18,12 @@
  * over matrices the same way. The factorization is checked (untimed) against
  * per-matrix LAPACK, so the benchmark doubles as an integration test.
  *
- * Usage:  bench_geqrf_compact [nmat] [reps]                    (3-way comparison)
- *         bench_geqrf_compact [nmat] [reps] --size-sweep=nmin:nmax[:stride]
- *                                             (cqr-only throughput scan)
- *         --simdlen=2|4|8 forces the interleave width (default: host's widest)
- *         defaults: 512 matrices, 3 reps
+ * Usage:  bench_geqrf_compact [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8]
+ *         [nmat] [reps]      (defaults: 512 matrices, 3 reps)
+ *
+ * With no --size-sweep it runs the 3-way comparison (cqr vs mkl_dgeqrf_compact
+ * vs per-matrix LAPACK); with it, a cqr-only throughput scan over the size range.
+ * --simdlen forces the interleave width (2/4/8) instead of the host's widest.
  *
  * Build: needs Intel MKL plus this repo's cqr_mkl_ext; wired up by CMakeLists.txt
  * as the `bench_geqrf_compact` target. OpenMP is used when available.
@@ -43,6 +44,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <random>
 #include <vector>
 #include <algorithm>
@@ -91,11 +93,51 @@ MKL_COMPACT_PACK format_for_vlen(int v)
     }
 }
 
+/* Allocator giving std::vector 64-byte-aligned storage, so the dense pool and
+ * its LAPACK working copy start pack-aligned like the compact buffers -- no
+ * cache-line splits in the packing reads or the per-matrix LAPACK path. Defines
+ * only what std::vector needs; the explicit rebind is required because the
+ * non-type Align parameter defeats allocator_traits' default rebinding. */
+template <typename T, std::size_t Align = 64> struct aligned_allocator {
+    using value_type = T;
+    aligned_allocator() = default;
+    template <typename U> aligned_allocator(const aligned_allocator<U, Align> &) noexcept
+    {
+    }
+    template <typename U> struct rebind {
+        using other = aligned_allocator<U, Align>;
+    };
+
+    T *allocate(std::size_t n)
+    {
+        if (n == 0) return nullptr;
+        const std::size_t bytes = (n * sizeof(T) + Align - 1) & ~(Align - 1);
+        void *p = std::aligned_alloc(Align, bytes); /* size a multiple of Align */
+        if (!p) throw std::bad_alloc();
+        return static_cast<T *>(p);
+    }
+    void deallocate(T *p, std::size_t) noexcept { std::free(p); }
+};
+
+template <typename T, typename U, std::size_t A>
+bool operator==(const aligned_allocator<T, A> &, const aligned_allocator<U, A> &) noexcept
+{
+    return true;
+}
+template <typename T, typename U, std::size_t A>
+bool operator!=(const aligned_allocator<T, A> &, const aligned_allocator<U, A> &) noexcept
+{
+    return false;
+}
+
+/* Dense storage aligned to the compact pack width (64 B covers every format). */
+using aligned_dvec = std::vector<double, aligned_allocator<double>>;
+
 /* A pool of `nmat` dense column-major m x n matrices, back to back in `a`
  * (m*n per matrix), well conditioned (diagonal-boosted). */
 struct Pool {
     int m, n, nmat;
-    std::vector<double> a; /* nmat * m*n */
+    aligned_dvec a; /* nmat * m*n, 64 B-aligned */
 
     Pool(int m_, int n_, int nmat_)
         : m(m_), n(n_), nmat(nmat_), a((size_t)nmat_ * m_ * n_)
@@ -301,8 +343,8 @@ struct CmdArgs {
         if (pos.size() > 0) nmat = std::atoi(pos[0]);
         if (pos.size() > 1) reps = std::atoi(pos[1]);
         check(nmat > 0 && reps > 0,
-              "usage: bench_geqrf_compact [nmat>0] [reps>0] "
-              "[--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8]");
+              "usage: bench_geqrf_compact [--size-sweep=nmin:nmax[:stride]] "
+              "[--simdlen=2|4|8] [nmat>0] [reps>0]");
         check(!sweep || (sweep_min > 0 && sweep_max >= sweep_min && sweep_step > 0),
               "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
         /* Double compact widths are 2/4/8 (SSE/AVX/AVX512); 16 is float's AVX512
@@ -395,7 +437,7 @@ int main(int argc, char **argv)
                            &info, fmt, V);
         const MKL_INT lwork_mkl = (MKL_INT)wq;
 
-        std::vector<double> pool_work; /* standard-layout copy */
+        aligned_dvec pool_work; /* standard-layout copy (aligned like the pool) */
 
         /* both compact paths factor in place, so restore the packed input
          * (untimed) before each timed pass */
