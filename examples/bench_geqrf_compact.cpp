@@ -211,7 +211,10 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
 /* Single-kernel size sweep: factor a pre-packed pool with cqr at each n in
  * [nmin, nmax] (step stride) and print throughput only -- no MKL/LAPACK
  * cross-check, so it stays cheap and isolates the kernel. The point is the
- * staircase: n that is / is not a multiple of the interleave width V. */
+ * staircase: n that is / is not a multiple of the interleave width V. The raw
+ * best-pass time is printed next to the derived rates: it is the quantity they
+ * come from (rate = nmat / time), so a total near the timer granularity flags a
+ * noisy row -- raise nmat until it is comfortably above the clock resolution. */
 void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_PACK fmt,
                int V, int nthreads)
 {
@@ -220,8 +223,8 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
     std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d  (square, "
                 "pre-packed)\n\n",
                 nmat, reps, V, compact_format_name(fmt), nthreads);
-    std::printf("   n | cqr GFLOP/s |   cqr mat/s\n");
-    std::printf("-----+-------------+-------------\n");
+    std::printf("   n |  total (s) | cqr GFLOP/s |   cqr mat/s\n");
+    std::printf("-----+------------+-------------+-------------\n");
 
     for (int n = nmin; n <= nmax; n += stride) {
         const int m = n, k = n;
@@ -249,9 +252,10 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
         const double t = best_time(reps, restore, [&] {
             factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt, lwork);
         });
-        std::printf("%4d | %11.2f | %11.2e\n", n, nmat * geqrf_gflop(m, n) / t, nmat / t);
+        std::printf("%4d | %10.3e | %11.2f | %11.2e\n", n, t,
+                    nmat * geqrf_gflop(m, n) / t, nmat / t);
     }
-    std::printf("-----+-------------+-------------\n");
+    std::printf("-----+------------+-------------+-------------\n");
 }
 
 } /* anonymous namespace */
