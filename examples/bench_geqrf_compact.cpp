@@ -21,6 +21,7 @@
  * Usage:  bench_geqrf_compact [nmat] [reps]                    (3-way comparison)
  *         bench_geqrf_compact [nmat] [reps] --size-sweep=nmin:nmax[:stride]
  *                                             (cqr-only throughput scan)
+ *         --simdlen=2|4|8 forces the interleave width (default: host's widest)
  *         defaults: 512 matrices, 3 reps
  *
  * Build: needs Intel MKL plus this repo's cqr_mkl_ext; wired up by CMakeLists.txt
@@ -76,6 +77,17 @@ const char *compact_format_name(MKL_COMPACT_PACK format)
     case MKL_COMPACT_AVX: return "AVX";
     case MKL_COMPACT_AVX512: return "AVX512";
     default: return "unknown";
+    }
+}
+
+/* The compact pack format whose double interleave width is v (2/4/8 ->
+ * SSE/AVX/AVX512); MKL_COMPACT_SSE for anything else (rejected before use). */
+MKL_COMPACT_PACK format_for_vlen(int v)
+{
+    switch (v) {
+    case 4: return MKL_COMPACT_AVX;
+    case 8: return MKL_COMPACT_AVX512;
+    default: return MKL_COMPACT_SSE;
     }
 }
 
@@ -258,38 +270,79 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
     std::printf("-----+------------+-------------+-------------\n");
 }
 
+/* Parsed command line: positional [nmat] [reps], plus the optional flags
+ * --size-sweep=nmin:nmax[:stride] (cqr-only scan) and --simdlen=2|4|8 (force the
+ * interleave width instead of the host default). Everything is validated in the
+ * constructor, then const. simdlen == 0 means "use the host's widest". */
+struct Args {
+    const int nmat;
+    const int reps;
+    const int simdlen; /* forced interleave width, or 0 for the host default */
+    const bool sweep;
+    const int sweep_min, sweep_max, sweep_step;
+
+    Args(int argc, char **argv) : Args(parse(argc, argv)) {}
+
+  private:
+    struct Parsed {
+        int nmat = 512, reps = 3, simdlen = 0;
+        bool sweep = false;
+        int smin = 0, smax = 0, sstep = 1;
+    };
+    explicit Args(const Parsed &p)
+        : nmat(p.nmat), reps(p.reps), simdlen(p.simdlen), sweep(p.sweep),
+          sweep_min(p.smin), sweep_max(p.smax), sweep_step(p.sstep)
+    {
+    }
+
+    static Parsed parse(int argc, char **argv)
+    {
+        Parsed p;
+        std::vector<const char *> pos;
+        for (int i = 1; i < argc; ++i) {
+            if (std::strncmp(argv[i], "--size-sweep=", 13) == 0) {
+                int got =
+                    std::sscanf(argv[i] + 13, "%d:%d:%d", &p.smin, &p.smax, &p.sstep);
+                check(got >= 2, "usage: --size-sweep=nmin:nmax[:stride]");
+                if (got == 2) p.sstep = 1;
+                p.sweep = true;
+            }
+            else if (std::strncmp(argv[i], "--simdlen=", 10) == 0)
+                p.simdlen = std::atoi(argv[i] + 10);
+            else
+                pos.push_back(argv[i]);
+        }
+        if (pos.size() > 0) p.nmat = std::atoi(pos[0]);
+        if (pos.size() > 1) p.reps = std::atoi(pos[1]);
+        check(p.nmat > 0 && p.reps > 0,
+              "usage: bench_geqrf_compact [nmat>0] [reps>0] "
+              "[--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8]");
+        check(!p.sweep || (p.smin > 0 && p.smax >= p.smin && p.sstep > 0),
+              "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
+        /* Double compact widths are 2/4/8 (SSE/AVX/AVX512); 16 is float's AVX512
+         * width and has no double format, so it is rejected here. */
+        check(p.simdlen == 0 || p.simdlen == 2 || p.simdlen == 4 || p.simdlen == 8,
+              "usage: --simdlen must be 2, 4, or 8 (16 is float-only; this is double)");
+        return p;
+    }
+};
+
 } /* anonymous namespace */
 
 int main(int argc, char **argv)
 {
-    /* Positional [nmat] [reps]; the optional --size-sweep=nmin:nmax[:stride] flag
-     * switches to a cqr-only throughput scan (see run_sweep). reps is kept in
-     * sweep mode too: best-of-reps timing matters most at the small sizes, where a
-     * single pass is only microseconds. */
-    int sweep_min = 0, sweep_max = 0, sweep_step = 1;
-    bool sweep = false;
-    std::vector<const char *> pos;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strncmp(argv[i], "--size-sweep=", 13) == 0) {
-            int got = std::sscanf(argv[i] + 13, "%d:%d:%d", &sweep_min, &sweep_max,
-                                  &sweep_step);
-            check(got >= 2, "usage: --size-sweep=nmin:nmax[:stride]");
-            if (got == 2) sweep_step = 1;
-            sweep = true;
-        }
-        else
-            pos.push_back(argv[i]);
-    }
-    const int nmat = pos.size() > 0 ? std::atoi(pos[0]) : 512;
-    const int reps = pos.size() > 1 ? std::atoi(pos[1]) : 3;
-    check(
-        nmat > 0 && reps > 0,
-        "usage: bench_geqrf_compact [nmat>0] [reps>0] [--size-sweep=nmin:nmax[:stride]]");
-    check(!sweep || (sweep_min > 0 && sweep_max >= sweep_min && sweep_step > 0),
-          "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
+    const Args args(argc, argv);
+    const int nmat = args.nmat, reps = args.reps;
 
-    const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
+    /* Use the host's widest compact format unless --simdlen forces a narrower one.
+     * A wider interleave than the host's native SIMD cannot execute, so reject it
+     * (mkl_get_format_compact reports the widest the architecture supports). */
+    const MKL_COMPACT_PACK native = mkl_get_format_compact();
+    const MKL_COMPACT_PACK fmt = args.simdlen ? format_for_vlen(args.simdlen) : native;
     const int V = vlen_for_format<double>(fmt);
+    check(V > 0 && V <= vlen_for_format<double>(native),
+          "requested --simdlen exceeds the host's native SIMD width");
+
     mkl_set_num_threads(1);
     LAPACKE_set_nancheck(0);
 
@@ -300,8 +353,9 @@ int main(int argc, char **argv)
     nthreads = omp_get_num_threads();
 #endif
 
-    if (sweep) {
-        run_sweep(nmat, reps, sweep_min, sweep_max, sweep_step, fmt, V, nthreads);
+    if (args.sweep) {
+        run_sweep(nmat, reps, args.sweep_min, args.sweep_max, args.sweep_step, fmt, V,
+                  nthreads);
         return 0;
     }
 
