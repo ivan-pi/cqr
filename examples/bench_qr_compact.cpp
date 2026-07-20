@@ -12,10 +12,12 @@
  * X == 1 is built once, and both paths solve it -- the batched path packing
  * each group of `V` (the compact SIMD width) on the fly, the per-matrix path
  * factoring in place. The outer loop over the pool runs under OpenMP (MKL's own
- * threading pinned to 1); each size is timed `reps` times keeping the best, both
- * paths are accuracy-gated against X == 1, and a geometric-mean speedup across
- * sizes is printed at the end. (Details on the timing harness and the in-place
- * working copy are at best_time() and run_unbatched().)
+ * threading pinned to 1); each size is timed `reps` times keeping the best, and
+ * a geometric-mean speedup across sizes is printed at the end. (Details on the
+ * timing harness and the in-place working copy are at best_time() and
+ * run_unbatched().) A single right-hand side per system (nrhs = 1); both paths
+ * are checked against the known solution X == 1, so the reported error is a
+ * forward error, not a comparison to LAPACK.
  *
  * Usage:  bench_qr_compact [nmat] [reps]      (defaults: 1000 matrices, 3 reps)
  *
@@ -257,6 +259,7 @@ int main(int argc, char **argv)
 
     const int sizes[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
+    const int nrhs = 1; /* single RHS per system (see Pool / run_batched) */
     const double eps = std::numeric_limits<double>::epsilon();
 
     std::printf("QR solve throughput: compact batched (mkl_dgeqrf_compact -> "
@@ -264,16 +267,20 @@ int main(int argc, char **argv)
     std::printf(
         "            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
 #ifdef _OPENMP
-    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n", nmat,
-                reps, V, compact_format_name(fmt), nthreads);
+    std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
+                nmat, reps, nrhs, V, compact_format_name(fmt), nthreads);
 #else
-    std::printf("matrices=%d  reps=%d  simdlen=%d (%s)  Sequential\n\n", nmat, reps, V,
-                compact_format_name(fmt));
+    std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  Sequential\n\n", nmat,
+                reps, nrhs, V, compact_format_name(fmt));
 #endif
+    /* Throughput as matrices/second (scientific) alongside the raw seconds. The
+     * error is the forward error vs the known solution X == 1, not vs LAPACK. */
     std::printf(
-        "   n |  batched (s)  Mmat/s | unbatched (s) Mmat/s | speedup |  max fwd err\n");
+        "   n |  batched (s)    mat/s | unbatched (s)   mat/s | speedup | max fwd err "
+        "(vs X=1)\n");
     std::printf(
-        "-----+----------------------+----------------------+---------+-------------\n");
+        "-----+-----------------------+-----------------------+---------+--------------"
+        "------\n");
 
     double log_speedup_sum = 0.0;
     for (int si = 0; si < nsizes; ++si) {
@@ -303,13 +310,14 @@ int main(int argc, char **argv)
 
         const double speedup = tu / tb;
         log_speedup_sum += std::log(speedup);
-        std::printf("%4d | %12.4f  %6.2f | %12.4f  %6.2f | %6.2fx | %.2e (rtol %.1e)\n",
-                    n, tb, nmat / tb / 1e6, tu, nmat / tu / 1e6, speedup, maxerr, rtol);
+        std::printf("%4d | %12.4f  %8.2e | %12.4f  %8.2e | %6.2fx | %.2e (rtol %.1e)\n",
+                    n, tb, nmat / tb, tu, nmat / tu, speedup, maxerr, rtol);
     }
 
     const double geomean = std::exp(log_speedup_sum / nsizes);
     std::printf(
-        "-----+----------------------+----------------------+---------+-------------\n");
+        "-----+-----------------------+-----------------------+---------+--------------"
+        "------\n");
     std::printf("geometric-mean speedup (batched vs unbatched) across sizes: %.2fx\n",
                 geomean);
     return 0;
