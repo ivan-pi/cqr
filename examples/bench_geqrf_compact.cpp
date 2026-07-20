@@ -93,51 +93,32 @@ MKL_COMPACT_PACK format_for_vlen(int v)
     }
 }
 
-/* Allocator giving std::vector 64-byte-aligned storage, so the dense pool and
- * its LAPACK working copy start pack-aligned like the compact buffers -- no
- * cache-line splits in the packing reads or the per-matrix LAPACK path. Defines
- * only what std::vector needs; the explicit rebind is required because the
- * non-type Align parameter defeats allocator_traits' default rebinding. */
-template <typename T, std::size_t Align = 64> struct aligned_allocator {
+/* std::vector storage aligned to the compact pack width (64 B covers every
+ * format), so the dense pool and its LAPACK working copy start pack-aligned like
+ * the compact buffers -- no cache-line splits in the packing reads or the
+ * per-matrix LAPACK path. Keeping the allocator a stateless, type-only template
+ * is what keeps it small: allocator_traits then defaults rebind, construct, and
+ * the rest, and std::vector's copy-assign is the only reason equality is spelled
+ * out (aligned_alloc needs the size rounded up to the alignment). */
+template <typename T> struct aligned_allocator {
     using value_type = T;
-    aligned_allocator() = default;
-    template <typename U> aligned_allocator(const aligned_allocator<U, Align> &) noexcept
-    {
-    }
-    template <typename U> struct rebind {
-        using other = aligned_allocator<U, Align>;
-    };
-
     T *allocate(std::size_t n)
     {
-        if (n == 0) return nullptr;
-        const std::size_t bytes = (n * sizeof(T) + Align - 1) & ~(Align - 1);
-        void *p = std::aligned_alloc(Align, bytes); /* size a multiple of Align */
+        void *p = std::aligned_alloc(64, (n * sizeof(T) + 63) & ~std::size_t(63));
         if (!p) throw std::bad_alloc();
         return static_cast<T *>(p);
     }
     void deallocate(T *p, std::size_t) noexcept { std::free(p); }
+    bool operator==(const aligned_allocator &) const noexcept { return true; }
+    bool operator!=(const aligned_allocator &) const noexcept { return false; }
 };
-
-template <typename T, typename U, std::size_t A>
-bool operator==(const aligned_allocator<T, A> &, const aligned_allocator<U, A> &) noexcept
-{
-    return true;
-}
-template <typename T, typename U, std::size_t A>
-bool operator!=(const aligned_allocator<T, A> &, const aligned_allocator<U, A> &) noexcept
-{
-    return false;
-}
-
-/* Dense storage aligned to the compact pack width (64 B covers every format). */
-using aligned_dvec = std::vector<double, aligned_allocator<double>>;
+template <typename T> using aligned_vector = std::vector<T, aligned_allocator<T>>;
 
 /* A pool of `nmat` dense column-major m x n matrices, back to back in `a`
  * (m*n per matrix), well conditioned (diagonal-boosted). */
 struct Pool {
     int m, n, nmat;
-    aligned_dvec a; /* nmat * m*n, 64 B-aligned */
+    aligned_vector<double> a; /* nmat * m*n, 64 B-aligned */
 
     Pool(int m_, int n_, int nmat_)
         : m(m_), n(n_), nmat(nmat_), a((size_t)nmat_ * m_ * n_)
@@ -437,7 +418,7 @@ int main(int argc, char **argv)
                            &info, fmt, V);
         const MKL_INT lwork_mkl = (MKL_INT)wq;
 
-        aligned_dvec pool_work; /* standard-layout copy (aligned like the pool) */
+        aligned_vector<double> pool_work; /* standard-layout copy (aligned like pool) */
 
         /* both compact paths factor in place, so restore the packed input
          * (untimed) before each timed pass */
