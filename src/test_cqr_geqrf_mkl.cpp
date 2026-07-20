@@ -200,6 +200,10 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
         worst_el = std::max(worst_el, el / std::max(norm1(Av, m, n), 1e-300));
     }
 
+    // TODO: review: worst_el is printed as a diagnostic only (design doc 7.1). A
+    // loose gate (say 100*n*eps) restricted to the DENSE cases would also catch
+    // sign-convention regressions the residual gates cannot; rank-deficient cases
+    // must stay ungated (reflectors are not unique there, el ~ 1e-2 is expected).
     const double rtol_res = 20.0 * n * eps, rtol_orth = 100.0 * n * eps;
     bool ok = (worst_res <= rtol_res) && (worst_orth <= rtol_orth);
     fails += !ok;
@@ -262,6 +266,9 @@ int suite2(MKL_LAYOUT layout, int nm, int m, int n)
     /* compare the two compact buffers elementwise (same input, same convention) */
     double da = maxdiff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
     double dt = maxdiff(tp1.get(), tp2.get(), (size_t)sz_t / sizeof(double));
+    // TODO: review: fixed cross-check tolerance (design doc 7.2). Observed
+    // agreement with MKL is ~1e-14 on these inputs; a tolerance scaled with n*eps
+    // would be a tighter regression signal than the flat 1e-9 if wanted.
     const double tol = 1e-9;
     bool ok = (da <= tol && dt <= tol);
     std::printf("  [suite2] %s V=%-2d nm=%-2d m=%-3d n=%-3d | max|ap-mkl| %.2e "

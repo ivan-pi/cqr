@@ -293,6 +293,10 @@ void geqrf_compact_group_strided(Int m, Int n,
  * processed too, which is harmless -- identity factors to tau = 0).
  * ------------------------------------------------------------------ */
 
+// TODO: review: geqrf_compact is not called in-tree (both C adapters route
+// through geqrf_compact_general below); it is kept as the col-major convenience
+// driver for direct C++ users of this header. Drop it if that surface is not
+// wanted (design doc 8.1).
 template <typename T, int V, typename Int = int>
 void geqrf_compact(Int m, Int n, T *ap, Int ldap, T *taup, Int nm)
 {

@@ -82,7 +82,11 @@ interleaved matrices) at a time; `V` is derived from `format`.
 * **`taup`** (`double *`): output buffer of `k = min(m,n)` scalars per matrix,
   in Compact format. Sized with `mkl_?get_size_compact(min(m,n), 1, format, nm)`.
 * **`work`, `lwork`** (`double *`, `MKL_INT`): workspace. This unblocked kernel
-  needs no scratch, so `work[0]` on a query (`lwork = -1`) returns `1`.
+  needs no scratch, so `work[0]` on a query (`lwork = -1`) returns `1`. Size
+  `work` from *this routine's own* query: requirements differ between routines
+  (MKL's native `mkl_?geqrf_compact` needs about `n*V` elements), compact
+  routines do not check `lwork`, and an undersized buffer is undefined behavior
+  (see the workspace note in `cqr_mkl_ext.h`).
 * **`format`** (`MKL_COMPACT_PACK`): the pack format from
   `mkl_get_format_compact()`; selects the interleave width `V`
   (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32).
@@ -96,7 +100,8 @@ interleaved matrices) at a time; `V` is derived from `format`.
 * **`work[0]`**: minimum `lwork` on a workspace query (`1`).
 * **`info`** (`MKL_INT *`): MKL leaves the compact `info` reserved, so we define
   it as a single scalar status, `0` on success. The routine performs no
-  argument checking (section 6.5).
+  argument checking (section 6.5); the one exception is an unrecognized
+  `format`, which selects no kernel and sets `info = -1`.
 
 ## 6. Design Considerations & Compatibility
 
@@ -165,15 +170,25 @@ the padding (`tau = 0`, diagonal preserved), so no lane ever produces a NaN.
 Like MKL's own compact routines -- which "skip error checking for performance
 reasons" and make "the user responsible for passing correct parameters" --
 `cqr_mkl_?geqrf_compact` validates nothing and writes a single scalar
-`info = 0`.
+`info = 0`. The only failure it can report is dispatch-level: an unrecognized
+`format` has no kernel to run and sets `info = -1` (section 5).
 
 ### 6.6 Numerical scope
 
 The column norm is the direct `sqrt(sum of squares)` -- fast and vectorizable,
 and accurate to working precision across the target range. Rank-deficient and
 already-triangular columns degrade gracefully through the `has` mask (`tau = 0`,
-diagonal preserved), and a wide dynamic range across columns (down to the FP64
-exponent limits) is handled correctly.
+diagonal preserved). A wide dynamic range across columns is handled to the
+extent the unscaled sum of squares allows: once a column's entries fall below
+roughly `1e-154` (FP64), the squares underflow, the below-diagonal norm reads
+zero, and the column is treated as already triangular (`tau = 0`) instead of
+taking the rescaled slow path LAPACK's `dlarfg` would.
+
+<!-- TODO: review: the paragraph above softens an earlier claim ("down to the
+     FP64 exponent limits ... handled correctly"). The test suites only exercise
+     column scaling to cond = 4 (1e-4); nothing probes the ~1e-154 underflow
+     boundary. Decide whether this wording is the intended scope statement, and
+     whether a targeted extreme-scaling test is worth adding. -->
 
 Two of Intel's stated [numerical limitations for Compact BLAS and Compact LAPACK
 routines](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/numerical-limits-compact-blas-compact-lapack.html)
@@ -208,17 +223,20 @@ contract:
   triangle, this simultaneously gates lower-triangular leakage (triangularity).
 * **Orthogonality.** Gate `|| Q^T Q - I ||_1 <= 100 * n * eps`.
 * **Elementwise vs LAPACK (diagnostic).** For well-conditioned inputs the
-  reflectors are essentially unique, so `(H, tau)` are additionally compared
-  elementwise to `LAPACKE_dgeqrf` at a loose relative tolerance, as a sharper
-  regression signal than the residual alone.
+  reflectors are essentially unique, so the elementwise difference of `(H, tau)`
+  vs `LAPACKE_dgeqrf` is additionally *printed* as a diagnostic -- a sharper
+  regression signal than the residual alone -- but not gated: for rank-deficient
+  inputs the reflectors are not unique and the elementwise difference is
+  meaningless (the backward-stable gates above still hold there).
 
 ### 7.2 Suite 2 -- Cross-check vs `mkl_dgeqrf_compact`
 
 The same packed batch is factored by both `cqr_mkl_dgeqrf_compact` and the
 native `mkl_dgeqrf_compact`; the two compact `ap`/`taup` buffers are compared
-elementwise at a tolerance scaled by `eps`. This confirms bit-for-bit-level
-agreement with MKL's own compact factorization on the shared well-conditioned
-inputs (same sign convention, same unblocked math).
+elementwise at a small fixed tolerance (`1e-9`; the agreement observed on these
+well-conditioned inputs is at the `1e-14` level). This confirms the two
+implementations match far beyond the backward-error gates -- same sign
+convention, same unblocked math -- without requiring bit-identical arithmetic.
 
 ### 7.3 Suite 3 -- End-to-end solve `AX = B`
 
@@ -254,15 +272,26 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
   (alongside the `?ormqr_compact` entry points), taking an explicit interleave
   width `V` and no MKL dependency, with LAPACK-style `info = -j` argument
   validation.
-* **Templated kernel** (`cqr_geqrf_compact.hpp`): `geqrf_compact<T,V>` over all
-  packs; `geqrf_compact_group<T,V>` (tuned col-major) and
-  `geqrf_compact_group_strided<T,V>` (general, via `BatchView`).
+* **Templated kernel** (`cqr_geqrf_compact.hpp`): per-group kernels
+  `geqrf_compact_group<T,V>` (tuned col-major) and
+  `geqrf_compact_group_strided<T,V>` (general, via `BatchView`), driven over all
+  packs by `geqrf_compact_general<T,V>` (either layout; the entry point both C
+  adapters call) and the col-major convenience driver `geqrf_compact<T,V>`.
 
 ## 9. Benchmark
 
 The compact batched factorization is benchmarked against a one-matrix-at-a-time
-`LAPACKE_dgeqrf` loop (the standard layout) and, when available, against MKL's
-own `mkl_dgeqrf_compact`, over pools of small matrices across the target size
-range. It reports per-size throughput and a geometric-mean speedup, and checks
-the compact factors against per-matrix LAPACK so it doubles as an integration
-test. The outer batch loop is parallelized with OpenMP.
+`LAPACKE_dgeqrf` loop (the standard layout) and against MKL's own
+`mkl_dgeqrf_compact`, over pools of small matrices across the target size range.
+It reports per-size throughput and a geometric-mean speedup, and checks the
+compact factors against per-matrix LAPACK so it doubles as an integration test.
+The outer batch loop is parallelized with OpenMP.
+
+The default size list deliberately mixes sizes that are not multiples of the
+interleave width (30, 45, 60, 105, 168, from 2-D/3-D RBF-FD stencils) with the
+round powers, so the SIMD remainder handling is visible. Two optional flags
+extend the driver: `--simdlen=2|4|8` forces a narrower interleave width than the
+host default (unsupported or wider-than-native widths are rejected), and
+`--size-sweep=nmin:nmax[:stride]` switches to a cqr-only throughput scan --
+raw best-pass time, GFLOP/s, and matrices/s per size, no cross-check -- to
+resolve the staircase effect finely.
