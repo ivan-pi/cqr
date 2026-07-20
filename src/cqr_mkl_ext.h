@@ -37,6 +37,14 @@
  * caller is responsible for passing consistent parameters. `info` is a single
  * scalar (MKL leaves the compact info reserved), set to 0 on success.
  *
+ * Workspace: give each routine a work array sized from ITS OWN lwork = -1 query.
+ * Different routines need different amounts -- cqr's kernels need none (their
+ * query returns 1); MKL's mkl_?geqrf_compact needs ~n*V -- so never size one
+ * routine's work from another's query, and never share a single work buffer
+ * across, say, geqrf and ormqr. Because compact routines skip argument checking,
+ * an undersized work array is undefined behavior: harmless on some MKL builds,
+ * silent heap corruption on others.
+ *
  * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
  * 'T'/'t'/'C'/'c' (Q^T), for FP64 and FP32.

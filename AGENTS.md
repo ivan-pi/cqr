@@ -54,5 +54,12 @@ and compact one-liners that clang-format would expand are fenced with
   MKL's own compact routines (`info` is a scalar, `0` on success). The portable C
   API (`cqr_compact.h`) validates LAPACK-style, returning `-j` for a bad j-th
   argument.
+- **Workspace (`lwork`).** Size each routine's `work` from *its own* `lwork = -1`
+  query, and give each routine its own buffer. The compact kernels here need no
+  scratch (their query returns `1`), but MKL's `mkl_?geqrf_compact` needs `~n*V`.
+  Because compact routines skip argument checking, handing one routine a `work`
+  sized for another -- or sharing a buffer across `geqrf`/`ormqr` -- is undefined
+  behavior: harmless on some MKL builds, silent heap corruption on others (this
+  is exactly the bug that aborted the MKL test with "unaligned tcache chunk").
 - **Scope.** Real precisions (`s`/`d`) only; no column pivoting; no overflow/
   underflow-safe reflector rescaling (see the design documents).

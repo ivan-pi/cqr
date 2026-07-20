@@ -309,16 +309,26 @@ int suite3(int nm, int n, int nrhs)
     mkl_dgepack_compact(MKL_COL_MAJOR, m, nrhs, Bp.data(), m, cp, m, fmt, nm);
 
     MKL_INT info = 99;
-    double wq;
-    /* 1. our compact QR */
-    cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, -1, &info, fmt, nm);
-    cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq, (MKL_INT)wq, &info, fmt,
+
+    /* 1. our compact QR. Each routine owns a work array sized from its OWN lwork
+     *    query -- never carry one routine's lwork over to another (see the
+     *    workspace note in cqr_mkl_ext.h): geqrf and ormqr can need different
+     *    amounts, and an undersized work array is undefined behavior. */
+    double wq_geqrf;
+    cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, &wq_geqrf, -1, &info, fmt,
                            nm);
-    /* 2. our compact apply Q^T */
-    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k, ap, m, taup, cp, m, &wq,
-                           -1, &info, fmt, nm);
-    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k, ap, m, taup, cp, m, &wq,
-                           (MKL_INT)wq, &info, fmt, nm);
+    std::vector<double> work_geqrf((size_t)std::max<MKL_INT>((MKL_INT)wq_geqrf, 1));
+    cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work_geqrf.data(),
+                           (MKL_INT)work_geqrf.size(), &info, fmt, nm);
+
+    /* 2. our compact apply Q^T, with its own separately queried workspace. */
+    double wq_ormqr;
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k, ap, m, taup, cp, m,
+                           &wq_ormqr, -1, &info, fmt, nm);
+    std::vector<double> work_ormqr((size_t)std::max<MKL_INT>((MKL_INT)wq_ormqr, 1));
+    cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', m, nrhs, k, ap, m, taup, cp, m,
+                           work_ormqr.data(), (MKL_INT)work_ormqr.size(), &info, fmt, nm);
+
     /* 3. MKL compact triangular solve R X = Q^T B */
     mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT, n,
                       nrhs, 1.0, ap, m, cp, m, fmt, nm);
