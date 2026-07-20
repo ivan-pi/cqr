@@ -241,12 +241,21 @@ int suite2(MKL_LAYOUT layout, int nm, int m, int n)
     mkl_dgepack_compact(layout, m, n, Ap.data(), ldA, ap2.get(), ldc, fmt, nm);
 
     MKL_INT info = 0;
-    double wq;
-    cqr_mkl_dgeqrf_compact(layout, m, n, ap1.get(), ldc, tp1.get(), &wq, -1, &info, fmt,
-                           nm);
-    cqr_mkl_dgeqrf_compact(layout, m, n, ap1.get(), ldc, tp1.get(), &wq, (MKL_INT)wq,
-                           &info, fmt, nm);
-    std::vector<double> work((size_t)std::max<MKL_INT>((MKL_INT)wq, 1));
+    /* cqr's unblocked kernel needs no scratch (its query returns 1). */
+    double wq_cqr;
+    cqr_mkl_dgeqrf_compact(layout, m, n, ap1.get(), ldc, tp1.get(), &wq_cqr, -1, &info,
+                           fmt, nm);
+    cqr_mkl_dgeqrf_compact(layout, m, n, ap1.get(), ldc, tp1.get(), &wq_cqr,
+                           (MKL_INT)wq_cqr, &info, fmt, nm);
+
+    /* MKL's compact geqrf DOES need workspace (~n*V doubles), so query its own
+     * lwork -- reusing cqr's lwork=1 would under-size work. Compact routines skip
+     * argument checking, so an under-sized work array is undefined behavior: some
+     * MKL builds tolerate it, others overrun the heap ("malloc unaligned tcache"). */
+    double wq_mkl;
+    mkl_dgeqrf_compact(layout, m, n, ap2.get(), ldc, tp2.get(), &wq_mkl, -1, &info, fmt,
+                       nm);
+    std::vector<double> work((size_t)std::max<MKL_INT>((MKL_INT)wq_mkl, 1));
     mkl_dgeqrf_compact(layout, m, n, ap2.get(), ldc, tp2.get(), work.data(),
                        (MKL_INT)work.size(), &info, fmt, nm);
 
