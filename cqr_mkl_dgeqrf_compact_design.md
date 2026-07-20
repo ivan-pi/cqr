@@ -75,7 +75,11 @@ interleaved matrices) at a time; `V` is derived from `format`.
 * **`m`** (`MKL_INT`): rows of each `A` (`m >= 0`).
 * **`n`** (`MKL_INT`): columns of each `A` (`n >= 0`).
 * **`ap`** (`double *`): the compact buffer of `nm` matrices `A`, packed with
-  `mkl_?gepack_compact`. Overwritten in place with the factorization.
+  `mkl_?gepack_compact`. Overwritten in place with the factorization. Any
+  alignment is correct; align the base to the pack width (64 B covers every
+  format) so the SIMD sweeps avoid cache-line splits -- worth up to ~40% on
+  small, cache-resident sizes. `mkl_malloc(bytes, 64)` (the default of this
+  project's `mkl_alloc_bytes`) already does this.
 * **`ldap`** (`MKL_INT`): leading dimension of each matrix within the compact
   buffer (column stride for column-major, row stride for row-major), `>= m`
   (col-major) / `>= n` (row-major).

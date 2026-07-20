@@ -61,5 +61,10 @@ and compact one-liners that clang-format would expand are fenced with
   sized for another -- or sharing a buffer across `geqrf`/`ormqr` -- is undefined
   behavior: harmless on some MKL builds, silent heap corruption on others (this
   is exactly the bug that aborted the MKL test with "unaligned tcache chunk").
+- **Buffer alignment.** Compact buffers are correct at any `T` alignment, but
+  align the base to the pack width (64 B covers every format) so the SIMD kernels
+  avoid cache-line splits -- `mkl_malloc(bytes, 64)`, which is what
+  `mkl_alloc_bytes` does by default, or `std::aligned_alloc(64, ...)`. Only
+  performance, not correctness, rides on it (up to ~40% on small sizes).
 - **Scope.** Real precisions (`s`/`d`) only; no column pivoting; no overflow/
   underflow-safe reflector rescaling (see the design documents).

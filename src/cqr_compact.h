@@ -23,6 +23,15 @@
  * convention). An empty problem is a valid no-op returning 0. The routines never
  * abort the calling process.
  *
+ * Alignment: the compact buffers may start at any address aligned to the scalar
+ * type (the SIMD element carries relaxed alignment, so loads and stores never
+ * fault); results are identical regardless. For full speed, align each buffer's
+ * base to the pack width in bytes -- 64 covers every format (V*sizeof(T) <= 64),
+ * e.g. mkl_malloc(bytes, 64), posix_memalign, or std::aligned_alloc. Because
+ * every element sits at a pack-multiple offset, a pack-aligned base keeps every
+ * vector access on one cache line; a non-pack-aligned base splits each access
+ * across two lines, costing up to ~40% on small, cache-resident sizes.
+ *
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
  */
 
