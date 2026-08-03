@@ -271,9 +271,12 @@ equivalents. The GPU port keeps that, cheaply:
   points on a SYCL device. It passes the project's own suites: the unchanged
   `src/test_cqr_geqrf_compact.cpp` (which drives both kernels through the C API)
   and a C-API-routed `ormqr` mirror, gating at the same tolerances as the CPU
-  kernels. Validated on the OpenCL CPU device (no Intel GPU required). Wired
-  behind an OFF-by-default `CQR_WITH_SYCL` CMake option so the existing build is
-  untouched. See `gpu/sycl/README.md`.
+  kernels. Validated on the OpenCL CPU device (no Intel GPU required). The kernel
+  pins the sub-group to the interleave width `V` (`reqd_sub_group_size`, §5) and
+  register-blocks 4 columns (`JB=4`); on the CPU device that brings it to rough
+  parity with the hand-tuned vector-types kernel for `n >= 30` (see the
+  `bench_ormqr_sycl_vs_vec` results in `gpu/sycl/README.md`). Wired behind an
+  OFF-by-default `CQR_WITH_SYCL` CMake option so the existing build is untouched.
 * **Phase 2 -- full pipeline + tuning.** Get `geqrf` and `trsm` onto the GPU,
   either by porting the compact versions or by interop with oneMKL's batched
   GPU LAPACK on a strided layout (accepting a repack). Tune `V`, work-group

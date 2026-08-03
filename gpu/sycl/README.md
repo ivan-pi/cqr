@@ -67,31 +67,44 @@ cmake --build build-sycl --target bench_ormqr_sycl_vs_vec
 
 **With no GPU present this runs on the OpenCL CPU device — a CPU-vs-CPU codegen
 comparison, not the Xe story and not predictive of GPU throughput.** What it
-pins down (one Xeon, AVX-512, 4 cores, `-O3 -march=native`):
+pins down (one Xeon, AVX-512, 4 cores, `-O3 -march=native`, double):
 
-| kernel | GFLOP/s (double) | vs vector-types |
-|--------|------------------|-----------------|
-| vector-types (GNU vectors, OpenMP) | ~17–94 | 1.0× (reference) |
-| SYCL, plain `parallel_for` | ~3 (flat) | **0.03–0.2×** |
-| SYCL, `reqd_sub_group_size(8)` | ~3–47 | **0.2–1.0×** (≈parity at `n≥30`, `nrhs=1`) |
+| SYCL kernel | GFLOP/s | vs vector-types |
+|-------------|---------|-----------------|
+| plain `parallel_for` (no sub-group hint) | ~3 (flat) | **0.03–0.2×** |
+| `reqd_sub_group_size(V)` + `JB=4` blocking (**shipped**) | ~4–63 | **≈ parity for `n≥30`** (0.6–1.3×) |
 
-The lesson: a plain `parallel_for` runs essentially scalar on the CPU device;
-**pinning the sub-group to `V`** lets the runtime pack `V` work-items into one
-AVX-512 op (the same batch-in-SIMD the vector-types kernel does by hand) and
-makes it competitive. The residual gap at `nrhs=4/8` is the vector-types
-kernel's RHS register-blocking (`JB=4`), which this prototype omits. Both levers
-— sub-group = `V` and RHS blocking — are the design doc's Phase 2, now
-quantified. (The validated backend in `cqr_compact_sycl.cpp` keeps the plain
-`parallel_for` for now: `reqd_sub_group_size` needs `V` to be a device-supported
-sub-group size, which excludes the `V=2` the CPU test suite exercises, so a
-sub-group path there needs a fallback.)
+Two levers matter, both now in `cqr_compact_sycl.cpp`:
+
+* **Sub-group = `V`.** A plain `parallel_for` runs essentially scalar on the CPU
+  device (~3 GFLOP/s); pinning the sub-group to the interleave width `V` lets
+  the runtime pack `V` work-items into one AVX-512 op — the batch-in-SIMD the
+  vector-types kernel does by hand — a ~5–10× jump. `V` is the architecture
+  vector size, so this is the shipped path.
+* **`JB=4` RHS-column register blocking.** Reuse each reflector entry `A(i,kk)`
+  across 4 RHS columns; this closes most of the remaining `nrhs=4/8` gap.
+
+With both, the SYCL kernel sits at roughly parity with the hand-tuned
+vector-types kernel for `n≥30` (ratios scatter 0.6–1.3× across sizes, run-to-run
+noisy on a shared CPU; several sizes exceed 1.0×). The one regime where it lags
+is very small `n` (~0.2–0.3× at `n=10`): fixed per-launch overhead dominating
+tiny per-op work — amortized by larger batches or a device-resident pipeline.
+
+`reqd_sub_group_size(V)` requires `V` to be a device-supported sub-group size.
+The backend uses it whenever it is, and falls back to a plain `parallel_for`
+only for widths that are not a hardware sub-group size (`V=2` anywhere; `V=4` on
+Intel GPUs, whose minimum is 8) — which the portable test suite exercises but
+real GPU deployment (`V ∈ {8,16,32}`) never hits.
 
 ## Scope of the prototype
 
-Correctness-first, deliberately unoptimized: a plain `range` `parallel_for` (no
-sub-group pinning), no RHS-column register blocking, and a USM copy in/out per
-call. `geqrf` handles column- and row-major (LAPACK `layout`); `ormqr` follows
-the C API's `side='L'`, column-major contract. Complex types are out of scope,
-matching the CPU library. See the design doc for the Phase 2 performance plan.
+The kernel pins the sub-group to the interleave width `V` (`reqd_sub_group_size`,
+with the plain-`range` fallback noted above) and register-blocks 4 trailing /
+RHS columns, matching the CPU kernel. Still correctness-first in its data
+movement: a USM copy in/out per call, no device-resident
+`geqrf → ormqr → trsm` pipeline (the Phase 2 performance work). `geqrf` handles
+column- and row-major (LAPACK `layout`); `ormqr` follows the C API's `side='L'`,
+column-major contract. Complex types are out of scope, matching the CPU library.
+See the design doc for the remaining Phase 2 plan.
 
 <!-- Assisted-by: Claude:claude-opus-4.8 -->
