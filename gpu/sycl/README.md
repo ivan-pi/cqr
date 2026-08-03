@@ -53,6 +53,39 @@ The `CQR_WITH_SYCL` option is **OFF by default**, so ordinary GCC/Clang builds
 are untouched. `-DCQR_WITH_MKL=OFF` is optional but avoids requiring MKL for a
 SYCL-only build.
 
+## Benchmark: SYCL vs the vector-types kernel
+
+`bench_ormqr_sycl_vs_vec.cpp` times apply-`Qᵀ` throughput of the SYCL kernel
+against the CPU vector-types kernel (`ormqr_compact_group`) — same compact
+layout, same batch, all cores for both — sweeping `n` up to 150 and
+`nrhs ∈ {1,4,8}`. Built with `-DCQR_WITH_SYCL=ON` when OpenMP is found:
+
+```sh
+cmake --build build-sycl --target bench_ormqr_sycl_vs_vec
+./build-sycl/bench_ormqr_sycl_vs_vec        # self-checks; non-zero exit on disagreement
+```
+
+**With no GPU present this runs on the OpenCL CPU device — a CPU-vs-CPU codegen
+comparison, not the Xe story and not predictive of GPU throughput.** What it
+pins down (one Xeon, AVX-512, 4 cores, `-O3 -march=native`):
+
+| kernel | GFLOP/s (double) | vs vector-types |
+|--------|------------------|-----------------|
+| vector-types (GNU vectors, OpenMP) | ~17–94 | 1.0× (reference) |
+| SYCL, plain `parallel_for` | ~3 (flat) | **0.03–0.2×** |
+| SYCL, `reqd_sub_group_size(8)` | ~3–47 | **0.2–1.0×** (≈parity at `n≥30`, `nrhs=1`) |
+
+The lesson: a plain `parallel_for` runs essentially scalar on the CPU device;
+**pinning the sub-group to `V`** lets the runtime pack `V` work-items into one
+AVX-512 op (the same batch-in-SIMD the vector-types kernel does by hand) and
+makes it competitive. The residual gap at `nrhs=4/8` is the vector-types
+kernel's RHS register-blocking (`JB=4`), which this prototype omits. Both levers
+— sub-group = `V` and RHS blocking — are the design doc's Phase 2, now
+quantified. (The validated backend in `cqr_compact_sycl.cpp` keeps the plain
+`parallel_for` for now: `reqd_sub_group_size` needs `V` to be a device-supported
+sub-group size, which excludes the `V=2` the CPU test suite exercises, so a
+sub-group path there needs a fallback.)
+
 ## Scope of the prototype
 
 Correctness-first, deliberately unoptimized: a plain `range` `parallel_for` (no

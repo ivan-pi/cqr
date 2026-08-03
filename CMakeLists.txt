@@ -186,4 +186,24 @@ if(CQR_WITH_SYCL)
       add_test(NAME ${tgt} COMMAND ${tgt})
     endif()
   endforeach()
+
+  # Optional throughput benchmark: SYCL vs the vector-types ormqr kernel (needs
+  # OpenMP for the multi-core vec path). CPU-vs-CPU on the OpenCL CPU device when
+  # no GPU is present; self-checking (non-zero exit on numeric disagreement).
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    add_executable(bench_ormqr_sycl_vs_vec gpu/sycl/bench_ormqr_sycl_vs_vec.cpp)
+    target_include_directories(bench_ormqr_sycl_vs_vec PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    if(DEFINED ENV{CONDA_PREFIX})
+      target_include_directories(bench_ormqr_sycl_vs_vec PRIVATE "$ENV{CONDA_PREFIX}/include")
+    endif()
+    target_compile_features(bench_ormqr_sycl_vs_vec PRIVATE cxx_std_17)
+    target_compile_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
+    target_link_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
+    if(_cqr_sycl_rpath)
+      target_link_options(bench_ormqr_sycl_vs_vec PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
+    endif()
+    target_link_libraries(bench_ormqr_sycl_vs_vec PRIVATE OpenMP::OpenMP_CXX)
+  endif()
 endif()
