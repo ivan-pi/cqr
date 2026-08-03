@@ -161,6 +161,39 @@ Intel GPU the Level Zero backend is preferred (`ONEAPI_DEVICE_SELECTOR=level_zer
 it has no device to bind to without a GPU (`sycl-ls` shows no `level_zero:*`
 here).
 
+## Vs MKL — per-matrix and compact-batch
+
+`bench_solve_vs_mkl.cpp` puts the fused SYCL solve against the real baselines on
+one pool of `nm` well-conditioned `n×n` systems (`X == 1`): **(1)** per-matrix
+LAPACK (`LAPACKE_dgeqrf`/`dormqr` + `cblas_dtrsm`), **(2)** the compact batch
+(`mkl_dgeqrf_compact` + `cqr_mkl_dormqr_compact` + `mkl_dtrsm_compact`), and
+**(3)** the fused SYCL kernel. All four cores; end-to-end host-in/host-out (so
+the SYCL path's timed region includes its host↔device copies). It needs MKL +
+OpenMP + `icpx`, so it is built by hand (recipe in the file header), not via
+CMake.
+
+**Again a CPU-device result — three ways to use the same Xeon, not GPU vs CPU.**
+MKL's compact kernels are hand-tuned CPU AVX-512; the SYCL "device" copies are
+host memcpys; and on a real GPU baseline (2) would not exist at all (MKL Compact
+is CPU-only). With that caveat, fused SYCL vs the two baselines (nmat=512,
+double, 4 cores):
+
+| n | vs (1) per-matrix MKL | vs (2) compact-batch MKL |
+|--:|:--:|:--:|
+| 16 | **2.2×** | 0.38× |
+| 32 | 1.3× | 0.68× |
+| 48 | 1.4× | ~1.0× |
+| 96 | 1.2× | 1.2× |
+| 128 | 0.8× | 1.1× |
+
+Reading: **batching beats per-matrix LAPACK** (fused SYCL is ~1.1–2.2× faster
+than path 1, the batching payoff). Against MKL's compact path, MKL wins clearly
+at small `n` (0.4–0.7×) where its hand-tuned kernels dominate; the fused kernel
+catches up to rough parity by `n≈48` (1.0–1.2×), because the compact path makes
+three separate MKL calls plus pack/unpack per group while the SYCL path fuses
+them into one launch. On a real GPU none of these CPU ratios transfer — the point
+is that the SYCL path is the *only* batched option there.
+
 ## Scope
 
 `reqd_sub_group_size(V)` requires `V` to be a device-supported sub-group size.
