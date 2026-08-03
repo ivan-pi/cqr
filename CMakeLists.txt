@@ -187,6 +187,24 @@ if(CQR_WITH_SYCL)
     endif()
   endforeach()
 
+  # Fused-pattern example: ONE user-owned parallel_for composing the device
+  # primitives (fill -> geqrf -> apply Q^T -> trsm -> unpack) in a single kernel.
+  # Self-checking against a known solution, so it is also registered as a test
+  # (exit 77 -> skipped when the device lacks the required sub-group size).
+  add_executable(example_fused_qr_solve gpu/sycl/example_fused_qr_solve.cpp)
+  target_include_directories(example_fused_qr_solve PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
+  target_compile_features(example_fused_qr_solve PRIVATE cxx_std_17)
+  target_compile_options(example_fused_qr_solve PRIVATE -fsycl)
+  target_link_options(example_fused_qr_solve PRIVATE -fsycl)
+  if(_cqr_sycl_rpath)
+    target_link_options(example_fused_qr_solve PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
+  endif()
+  if(CQR_BUILD_TESTS)
+    add_test(NAME example_fused_qr_solve COMMAND example_fused_qr_solve)
+    set_tests_properties(example_fused_qr_solve PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
+
   # Optional throughput benchmark: SYCL vs the vector-types ormqr kernel (needs
   # OpenMP for the multi-core vec path). CPU-vs-CPU on the OpenCL CPU device when
   # no GPU is present; self-checking (non-zero exit on numeric disagreement).

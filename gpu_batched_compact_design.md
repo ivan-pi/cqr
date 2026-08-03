@@ -115,6 +115,33 @@ reduction**, and the axpy `c -= tau*w*v` is lane-parallel over rows.
 Strategy A is the recommendation for phase 1; B is a documented escalation
 path.
 
+### 3.3 Interface: primitives, not a batched call
+
+A second design axis is *who owns the launch*. A batched library call
+(`dgeqrf_compact(...)` that allocates, copies, launches its own `parallel_for`,
+and copies back) is convenient but it forecloses the optimization that actually
+matters for many small matrices on a GPU: **fusion**. Each such call is a launch
+plus a host<->device round trip; a real solve (`geqrf -> apply Q^T -> trsm`, with
+a pack before and an unpack after) becomes several launches and a stack of
+copies, dominated by launch latency and PCIe traffic for small `n`.
+
+So the shipped shape is a set of **device-callable primitives** -- the per-lane
+work for one matrix (`geqrf_slot`, `ormqr_slot`, `trsm_upper_slot`) -- and the
+batch `parallel_for` is the **caller's** responsibility. The user writes one
+kernel, `V` work-items per group with `reqd_sub_group_size(V)`, and composes the
+primitives *together with their own fill/pack/unpack*, so the whole pipeline runs
+in a single launch with the data resident across steps and no intermediate
+global-memory passes. This is the SPMD-native way to express the workload and
+the realistic usage pattern; the convenience batched entry points are kept as
+thin wrappers over the same primitives (and as the vehicle for validating them
+against the existing test suites).
+
+The primitives use no sub-group collectives -- each lane owns an independent
+matrix (Strategy A), so the sub-group is purely the SIMD packing. Strategy B
+would instead make the primitives cooperative (sub-group reductions over one
+matrix); the interface -- caller-owned launch, composable per-tile primitives --
+is the same.
+
 ## 4. Programming Models and Compiler Toolchains
 
 **Common substrate.** Regardless of the model, on an Intel GPU everything
@@ -265,18 +292,20 @@ equivalents. The GPU port keeps that, cheaply:
   LAPACK (`geqrf_batch`, strided/group batch) as an interop option -- and note
   that it exposes **no compact-format apply-`Q`** on the GPU, so the very gap
   this project fills on the CPU persists on the GPU.
-* **Phase 1 -- SYCL prototype (done).** A SYCL port of **both** compact routines
-  -- `geqrf_compact` *and* `ormqr_compact` (Strategy A, one work-item per
-  matrix) -- now lives in `gpu/sycl/`, re-implementing the four portable C entry
-  points on a SYCL device. It passes the project's own suites: the unchanged
-  `src/test_cqr_geqrf_compact.cpp` (which drives both kernels through the C API)
-  and a C-API-routed `ormqr` mirror, gating at the same tolerances as the CPU
-  kernels. Validated on the OpenCL CPU device (no Intel GPU required). The kernel
-  pins the sub-group to the interleave width `V` (`reqd_sub_group_size`, §5) and
-  register-blocks 4 columns (`JB=4`); on the CPU device that brings it to rough
-  parity with the hand-tuned vector-types kernel for `n >= 30` (see the
-  `bench_ormqr_sycl_vs_vec` results in `gpu/sycl/README.md`). Wired behind an
-  OFF-by-default `CQR_WITH_SYCL` CMake option so the existing build is untouched.
+* **Phase 1 -- SYCL primitives + fused example (done).** `gpu/sycl/` provides
+  device-callable **primitives** -- `geqrf_slot`, `ormqr_slot`,
+  `trsm_upper_slot` (header `cqr_compact_sycl.hpp`; Strategy A, one work-item per
+  matrix, sub-group pinned to `V` per §5, `JB=4` register-blocked) -- that the
+  caller composes inside a single batch `parallel_for`, fusing fill / pack /
+  unpack around them (see §3.3 and `example_fused_qr_solve.cpp`, a full `AX=B`
+  solve in one kernel). Thin C launchers wrap the primitives in the same four
+  portable entry points, which lets the project's own suites validate them
+  unchanged -- the unchanged `src/test_cqr_geqrf_compact.cpp` plus a
+  C-API-routed `ormqr` mirror, gating at the CPU tolerances. Validated on the
+  OpenCL CPU device (no Intel GPU required); there the sub-group + blocked kernel
+  reaches rough parity with the hand-tuned vector-types kernel for `n >= 30`
+  (see `gpu/sycl/README.md`). OFF-by-default `CQR_WITH_SYCL`, so the existing
+  build is untouched.
 * **Phase 2 -- full pipeline + tuning.** Get `geqrf` and `trsm` onto the GPU,
   either by porting the compact versions or by interop with oneMKL's batched
   GPU LAPACK on a strided layout (accepting a repack). Tune `V`, work-group
