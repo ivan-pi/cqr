@@ -205,6 +205,19 @@ if(CQR_WITH_SYCL)
     set_tests_properties(example_fused_qr_solve PROPERTIES SKIP_RETURN_CODE 77)
   endif()
 
+  # Full-workflow benchmark: the fused single-kernel solve vs running geqrf /
+  # apply-Q^T / trsm as separate operations (with and without per-call copies).
+  # Pure SYCL (no OpenMP); self-checking.
+  add_executable(bench_fused_solve gpu/sycl/bench_fused_solve.cpp)
+  target_include_directories(bench_fused_solve PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
+  target_compile_features(bench_fused_solve PRIVATE cxx_std_17)
+  target_compile_options(bench_fused_solve PRIVATE -fsycl)
+  target_link_options(bench_fused_solve PRIVATE -fsycl)
+  if(_cqr_sycl_rpath)
+    target_link_options(bench_fused_solve PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
+  endif()
+
   # Optional throughput benchmark: SYCL vs the vector-types ormqr kernel (needs
   # OpenMP for the multi-core vec path). CPU-vs-CPU on the OpenCL CPU device when
   # no GPU is present; self-checking (non-zero exit on numeric disagreement).

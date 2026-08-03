@@ -50,6 +50,16 @@ fusion — one launch, data resident across steps — is where the throughput is
 and only the caller can orchestrate it. That is why the batch `parallel_for` is
 the user's responsibility.
 
+`bench_fused_solve.cpp` measures the payoff on the full `AX=B` workflow: the
+fused single kernel vs the same solve run as three separate operations. On the
+OpenCL CPU device (where launches are cheap and "copies" are host memcpys — a
+**lower bound** on the GPU win) fusing beats three separate launches by up to
+~1.6× at small `n` (falling to parity by `n≈64` as compute dominates the fixed
+launch cost), and beats the naive three-separate-calls-with-copies pattern (what
+the batched entry points do) by **~1.3–8×**, largest for small matrices. A real
+GPU — kernel-dispatch latency plus PCIe transfers — amplifies both, precisely in
+the small-matrix regime compact batching targets.
+
 ## Convenience launchers (and how the suites validate the primitives)
 
 For callers that do **not** need fusion, [`cqr_compact_sycl.cpp`](cqr_compact_sycl.cpp)
