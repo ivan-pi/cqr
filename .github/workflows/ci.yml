@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Limit concurrent runs: a newer commit on the same ref cancels the in-progress
+# run instead of piling workflows up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.cxx }} / ubuntu-latest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: gcc,   cxx: g++ }
+          - { cc: clang, cxx: clang++ }
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # libmkl-dev supplies the Compact extension and MKL's LAPACK/LAPACKE, so
+      # the MKL-backed suites validate against real MKL + LAPACK in CI.
+      - name: Install toolchain, Ninja, and Intel MKL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang libmkl-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBLA_VENDOR=Intel10_64lp_seq
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test (portable + MKL/LAPACK suites)
+        run: ctest --test-dir build --output-on-failure

@@ -1,8 +1,36 @@
 # PLANS
 
+## geqrf (`cqr_mkl_dgeqrf_compact`)
+
+The compact QR *factorization* (`cqr_mkl_dgeqrf_compact_design.md`): a portable,
+vectorized `mkl_?geqrf_compact`. Status vs. its design document:
+
+- **Implemented (design sections 6-8):** the vectorized unblocked `geqr2` with a
+  branch-free masked `larfg` (FP64 + FP32), the portable C API
+  `dgeqrf_compact`/`sgeqrf_compact` (LAPACK-style `info=-j` validation) and the
+  MKL-style `cqr_mkl_?geqrf_compact` (no checking, scalar `info`, `lwork`
+  query). Column-major is the tuned contiguous path; row-major routes through
+  the stride-generalized kernel.
+- **Validated (design section 7):** a BLAS-free test vs. a scalar `geqr2`
+  reference, and an MKL/LAPACK test gating the factorization residual
+  (`20 n eps`) and orthogonality (`100 n eps`) against dense
+  `LAPACKE_dorgqr`/`dgeqrf`, cross-checking vs. `mkl_dgeqrf_compact` (both
+  layouts), closing the `AX=B` solve, and covering rank-deficient / near-collinear
+  stress structures. All match LAPACK/MKL to machine precision.
+- **Benchmarked (design section 9):** `bench_geqrf_compact` (vs.
+  `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`) is built and CTest-gated,
+  reporting GFLOP/s and a geometric-mean speedup.
+- **Known gaps / scoped out (design section 6.6):** no overflow/underflow-safe
+  `dlarfg` rescaling (matters only near `1e+/-150`), no column pivoting, and the
+  row-major sweep is correctness-first, not separately SIMD-tuned (mirroring
+  `ormqr`). Blocked (`larft`/`larfb`) factorization is intentionally not used at
+  the target sizes. Complex precisions are out of scope, as for `ormqr`.
+- **Deferred:** a comparison benchmark against the open-source `batmat` project's
+  `geqrf` (same interleaved format) is left for a future change.
+
 ## Known gaps
 
-Gaps between the implementation and the design document
+Gaps between the `ormqr` implementation and its design document
 (`cqr_mkl_dormqr_compact_design.md`), verified against the source tree.
 
 - **Complex precisions (`cunmqr`/`zunmqr`).** Only real precisions exist; the

@@ -14,7 +14,7 @@
  * Assisted-by: Claude:claude-opus-4.8
  */
 
-#include "mkl_service.h"   /* mkl_malloc / mkl_free */
+#include "mkl_service.h" /* mkl_malloc / mkl_free */
 
 #include <cstddef>
 #include <memory>
@@ -28,13 +28,14 @@ struct mkl_deleter {
 };
 
 /* Owning handle for an mkl_malloc'd buffer of T. */
-template <typename T>
-using mkl_buffer = std::unique_ptr<T[], mkl_deleter>;
+template <typename T> using mkl_buffer = std::unique_ptr<T[], mkl_deleter>;
 
 /* Allocate `bytes` of `align`-aligned storage via mkl_malloc (sized in bytes
- * to match mkl_?get_size_compact). Throws std::bad_alloc on failure. */
-template <typename T>
-mkl_buffer<T> mkl_alloc_bytes(std::size_t bytes, int align = 64)
+ * to match mkl_?get_size_compact). The default align = 64 is a cache line and
+ * is >= every compact pack width (V*sizeof(T) <= 64 B), so the SIMD kernels see
+ * no cache-line splits -- see the alignment note in cqr_compact.h. Throws
+ * std::bad_alloc on failure. */
+template <typename T> mkl_buffer<T> mkl_alloc_bytes(std::size_t bytes, int align = 64)
 {
     void *p = mkl_malloc(bytes, align);
     if (!p) throw std::bad_alloc();

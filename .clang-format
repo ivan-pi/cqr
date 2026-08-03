@@ -1,0 +1,20 @@
+# C++ Core Guidelines NL.17: K&R-derived ("Stroustrup") layout -- the brace
+# opens on its own line for a function, but on the same line for a class/struct
+# and for control-flow blocks.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 90
+PointerAlignment: Right
+BreakBeforeBraces: Stroustrup
+ReflowComments: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: true
+IndentCaseLabels: false
+SortIncludes: false
+SpaceAfterCStyleCast: false

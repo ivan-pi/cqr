@@ -1,20 +1,28 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- the MKL Compact routines this project adds that are
- * missing from Intel MKL's own compact API.
+/* cqr_mkl_ext.h -- batched QR for matrices in Intel MKL's Compact format.
  *
- * cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+ *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
+ *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *
- * This is the missing mkl_?ormqr_compact. It multiplies a Compact-format
- * batch of general matrices C by the orthogonal factor Q (or Q^T) produced by
- * mkl_?geqrf_compact, filling the gap between the compact QR factorization and
- * the application of its reflectors. The API mirrors MKL's native compact
- * ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference
- * in cqr_mkl_dormqr_compact_design.md.
+ * Both use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
+ * MKL compact ecosystem, but are backed by this project's own portable SIMD
+ * kernels rather than MKL's.
+ *
+ * cqr_mkl_?ormqr_compact is the missing mkl_?ormqr_compact: it multiplies a
+ * Compact-format batch of general matrices C by the orthogonal factor Q (or
+ * Q^T), filling the gap between MKL's compact QR factorization and the
+ * application of its reflectors. cqr_mkl_?geqrf_compact is a portable, open
+ * alternative to mkl_?geqrf_compact producing those reflectors -- signature- and
+ * storage-compatible, so the two can be mixed freely with MKL's native compact
+ * routines. With MKL's own mkl_?trsm_compact they factor and solve batched
+ * systems in the compact format. The API mirrors MKL's native compact ecosystem
+ * (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference in
+ * cqr_mkl_dormqr_compact_design.md and cqr_mkl_dgeqrf_compact_design.md.
  *
  * Typical use -- the batched AX = B solver:
- *     mkl_dgeqrf_compact (..., A -> H, tau);          // A = Q R
+ *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
  *     cqr_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
  *     mkl_dtrsm_compact  (..., U, R, B);              // B := R^{-1} Q^T B = X
  *
@@ -28,6 +36,14 @@
  * arguments -- compact routines skip error checking for vectorization, so the
  * caller is responsible for passing consistent parameters. `info` is a single
  * scalar (MKL leaves the compact info reserved), set to 0 on success.
+ *
+ * Workspace: give each routine a work array sized from ITS OWN lwork = -1 query.
+ * Different routines need different amounts -- cqr's kernels need none (their
+ * query returns 1); MKL's mkl_?geqrf_compact needs ~n*V -- so never size one
+ * routine's work from another's query, and never share a single work buffer
+ * across, say, geqrf and ormqr. Because compact routines skip argument checking,
+ * an undersized work array is undefined behavior: harmless on some MKL builds,
+ * silent heap corruption on others.
  *
  * Supported arguments: layout = MKL_COL_MAJOR or MKL_ROW_MAJOR,
  * side = 'L'/'l' (op(Q) C) or 'R'/'r' (C op(Q)), trans = 'N'/'n' (Q) or
@@ -54,21 +70,30 @@
 extern "C" {
 #endif
 
-void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                            MKL_INT m, MKL_INT n, MKL_INT k,
-                            const double *ap, MKL_INT ldap,
-                            const double *taup,
-                            double *cp, MKL_INT ldcp,
-                            double *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+/* QR factorization: A -> (R, Householder vectors) in ap, tau in taup.
+ * Drop-in for mkl_?geqrf_compact (identical signature). No argument checking;
+ * info is a single scalar status (0 on success). With lwork = -1 the call is a
+ * workspace query returning the optimal lwork in work[0] (this kernel needs
+ * none, so 1). See cqr_mkl_dgeqrf_compact_design.md. */
+void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, double *ap,
+                            MKL_INT ldap, double *taup, double *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
 
-void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans,
-                            MKL_INT m, MKL_INT n, MKL_INT k,
-                            const float *ap, MKL_INT ldap,
-                            const float *taup,
-                            float *cp, MKL_INT ldcp,
-                            float *work, MKL_INT lwork, MKL_INT *info,
-                            MKL_COMPACT_PACK format, MKL_INT nm);
+void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, float *ap,
+                            MKL_INT ldap, float *taup, float *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const double *ap, MKL_INT ldap,
+                            const double *taup, double *cp, MKL_INT ldcp, double *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
+
+void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const float *ap, MKL_INT ldap,
+                            const float *taup, float *cp, MKL_INT ldcp, float *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
 
 #ifdef __cplusplus
 }
@@ -95,15 +120,14 @@ namespace detail {
  * MKL packs V = (SIMD register bytes) / sizeof(T):
  *   SSE = 16 B, AVX = 32 B, AVX512 = 64 B.
  * Returns 0 for an unrecognised format. */
-template <typename T>
-inline int vlen_for_format(MKL_COMPACT_PACK format)
+template <typename T> inline int vlen_for_format(MKL_COMPACT_PACK format)
 {
     int bytes;
     switch (format) {
-    case MKL_COMPACT_SSE:    bytes = 16; break;
-    case MKL_COMPACT_AVX:    bytes = 32; break;
+    case MKL_COMPACT_SSE: bytes = 16; break;
+    case MKL_COMPACT_AVX: bytes = 32; break;
     case MKL_COMPACT_AVX512: bytes = 64; break;
-    default:                 return 0;
+    default: return 0;
     }
     return bytes / static_cast<int>(sizeof(T));
 }
