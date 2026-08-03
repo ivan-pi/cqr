@@ -109,6 +109,16 @@ not part of the supported interface:
 | `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
 | `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
 
+## GPU offload (design)
+
+Exploratory design for taking the compact batched pipeline onto **Intel GPUs**
+(the Xe family) - the design space (how the batch maps to the hardware), the
+four candidate programming models (SYCL, OpenCL, OpenMP target, ISPC) and their
+Intel-GPU toolchains, and a SYCL-first phased plan. The key finding is that the
+compact interleaved layout is *already* the coalesced layout a GPU wants. See
+the [GPU design document](gpu_batched_compact_design.md). No GPU code is built
+yet; this is design only.
+
 ## Related work
 
 Batched / compact dense linear algebra for many small matrices:
