@@ -200,6 +200,15 @@ if(CQR_WITH_SYCL)
     endif()
     target_compile_features(bench_ormqr_sycl_vs_vec PRIVATE cxx_std_17)
     target_compile_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
+    # Fairness: the vector-types kernel is host code and must target the host's
+    # widest SIMD, or it is compared against the SYCL JIT (which uses AVX-512
+    # regardless) with one hand tied. The SYCL device code is unaffected by these
+    # host flags. Force -O3 -march=native on THIS benchmark target (the library
+    # itself still leaves -march to the caller via CMAKE_CXX_FLAGS).
+    check_cxx_compiler_flag("-march=native" CQR_BENCH_HAS_MARCH_NATIVE)
+    if(CQR_BENCH_HAS_MARCH_NATIVE)
+      target_compile_options(bench_ormqr_sycl_vs_vec PRIVATE -O3 -march=native)
+    endif()
     target_link_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
     if(_cqr_sycl_rpath)
       target_link_options(bench_ormqr_sycl_vs_vec PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")

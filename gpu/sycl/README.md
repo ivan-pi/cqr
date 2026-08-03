@@ -84,11 +84,33 @@ Two levers matter, both now in `cqr_compact_sycl.cpp`:
 * **`JB=4` RHS-column register blocking.** Reuse each reflector entry `A(i,kk)`
   across 4 RHS columns; this closes most of the remaining `nrhs=4/8` gap.
 
-With both, the SYCL kernel sits at roughly parity with the hand-tuned
-vector-types kernel for `n≥30` (ratios scatter 0.6–1.3× across sizes, run-to-run
-noisy on a shared CPU; several sizes exceed 1.0×). The one regime where it lags
-is very small `n` (~0.2–0.3× at `n=10`): fixed per-launch overhead dominating
-tiny per-op work — amortized by larger batches or a device-resident pipeline.
+Two regimes explain the numbers:
+
+* **Small-to-mid `n` (cache-resident, compute-bound):** the hand-tuned kernel
+  wins, up to ~2×. Its AVX-512 + register blocking is exactly what pays off when
+  the data fits in cache and the limit is arithmetic. Below that, fixed
+  kernel-launch overhead sinks SYCL further (~0.2–0.3× at `n=10`).
+* **Large `n` (working set spills cache, memory-bandwidth-bound):** the two
+  converge to parity (~0.8–1.2×, noisy). Apply-`Q` has low arithmetic intensity
+  — it streams the reflector panel and the RHS — so once it is bandwidth-bound
+  the SIMD-compute edge stops mattering, and both kernels, touching the
+  *identical* compact bytes, hit the same ceiling. Both GFLOP/s figures fall
+  from ~40–90 (mid `n`) to ~20–50 (`n=150`), the memory-bound signature. Where
+  SYCL edges slightly ahead here it is streaming codegen from the OpenCL JIT
+  (most visible at `nrhs=1`, whose vec path is not register-blocked), not a
+  compute win.
+
+Both paths are built `-O3 -march=native`: the vector-types kernel via the host
+compiler, the SYCL kernel via the OpenCL JIT (which targets the host ISA
+regardless). The benchmark CMake target forces `-march=native` so the vec kernel
+is never compared with one hand tied — the library itself still leaves `-march`
+to the caller.
+
+**Backend.** With no GPU present this runs on the OpenCL CPU device. On a real
+Intel GPU the Level Zero backend is preferred (`ONEAPI_DEVICE_SELECTOR=level_zero:gpu`)
+— lower kernel-launch latency, which is exactly what the small-`n` regime needs;
+it has no device to bind to without a GPU (`sycl-ls` shows no `level_zero:*`
+here).
 
 `reqd_sub_group_size(V)` requires `V` to be a device-supported sub-group size.
 The backend uses it whenever it is, and falls back to a plain `parallel_for`
