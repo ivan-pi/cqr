@@ -14,6 +14,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # ---------------------------------------------------------------------------
 option(CQR_WITH_MKL        "Build the Intel MKL compact extension + MKL tests" ON)
 option(CQR_BUILD_TESTS     "Build tests and register them with CTest"          ON)
+option(CQR_WITH_SYCL       "Build the experimental SYCL (oneAPI DPC++) GPU prototype" OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -135,4 +136,54 @@ if(CQR_BUILD_TESTS)
     add_test(NAME bench_geqrf_compact_integration COMMAND bench_geqrf_compact 33 1)
     set_tests_properties(bench_geqrf_compact_integration PROPERTIES LABELS "integration")
   endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# SYCL (Intel oneAPI DPC++) GPU prototype -- design doc Phase 1.
+#
+# Optional and OFF by default. Re-implements the four portable C entry points on
+# a SYCL device (Strategy A: one work-item per matrix, in gpu/sycl/) and
+# validates them with the project's own suites: the UNCHANGED geqrf test
+# (src/test_cqr_geqrf_compact.cpp -- it drives both kernels through the C API)
+# and a C-API-routed ormqr test (gpu/sycl/test_ormqr_sycl.cpp). Requires a SYCL
+# compiler (configure with CXX=icpx); needs neither MKL nor a GPU -- it runs on
+# the OpenCL CPU device as well. See gpu/sycl/README.md and
+# scripts/install-sycl-toolchain.sh.
+# ---------------------------------------------------------------------------
+if(CQR_WITH_SYCL)
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag("-fsycl" CQR_HAS_FSYCL)
+  if(NOT CQR_HAS_FSYCL)
+    message(FATAL_ERROR
+      "CQR_WITH_SYCL=ON requires a SYCL compiler. Configure with CXX=icpx "
+      "(Intel oneAPI DPC++); see gpu/sycl/README.md and "
+      "scripts/install-sycl-toolchain.sh.")
+  endif()
+
+  # When built inside a conda (conda-forge dpcpp) environment, bake the SYCL
+  # runtime path into the binaries so they run without a manual LD_LIBRARY_PATH.
+  set(_cqr_sycl_rpath "")
+  if(DEFINED ENV{CONDA_PREFIX})
+    set(_cqr_sycl_rpath "$ENV{CONDA_PREFIX}/lib")
+  endif()
+
+  # The backend source is compiled directly into each test so the four C symbols
+  # resolve to the SYCL versions (not the CPU dispatch in cqr_compact).
+  add_executable(test_geqrf_sycl
+    src/test_cqr_geqrf_compact.cpp gpu/sycl/cqr_compact_sycl.cpp)
+  add_executable(test_ormqr_sycl
+    gpu/sycl/test_ormqr_sycl.cpp gpu/sycl/cqr_compact_sycl.cpp)
+  foreach(tgt test_geqrf_sycl test_ormqr_sycl)
+    target_include_directories(${tgt} PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
+    target_compile_features(${tgt} PRIVATE cxx_std_17)
+    target_compile_options(${tgt} PRIVATE -fsycl)
+    target_link_options(${tgt} PRIVATE -fsycl)
+    if(_cqr_sycl_rpath)
+      target_link_options(${tgt} PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
+    endif()
+    if(CQR_BUILD_TESTS)
+      add_test(NAME ${tgt} COMMAND ${tgt})
+    endif()
+  endforeach()
 endif()

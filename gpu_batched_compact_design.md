@@ -265,11 +265,15 @@ equivalents. The GPU port keeps that, cheaply:
   LAPACK (`geqrf_batch`, strided/group batch) as an interop option -- and note
   that it exposes **no compact-format apply-`Q`** on the GPU, so the very gap
   this project fills on the CPU persists on the GPU.
-* **Phase 1 -- SYCL apply-`Q`.** Port `ormqr_compact` (Strategy A, `side='L'`
-  col-major) to a SYCL kernel under a new `gpu/sycl/` tree, dispatched on `V`
-  like the CPU code. Validate against the CPU oracle and the roundtrip
-  invariant (§6). Wire it behind an OFF-by-default `CQR_WITH_SYCL` CMake option
-  so the existing build is untouched.
+* **Phase 1 -- SYCL prototype (done).** A SYCL port of **both** compact routines
+  -- `geqrf_compact` *and* `ormqr_compact` (Strategy A, one work-item per
+  matrix) -- now lives in `gpu/sycl/`, re-implementing the four portable C entry
+  points on a SYCL device. It passes the project's own suites: the unchanged
+  `src/test_cqr_geqrf_compact.cpp` (which drives both kernels through the C API)
+  and a C-API-routed `ormqr` mirror, gating at the same tolerances as the CPU
+  kernels. Validated on the OpenCL CPU device (no Intel GPU required). Wired
+  behind an OFF-by-default `CQR_WITH_SYCL` CMake option so the existing build is
+  untouched. See `gpu/sycl/README.md`.
 * **Phase 2 -- full pipeline + tuning.** Get `geqrf` and `trsm` onto the GPU,
   either by porting the compact versions or by interop with oneMKL's batched
   GPU LAPACK on a strided layout (accepting a repack). Tune `V`, work-group

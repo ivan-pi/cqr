@@ -116,8 +116,14 @@ Exploratory design for taking the compact batched pipeline onto **Intel GPUs**
 four candidate programming models (SYCL, OpenCL, OpenMP target, ISPC) and their
 Intel-GPU toolchains, and a SYCL-first phased plan. The key finding is that the
 compact interleaved layout is *already* the coalesced layout a GPU wants. See
-the [GPU design document](gpu_batched_compact_design.md). No GPU code is built
-yet; this is design only.
+the [GPU design document](gpu_batched_compact_design.md).
+
+A first SYCL (oneAPI DPC++) prototype of **both** compact routines (`geqrf` and
+`ormqr`) now lives in [`gpu/sycl/`](gpu/sycl/). It re-implements the same four C
+entry points on a SYCL device and passes the project's own test suites; it needs
+no Intel GPU to validate (the OpenCL CPU device suffices), only `icpx`. Build it
+with `-DCQR_WITH_SYCL=ON` (OFF by default) — see
+[`gpu/sycl/README.md`](gpu/sycl/README.md).
 
 ## Related work
 
