@@ -137,28 +137,41 @@ wins, and by how much, is machine-specific and unmeasured here.** A "mix by
 kernel" build (which ISPC couldn't do at gang-8 anyway) would be an overfit, not a
 portable strategy.
 
-### Gang size — ISPC's SIMD-width knob (`bench_gang`)
+### Vector width sweep — and ISPC vs GNU vectors at V=16 (`bench_gang`)
 
-Because the kernels are gang-generic, `bench_gang` sweeps the gang size (the
-`-xN` suffix) with the *same* source, packing at `V` = the gang width. All widths
-validate to machine precision; throughput (geomean over `n=10..150`, `nrhs=4`,
-standalone pipeline, no MKL) peaks at gang 16:
+The ISPC kernels are gang-generic, and the templated GNU `vector_size` kernels
+take `V` as a template argument (`pack<T,V>`, `V ∈ {2,4,8,16}`). Both use the same
+compact layout and neither needs MKL, so `bench_gang` packs at `V` = the gang
+width and times **both** at that `V`. All widths validate to machine precision.
+
+ISPC alone scales gracefully and peaks at gang 16 (geomean GFLOP/s, standalone):
 
 | gang (`avx512skx-x`) | 4 | 8 | **16** | 32 | 64 |
 |---|:---:|:---:|:---:|:---:|:---:|
-| GFLOP/s (geomean) | 13.8 | 16.4 | **17.3** | 14.2 | 11.8 |
-| registers (from the asm) | ymm | ymm | **zmm** | zmm×2 | zmm×4 |
+| ISPC GFLOP/s | 13.8 | 16.4 | **17.3** | 14.2 | 11.8 |
+| registers (asm) | ymm | ymm | **zmm** | zmm×2 | zmm×4 |
 
-**The gang size also picks the register width, and this is the same 256-vs-512
-knob as above.** ISPC's `avx512skx-x8` emits **256-bit YMM** (a deliberate choice
-that dodges the AVX-512 downclock — verified: 0 `zmm`); only `-x16` and up emit
-**512-bit ZMM**. So gang 16 wins on two counts: 512-bit registers (2× the data per
-instruction vs gang 8's YMM) *and* 16 matrices in flight, whose independent work
-hides the `larfg`/`trsm` division and sqrt latency (ISPC's "2–4× native width"
-guidance). Past that, 32/64 issue 2–4 ZMM per gang op and register pressure wins,
-more so at large `n`. Here — standalone, compute-bound — 512-bit wins. (The
-MKL-interop pipeline is pinned to gang 8 = MKL's `V`, i.e. 256-bit YMM; only
-`bench_gang` reaches gang 16 / ZMM.)
+The gang size also picks the register width — this is the same 256-vs-512 knob as
+above. `avx512skx-x8` emits **256-bit YMM** (a deliberate choice that dodges the
+AVX-512 downclock — 0 `zmm`); only `-x16`+ emit **512-bit ZMM**. So gang 16 wins on
+width (2× data/instruction) *and* ILP (16 matrices in flight hide the `larfg`/`trsm`
+divide + sqrt latency, per ISPC's "2–4× native width" guidance); 32/64 then spill.
+
+Head-to-head with the GNU vectors at the same `V` — a regime **MKL can't reach**,
+its FP64 compact format tops out at `V=8` — the crossover is the story:
+
+| geomean GFLOP/s | V=8 | V=16 |
+|---|:---:|:---:|
+| ISPC | ~11 | ~12 |
+| GCC `pack<double,V>` | **~12** | ~6.6 |
+| winner | GCC ~1.1× | **ISPC ~1.8×** |
+
+At `V=8` (the native width) GCC's hand-lowered vectors edge ISPC. At `V=16` — a
+1024-bit `pack<double,16>` = 2× ZMM — GCC **halves its own `V=8` throughput**: the
+4-wide-blocked 1024-bit vectors thrash the register file. ISPC holds up, because
+scheduling a gang *wider* than the native SIMD width is exactly what it is built
+for. So the one width MKL doesn't offer is where ISPC's model earns its keep.
+(Absolute numbers are noisy here; the crossover direction is stable across runs.)
 
 > **Measurement caveats — indicative only, not benchmark-grade.** Shared,
 > virtualized 4-vCPU node with **no frequency control** (governor/turbo
