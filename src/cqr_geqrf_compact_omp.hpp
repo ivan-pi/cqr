@@ -67,17 +67,22 @@ void geqrf_compact_group_omp(bool rowmajor, Int m, Int n, T *a_, Int ldap, T *ta
     assert(ldap >= (rowmajor ? n : m));
 
     const Int k = (m < n) ? m : n;
-    const std::size_t rs = rowmajor ? static_cast<std::size_t>(ldap) : 1; /* row step  */
-    const std::size_t cs = rowmajor ? 1 : static_cast<std::size_t>(ldap); /* col step  */
+    const Int rs = rowmajor ? ldap : 1; /* row step (elements) */
+    const Int cs = rowmajor ? 1 : ldap; /* col step (elements) */
 
 /* Single-element view of matrix (g*V + v), closing over the ambient lane v. This
  * is the macro the design note calls for: it hands the scalar geqr2 below the
  * same A(i,j) it would write against a plain 2-D array, with the compact
  * interleave (the *V + v) folded into the address. Undefined at the end of the
- * function so the name does not leak. */
-#define CQR_A(i, j)                                                                      \
-    a_[((static_cast<std::size_t>(i)) * rs + (static_cast<std::size_t>(j)) * cs) * V +   \
-       static_cast<std::size_t>(v)]
+ * function so the name does not leak.
+ *
+ * The address is computed entirely in plain int: for the sizes this batch
+ * targets (matrix dims and ldap in the low hundreds, so one group spans at most
+ * ldap*n*V ~ a few million elements) an int index never overflows, and holding
+ * the lane term `+ v` at int width is what lets the compiler prove the lane loop
+ * is unit-stride -- a widening to size_t forces 64-bit index vectors and blocks
+ * the contiguous vectorization. */
+#define CQR_A(i, j) a_[((i) * rs + (j) * cs) * V + v]
 
 #pragma omp simd simdlen(V)
     for (int v = 0; v < V; ++v) {
@@ -96,7 +101,7 @@ void geqrf_compact_group_omp(bool rowmajor, Int m, Int n, T *a_, Int ldap, T *ta
             const bool has = (tail > T(0));             /* anything to zero?    */
             const T t = has ? (beta - x0) / beta : T(0);
             const T inv = has ? T(1) / (x0 - beta) : T(0);
-            tau_[static_cast<std::size_t>(kk) * V + static_cast<std::size_t>(v)] = t;
+            tau_[kk * V + v] = t;
             for (Int i = kk + 1; i < m; ++i)
                 CQR_A(i, kk) = CQR_A(i, kk) * inv; /* reflector body */
             CQR_A(kk, kk) = has ? beta : x0;       /* R diagonal     */
@@ -132,14 +137,20 @@ void geqrf_compact_general_omp(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *
 
     const Int k = (m < n) ? m : n;
     const Int ngroups = (nm + V - 1) / V;
-    const std::size_t str_t = static_cast<std::size_t>(k) * V;
-    const std::size_t str_a = (rowmajor ? static_cast<std::size_t>(ldap) * m
-                                        : static_cast<std::size_t>(ldap) * n) *
-                              V;
+    /* Per-group element strides, in plain int (one group is a few million
+     * elements at most for the target sizes). The base pointers are advanced by
+     * accumulation rather than g*stride, so no index ever has to hold the whole
+     * batch extent -- large nm stays correct without a wider type. */
+    const Int str_t = k * V;
+    const Int str_a = (rowmajor ? ldap * m : ldap * n) * V;
 
-    for (Int g = 0; g < ngroups; ++g)
-        geqrf_compact_group_omp<T, V, Int>(rowmajor, m, n, ap + g * str_a, ldap,
-                                           taup + g * str_t);
+    T *a = ap;
+    T *tg = taup;
+    for (Int g = 0; g < ngroups; ++g) {
+        geqrf_compact_group_omp<T, V, Int>(rowmajor, m, n, a, ldap, tg);
+        a += str_a;
+        tg += str_t;
+    }
 }
 
 /* ==================================================================
@@ -171,14 +182,14 @@ void geqrf_compact_group_omp_inner(bool rowmajor, Int m, Int n, T *a_, Int ldap,
     assert(ldap >= (rowmajor ? n : m));
 
     const Int k = (m < n) ? m : n;
-    const std::size_t rs = rowmajor ? static_cast<std::size_t>(ldap) : 1;
-    const std::size_t cs = rowmajor ? 1 : static_cast<std::size_t>(ldap);
+    const Int rs = rowmajor ? ldap : 1;
+    const Int cs = rowmajor ? 1 : ldap;
 
 /* Element (i,j) of lane v -- explicit lane index, since here v is the innermost
- * loop variable rather than the ambient one. */
-#define CQR_AV(i, j)                                                                     \
-    a_[((static_cast<std::size_t>(i)) * rs + (static_cast<std::size_t>(j)) * cs) * V +   \
-       static_cast<std::size_t>(v)]
+ * loop variable rather than the ambient one. Plain-int address, as in the
+ * outer-loop kernel above: the int-width `+ v` term keeps each lane loop
+ * unit-stride for the vectorizer. */
+#define CQR_AV(i, j) a_[((i) * rs + (j) * cs) * V + v]
 
     T tau[V], inv[V], w[V]; /* one value per lane, live between split simd loops */
 
@@ -203,7 +214,7 @@ void geqrf_compact_group_omp_inner(bool rowmajor, Int m, Int n, T *a_, Int ldap,
             const bool has = (tail[v] > T(0));
             tau[v] = has ? (beta - x0[v]) / beta : T(0);
             inv[v] = has ? T(1) / (x0[v] - beta) : T(0);
-            tau_[static_cast<std::size_t>(kk) * V + static_cast<std::size_t>(v)] = tau[v];
+            tau_[kk * V + v] = tau[v];
             CQR_AV(kk, kk) = has ? beta : x0[v]; /* R diagonal */
         }
         for (Int i = kk + 1; i < m; ++i)
@@ -243,14 +254,16 @@ void geqrf_compact_general_omp_inner(bool rowmajor, Int m, Int n, T *ap, Int lda
 
     const Int k = (m < n) ? m : n;
     const Int ngroups = (nm + V - 1) / V;
-    const std::size_t str_t = static_cast<std::size_t>(k) * V;
-    const std::size_t str_a = (rowmajor ? static_cast<std::size_t>(ldap) * m
-                                        : static_cast<std::size_t>(ldap) * n) *
-                              V;
+    const Int str_t = k * V;
+    const Int str_a = (rowmajor ? ldap * m : ldap * n) * V;
 
-    for (Int g = 0; g < ngroups; ++g)
-        geqrf_compact_group_omp_inner<T, V, Int>(rowmajor, m, n, ap + g * str_a, ldap,
-                                                 taup + g * str_t);
+    T *a = ap;
+    T *tg = taup;
+    for (Int g = 0; g < ngroups; ++g) {
+        geqrf_compact_group_omp_inner<T, V, Int>(rowmajor, m, n, a, ldap, tg);
+        a += str_a;
+        tg += str_t;
+    }
 }
 
 } /* namespace omp_simd */

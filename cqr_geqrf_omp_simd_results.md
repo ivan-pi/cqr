@@ -54,26 +54,33 @@ Clang 18.1. `-march=native` selected AVX-512, so the native double width is
 **V = 8**. Numbers are GFLOP/s; the ratio columns are throughput relative to
 vec-types (higher = closer to the hand-written kernel).
 
+All indexing inside the kernels is plain `int` (matrix dims for this batch are in
+the low hundreds, so an in-group index never overflows): a widening to `size_t`
+on the lane term forces 64-bit index vectors and blocks the compiler from
+proving the lane loop is unit-stride. Per-group base pointers are advanced by
+accumulation rather than a `g * stride` multiply, so large batches stay correct
+without a wider type.
+
 ### GCC 13.3, V = 8 (AVX-512)
 
 ```
    n |  vec GF/s |  omp-outer |  omp-inner | out/vec |  in/vec
 -----+-----------+------------+------------+---------+---------
-   8 |       9.87 |       2.28 |       6.63 |    0.23x |    0.67x
-  16 |      15.60 |       2.57 |      10.69 |    0.17x |    0.69x
-  24 |      18.03 |       2.57 |      11.17 |    0.14x |    0.62x
-  30 |      17.26 |       2.67 |      12.97 |    0.15x |    0.75x
-  32 |      16.24 |       2.80 |      12.30 |    0.17x |    0.76x
-  45 |      15.61 |       2.72 |      12.22 |    0.17x |    0.78x
-  48 |      15.01 |       2.71 |      12.03 |    0.18x |    0.80x
-  60 |      14.72 |       2.59 |      11.62 |    0.18x |    0.79x
-  64 |      13.18 |       2.50 |      11.31 |    0.19x |    0.86x
-  96 |      12.98 |       2.28 |      11.55 |    0.18x |    0.89x
- 105 |      13.35 |       2.21 |      11.64 |    0.17x |    0.87x
- 128 |      12.12 |       2.10 |      11.45 |    0.17x |    0.94x
- 168 |      12.51 |       1.93 |      11.41 |    0.15x |    0.91x
+   8 |       8.92 |       2.35 |       6.54 |    0.26x |    0.73x
+  16 |      13.26 |       2.65 |      10.23 |    0.20x |    0.77x
+  24 |      16.21 |       2.78 |      11.66 |    0.17x |    0.72x
+  30 |      16.54 |       2.79 |      11.63 |    0.17x |    0.70x
+  32 |      13.97 |       2.81 |      11.34 |    0.20x |    0.81x
+  45 |      14.95 |       2.74 |      10.95 |    0.18x |    0.73x
+  48 |      13.54 |       2.68 |      11.25 |    0.20x |    0.83x
+  60 |      13.81 |       2.49 |      10.85 |    0.18x |    0.79x
+  64 |      11.40 |       2.45 |      10.49 |    0.21x |    0.92x
+  96 |      12.44 |       2.27 |      10.77 |    0.18x |    0.87x
+ 105 |      12.96 |       2.22 |      10.88 |    0.17x |    0.84x
+ 128 |      11.66 |       2.13 |      10.97 |    0.18x |    0.94x
+ 168 |      12.02 |       1.98 |      10.85 |    0.16x |    0.90x
 -----+-----------+------------+------------+---------+---------
-geomean omp-inner / vec-types: 0.79x
+geomean omp-inner / vec-types: 0.81x
 ```
 
 ### Clang 18.1, V = 8 (AVX-512)
@@ -81,25 +88,27 @@ geomean omp-inner / vec-types: 0.79x
 ```
    n |  vec GF/s |  omp-outer |  omp-inner | out/vec |  in/vec
 -----+-----------+------------+------------+---------+---------
-   8 |       9.52 |       1.89 |       7.04 |    0.20x |    0.74x
-  16 |      13.67 |       2.82 |      10.54 |    0.21x |    0.77x
-  24 |      15.21 |       3.05 |      11.59 |    0.20x |    0.76x
-  30 |      14.62 |       3.00 |      11.46 |    0.20x |    0.78x
-  32 |      13.16 |       2.85 |      11.34 |    0.22x |    0.86x
-  45 |      12.83 |       2.73 |      11.67 |    0.21x |    0.91x
-  48 |      13.22 |       2.54 |      11.52 |    0.19x |    0.87x
-  60 |      12.19 |       2.16 |      10.96 |    0.18x |    0.90x
-  64 |      11.26 |       2.08 |      11.16 |    0.18x |    0.99x
-  96 |      11.68 |       1.88 |      11.55 |    0.16x |    0.99x
- 105 |      12.15 |       1.85 |      11.69 |    0.15x |    0.96x
- 128 |      11.17 |       1.80 |      11.00 |    0.16x |    0.99x
- 168 |      11.68 |       1.76 |      11.40 |    0.15x |    0.98x
+   8 |       9.56 |       1.54 |       6.88 |    0.16x |    0.72x
+  16 |      13.96 |       2.09 |       9.85 |    0.15x |    0.70x
+  24 |      14.99 |       2.29 |      10.61 |    0.15x |    0.71x
+  30 |      14.15 |       2.33 |      10.66 |    0.16x |    0.75x
+  32 |      13.49 |       2.36 |      10.42 |    0.17x |    0.77x
+  45 |      12.94 |       2.20 |      10.58 |    0.17x |    0.82x
+  48 |      13.45 |       2.15 |      10.65 |    0.16x |    0.79x
+  60 |      12.51 |       1.93 |       9.85 |    0.15x |    0.79x
+  64 |      11.37 |       1.90 |      10.18 |    0.17x |    0.90x
+  96 |      12.07 |       1.78 |      10.56 |    0.15x |    0.87x
+ 105 |      11.99 |       1.77 |      10.43 |    0.15x |    0.87x
+ 128 |      11.17 |       1.76 |      10.49 |    0.16x |    0.94x
+ 168 |      11.76 |       1.76 |      10.54 |    0.15x |    0.90x
 -----+-----------+------------+------------+---------+---------
-geomean omp-inner / vec-types: 0.88x
+geomean omp-inner / vec-types: 0.81x
 ```
 
 A narrower interleave (`--simdlen=4`, V = 4 / 256-bit) shows the same ordering:
-omp-outer ~0.2x, omp-inner ~0.70x (GCC) / 0.70x (Clang) geomean.
+omp-outer ~0.15--0.20x, omp-inner ~0.67x (GCC) / 0.60x (Clang) geomean. (Absolute
+throughput on this shared VM is noisy at the ~10% level; the ordering and the
+~5x outer/inner gap are the stable signal.)
 
 ## Findings
 
