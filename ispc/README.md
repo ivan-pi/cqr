@@ -60,57 +60,65 @@ algorithm, same FMA selection. Genuine drop-in replacements.
 ## Results — GCC vs clang vs ISPC, normalized to MKL
 
 Geomean speedup over the matching MKL compact routine, `n=10..150`, `nrhs=4`,
-sequential (`make shootout`):
+sequential (`make shootout`). **On this shared, frequency-unpinned node the
+numbers swing ~15–30% run to run** (two independent runs bracket each cell) — so
+these are rough ranges, not point estimates:
 
-| speedup vs MKL compact | GCC | clang | ISPC | fastest |
-|---|:---:|:---:|:---:|---|
-| `geqrf` vs `mkl_dgeqrf_compact` | 1.24× | **1.48×** | 1.47× | clang ≈ ISPC |
-| `trsm` vs `mkl_dtrsm_compact` | **1.40×** | 1.05× | 1.10× | GCC, by a lot |
-| full solve vs the MKL pipeline | 1.20× | **1.35×** | 1.30× | clang |
+| geomean vs MKL compact | GCC | clang | ISPC |
+|---|:---:|:---:|:---:|
+| `geqrf` | 1.2–1.4× | 1.3–1.5× | 1.3–1.5× |
+| `trsm`  | 1.1–1.4× | 0.8–1.1× | 0.8–1.1× |
+| full solve | 1.2–1.3× | 1.2–1.4× | 1.2–1.3× |
 
-(ISPC ≈ 3× the per-matrix LAPACK path at these sizes; `ormqr` has no MKL compact
-counterpart, and the three land within ~5% there. ISPC's `vs MKL` geomeans agree
-across the GCC and clang builds — a consistency check.)
+What is **stable across runs** (the defensible part):
 
-**No single winner; the lead flips per kernel — and it's a 256- vs 512-bit
-story.** The `pack<double,8>` is a 512-bit vector type: **GCC emits 512-bit ZMM;
-clang and ISPC split it into 2×256-bit YMM** (ISPC's `avx512skx-x8` is 256-bit by
-design — only `-x16` uses ZMM, which would mean `V=16` and break the MKL `V=8`
-layout; 1.22 has no ZMM-at-gang-8 switch). Forcing clang to each width on the
-*same source* isolates it (speedup vs MKL, n=100):
+- **ISPC ≈ the hand-written GNU vectors on every kernel** — same LLVM/GCC
+  backend — and the three full-solve pipelines land within noise of each other,
+  modestly over MKL and ~3× over per-matrix LAPACK. (`ormqr` has no MKL compact
+  counterpart; the three are within ~5% there.)
+- **`geqrf` beats MKL; `trsm` is a toss-up with MKL.** Which of GCC/clang/ISPC
+  *leads* a given kernel is **not** stable enough here to rank — the per-kernel
+  winner reshuffled between runs.
 
-| n=100 | 256-bit (ymm) | 512-bit (zmm) |
-|---|:---:|:---:|
-| `geqrf` (FMA-dense) | **1.54×** | 1.17× |
-| `trsm` (division/latency-bound) | 0.85× | **1.11×** |
+### The one thing that is a fact, not a measurement: 256- vs 512-bit
 
-`trsm` likes 512-bit (fewer instructions/divides, low FMA density so no AVX-512
-downclock) → GCC wins it; `geqrf` is FMA-dense so 512-bit downclocks and loses →
-clang/ISPC win it. Matching GCC on `trsm` would need 512-bit, which ISPC can't
-emit at gang-8 — so a "mix by kernel" build is an **overfit to this CPU/compiler,
-not a portable strategy** (the crossover weakens or inverts on Ice Lake / Sapphire
-Rapids / non-x86 and with compiler version).
+The `pack<double,8>` is a 512-bit vector type, and the toolchains disagree on how
+wide to run it (verified in the asm, independent of any timing): **GCC emits
+512-bit ZMM; clang and ISPC split it into 2×256-bit YMM.** ISPC's `avx512skx-x8`
+is 256-bit by design — only `-x16` uses ZMM, which would mean `V=16` and break the
+MKL `V=8` layout; 1.22 has no ZMM-at-gang-8 switch.
+
+The performance *consequence* is where reliability runs out. A controlled
+same-source A/B (forcing clang to each width) suggested 512-bit helps the
+divide/latency-bound `trsm` (fewer instructions and `vdivpd`) and can hurt the
+FMA-dense `geqrf` (AVX-512 downclock) — the classic Skylake-SP / Cascade Lake
+tradeoff. But this box pins its clock readout and exposes no PMU, so the downclock
+is *inferred, not observed*, and across full runs even the `geqrf` direction did
+not hold. So: the width difference is real and fixed per toolchain; **which width
+wins, and by how much, is machine-specific and unmeasured here.** A "mix by
+kernel" build (which ISPC couldn't do at gang-8 anyway) would be an overfit, not a
+portable strategy.
 
 > **Measurement caveats — indicative only, not benchmark-grade.** Shared,
-> virtualized 4-vCPU node with **no frequency control**: governor/turbo
-> inaccessible, a pinned 2.8 GHz readout, and **no PMU**, so the achieved clock and
-> any AVX-512 downclock are neither controllable nor observable — the geqrf-256
-> conclusion in particular is *inferred*, and at fixed frequency 512-bit might win
-> geqrf too. A trustworthy study needs a bare-metal / non-shared node at pinned
-> frequency, isolated+pinned cores, PMU cycle counts, variance/CI, and several
-> microarchitectures. One toolchain set (GCC 13.3, clang 18.1.3, ISPC 1.22/LLVM 17),
-> double, `V=8`.
+> virtualized 4-vCPU node with **no frequency control** (governor/turbo
+> inaccessible, a pinned 2.8 GHz readout, **no PMU**): the achieved clock and any
+> AVX-512 downclock are neither controllable nor observable, and repeat runs move
+> the geomeans 15–30%. A trustworthy study needs a bare-metal / non-shared node at
+> pinned frequency, isolated+pinned cores, PMU cycle counts, variance/CI, and
+> several microarchitectures. One toolchain set (GCC 13.3, clang 18.1.3,
+> ISPC 1.22/LLVM 17), double, `V=8`.
 
 ## Takeaways
 
-1. **Correct, drop-in, ~parity from far simpler source.** ISPC ties the fastest
-   compiler on the dominant `geqrf` and is never worst on any kernel, written as
-   plain scalar code instead of hand-rolled vectors.
-2. **The `geqrf` edge over GCC is an LLVM/width effect, not ISPC-specific** — clang
-   on the same GNU source matches ISPC (both 256-bit).
-3. **Width, not toolchain, decides each kernel** — and which width wins is
-   machine-specific, so the portable move is to let the target pick it and take the
-   one-source parity, not to hand-assemble a per-kernel mix.
+1. **Correct, drop-in, on par — from far simpler source.** ISPC produces a
+   bit-identical factorization and runs within run-to-run noise of the
+   hand-written GNU vectors on every kernel, written as plain scalar code.
+2. **No ISPC-specific speed edge, and none needed.** Where ISPC looked faster than
+   GCC it was an LLVM/width effect (clang on the same source tracks ISPC); the
+   value is the one-source SPMD model at parity, not a throughput win.
+3. **Absolute speedups here are not trustworthy** — shared node, no fixed
+   frequency, no PMU. The width choice (256 vs 512) is a real, target-dependent
+   knob; the portable move is to let the target pick it, not to hand-tune a mix.
 
 ---
 *Assisted-by: Claude:claude-opus-4.8*
