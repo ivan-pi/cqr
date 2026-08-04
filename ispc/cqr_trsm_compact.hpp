@@ -1,18 +1,12 @@
 /* cqr_trsm_compact.hpp
  *
- * A templated compact (interleaved-batch) triangular solve, in the same GNU
- * `vector_size` style as ../src/cqr_geqrf_compact.hpp and ../src/cqr_compact.hpp.
- * The repo leans on mkl_dtrsm_compact for this step; this gives GCC and clang a
- * kernel of their own so the compiler shootout (bench_compilers.cpp) can pit
- * GCC / clang / ISPC against mkl_dtrsm_compact on equal footing.
- *
- * Specialized to the QR-solve case, exactly the ISPC cqr_ispc_dtrsm_compact and
- * MKL's mkl_dtrsm_compact(LEFT, UPPER, NOTRANS, NONUNIT): solve the upper-
- * triangular R X = alpha B by back-substitution, one group of V matrices at a
- * time, register-blocked 4 RHS columns at a time.
- *
- *   x_i = (alpha b_i - sum_{l>i} A(i,l) x_l) / A(i,i)
- *
+ * A templated compact (interleaved-batch) triangular solve in the GNU
+ * `vector_size` style of ../src, giving GCC and clang a trsm of their own to pit
+ * against mkl_dtrsm_compact in the shootout (the repo otherwise uses MKL's). Same
+ * QR-solve case as the ISPC cqr_ispc_dtrsm_compact and MKL's
+ * mkl_dtrsm_compact(LEFT, UPPER, NOTRANS, NONUNIT): back-substitution on the
+ * upper-triangular R, x_i = (alpha b_i - sum_{l>i} A(i,l) x_l) / A(i,i), one group
+ * at a time, 4 RHS columns blocked.
  * Assisted-by: Claude:claude-opus-4.8
  */
 

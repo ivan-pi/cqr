@@ -2,7 +2,6 @@
 *.o
 cqr_ispc_generated.h
 test_cqr_ispc
-bench_cqr_ispc
 bench_gcc
 bench_clang
 

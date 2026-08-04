@@ -1,51 +1,28 @@
-// cqr_ispc.ispc -- Compact (interleaved-batch) QR pipeline in Intel ISPC.
+// cqr_ispc.ispc -- Compact (interleaved-batch) QR pipeline in Intel ISPC, an SPMD
+// prototype of the GNU vector_size kernels in ../src, on the same algorithm and
+// MKL Compact layout, to measure ISPC against them.
 //
-// An SPMD prototype of the cqr GNU-vector kernels (../src/cqr_geqrf_compact.hpp,
-// ../src/cqr_compact.hpp) built to measure ISPC against the hand-written GNU
-// vector_size approach on the very same algorithm and data layout.
+// The mapping that makes it exact: MKL Compact stores element (i,j) of the V
+// interleaved matrices contiguously (ap[g*ldap*ncol*V + (j*ldap+i)*V + v]), and an
+// ISPC `varying double` IS programCount consecutive doubles -- so when
+// V == programCount a compact pack of V matrices' element (i,j) is one `varying
+// double`. Cast the group base to `varying double * uniform`, index by (j*ldap+i),
+// and each kernel is the plain scalar geqr2 / dorm2r / back-substitution that ISPC
+// vectorizes across the V matrices -- no hand-written vectors or masks.
 //
-// The idea that makes this a one-to-one match for the MKL Compact format:
-//
-//   * MKL Compact stores element (i,j) of the V interleaved matrices of a group
-//     CONTIGUOUSLY: ap[g*ldap*ncol*V + (j*ldap + i)*V + v], v = 0..V-1.
-//   * In ISPC a `varying double` is, by definition, programCount consecutive
-//     doubles in memory -- one per gang lane.
-//
-// So a compact pack of V matrices' element (i,j) *is* a `varying double` when
-// V == programCount. Casting the group's base pointer to `varying double *
-// uniform` and indexing by the linear element offset (j*ldap + i) loads/stores
-// that pack in a single aligned vector op, lane v holding matrix v. The kernel
-// body is then the ordinary *scalar* geqr2 / dorm2r / back-substitution written
-// once; ISPC vectorizes it across the V matrices of the group. Contrast the GNU
-// version, which spells the vector out by hand with __attribute__((vector_size)).
-//
-// The gang width fixes the interleave width. Build with --target=avx512skx-x8 so
-// programCount == 8 == V, the AVX-512 FP64 compact format MKL selects on an
-// AVX-512 host (mkl_get_format_compact() == MKL_COMPACT_AVX512). Column-major,
-// double precision -- the tuned path the batched AX=B solver uses.
-//
-// Exposed (extern "C" via ISPC `export`) as drop-in siblings of the portable C
-// API in ../src/cqr_compact.h, plus a compact triangular solve to complete the
-// pipeline (the repo leans on mkl_dtrsm_compact for that step):
-//
-//   cqr_ispc_dgeqrf_compact  QR factorization      A = Q R
-//   cqr_ispc_dormqr_compact  apply Q or Q^T        B := op(Q) B   (side = 'L')
-//   cqr_ispc_dtrsm_compact   triangular solve      B := alpha op(A)^-1 B
-//                                                  (left, upper, no-trans, non-unit)
+// Build --target=avx512skx-x8 so programCount == 8 == V (AVX-512 FP64 compact, what
+// MKL picks on an AVX-512 host). Column-major, double precision. Exported extern "C"
+// as drop-in siblings of ../src/cqr_compact.h, plus a compact trsm:
+//   cqr_ispc_dgeqrf_compact  A = Q R
+//   cqr_ispc_dormqr_compact  B := op(Q) B          (side 'L', trans 0=Q / 1=Q^T)
+//   cqr_ispc_dtrsm_compact   B := alpha op(A)^-1 B  (left, upper, no-trans, non-unit)
 //
 // Assisted-by: Claude:claude-opus-4.8
 
-// ---------------------------------------------------------------------------
-// QR factorization (unblocked geqr2): A = Q R, one group of programCount
-// matrices at a time. Mirrors cqr::detail::geqrf_compact_group.
-//
-//   m, n   rows, columns of each matrix
-//   ap     compact A (m x n), column-major; overwritten with (R, Householder v)
-//   ldap   compact leading dimension (>= m)
-//   taup   compact tau output, k = min(m,n) per matrix
-//   nm     total number of matrices (a partial final group is padded to a full
-//          pack of identities by the caller, so it runs unmasked -> tau = 0)
-// ---------------------------------------------------------------------------
+// QR factorization (unblocked geqr2), one group of programCount matrices at a time;
+// mirrors cqr::detail::geqrf_compact_group. ap (m x n col-major) -> (R, Householder
+// vectors); taup -> k=min(m,n) tau per matrix. A padded final group factors to
+// tau=0 (harmless). Column pack (i,j) == the varying at linear index j*ldap+i.
 export void cqr_ispc_dgeqrf_compact(uniform int m, uniform int n,
                                     uniform double ap[], uniform int ldap,
                                     uniform double taup[], uniform int nm)
@@ -131,20 +108,10 @@ export void cqr_ispc_dgeqrf_compact(uniform int m, uniform int n,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Apply Q (or Q^T) from the left: B := op(Q) B, one group at a time. Mirrors
-// cqr::detail::ormqr_compact_group (side = 'L', column-major). Q is the product
-// of k reflectors H(0)..H(k-1) from cqr_ispc_dgeqrf_compact.
-//
-//   trans  0 -> apply Q (H(0)..H(k-1), descending sweep)
-//          1 -> apply Q^T (H(k-1)..H(0), ascending sweep; the solve case)
-//   m      rows of B (and reflector length axis)
-//   nrhs   columns of B
-//   k      number of reflectors (min(m,n) of the factorization)
-//   ap     compact reflectors, (ldap, k) per matrix
-//   taup   compact tau, k per matrix
-//   bp     compact B (m x nrhs), overwritten with op(Q) B
-// ---------------------------------------------------------------------------
+// Apply Q (trans=0, descending sweep) or Q^T (trans=1, ascending) from the left:
+// B := op(Q) B, one group at a time; mirrors cqr::detail::ormqr_compact_group
+// (side 'L', col-major). ap/taup are the k reflectors from the geqrf above,
+// (ldap,k) per matrix; bp (m x nrhs) is overwritten.
 export void cqr_ispc_dormqr_compact(uniform int trans, uniform int m, uniform int nrhs,
                                     uniform int k, uniform double ap[], uniform int ldap,
                                     uniform double taup[], uniform double bp[],
@@ -212,18 +179,10 @@ export void cqr_ispc_dormqr_compact(uniform int trans, uniform int m, uniform in
     }
 }
 
-// ---------------------------------------------------------------------------
-// Triangular solve B := alpha * op(A)^-1 B, one group at a time. Specialized to
-// the QR-solve step: side = 'L', uplo = 'U', trans = 'N', diag = 'N' -- i.e.
-// solve the upper-triangular R X = alpha B by back-substitution. This is the
-// compact analogue of mkl_dtrsm_compact(LEFT, UPPER, NOTRANS, NONUNIT).
-//
-//   n      order of A (= rows of B)
-//   nrhs   columns of B
-//   alpha  scalar (1.0 in the QR solve)
-//   ap     compact upper-triangular A (n x n), column-major
-//   bp     compact B (n x nrhs), overwritten with the solution X
-// ---------------------------------------------------------------------------
+// Triangular solve B := alpha op(A)^-1 B, one group at a time, for the QR-solve
+// case only: side 'L', uplo 'U', trans 'N', diag 'N' -- back-substitution on the
+// upper-triangular R (n x n col-major). Compact analogue of
+// mkl_dtrsm_compact(LEFT, UPPER, NOTRANS, NONUNIT); bp (n x nrhs) -> solution X.
 export void cqr_ispc_dtrsm_compact(uniform int n, uniform int nrhs, uniform double alpha,
                                    uniform double ap[], uniform int ldap,
                                    uniform double bp[], uniform int ldbp, uniform int nm)
