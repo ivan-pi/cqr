@@ -1,0 +1,9 @@
+# ISPC prototype build artifacts (sources are tracked)
+*.o
+cqr_ispc_generated.h
+test_cqr_ispc
+bench_cqr_ispc
+
+# Re-include the hand-written Makefile (the root .gitignore ignores 'Makefile'
+# to skip CMake-generated ones; this prototype ships a real one).
+!Makefile
