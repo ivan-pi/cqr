@@ -19,6 +19,8 @@
 
 ISPC        ?= ispc
 CXX         ?= g++
+CXX_GCC     ?= g++
+CXX_CLANG   ?= clang++
 MKL_INC     ?= /usr/include/mkl
 
 # ISPC: one gang width == one interleave width. avx512skx-x8 => programCount 8 ==
@@ -35,8 +37,8 @@ LDLIBS      ?= -lmkl_rt -lm
 # Sequential only: no OpenMP. The drivers pin MKL to its sequential layer at
 # startup (mkl_set_threading_layer), so no threading runtime is linked or loaded.
 
-.PHONY: all test bench clean
-all: test_cqr_ispc bench_cqr_ispc
+.PHONY: all test bench shootout clean
+all: test_cqr_ispc bench_cqr_ispc bench_gcc bench_clang
 
 cqr_ispc.o: cqr_ispc.ispc
 	$(ISPC) $(ISPC_FLAGS) -o $@ -h cqr_ispc_generated.h $<
@@ -55,11 +57,24 @@ test_cqr_ispc: test_cqr_ispc.cpp cqr_ispc.o $(REF_OBJS)
 bench_cqr_ispc: bench_cqr_ispc.cpp cqr_ispc.o $(REF_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
 
+# Compiler shootout: the SAME bench_compilers.cpp built by g++ and by clang++,
+# each linking the one ISPC object. The native C++ kernels are compiled by the
+# driver compiler, so bench_gcc's native column is GCC and bench_clang's is clang.
+bench_gcc: bench_compilers.cpp cqr_ispc.o cqr_trsm_compact.hpp
+	$(CXX_GCC) $(CXX_OPT) -I../src -I$(MKL_INC) -o $@ bench_compilers.cpp cqr_ispc.o $(LDLIBS)
+bench_clang: bench_compilers.cpp cqr_ispc.o cqr_trsm_compact.hpp
+	$(CXX_CLANG) $(CXX_OPT) -I../src -I$(MKL_INC) -o $@ bench_compilers.cpp cqr_ispc.o $(LDLIBS)
+
 test: test_cqr_ispc
 	./test_cqr_ispc
 
 bench: bench_cqr_ispc
 	./bench_cqr_ispc
 
+shootout: bench_gcc bench_clang
+	./bench_gcc
+	@echo
+	./bench_clang
+
 clean:
-	rm -f *.o cqr_ispc_generated.h test_cqr_ispc bench_cqr_ispc
+	rm -f *.o cqr_ispc_generated.h test_cqr_ispc bench_cqr_ispc bench_gcc bench_clang
