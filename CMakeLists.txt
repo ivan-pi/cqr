@@ -187,6 +187,29 @@ if(CQR_WITH_SYCL)
     endif()
   endforeach()
 
+  # Variant 2: the SAME two suites, built against the EXPLICIT sub-group
+  # primitives (CQR_SYCL_EXPLICIT_SG routes the launchers' sub-group path through
+  # geqrf_slot_sg/ormqr_slot_sg), so they validate the group_load/store variant
+  # verbatim at the same tolerances.
+  add_executable(test_geqrf_sycl_sg
+    src/test_cqr_geqrf_compact.cpp gpu/sycl/cqr_compact_sycl.cpp)
+  add_executable(test_ormqr_sycl_sg
+    gpu/sycl/test_ormqr_sycl.cpp gpu/sycl/cqr_compact_sycl.cpp)
+  foreach(tgt test_geqrf_sycl_sg test_ormqr_sycl_sg)
+    target_include_directories(${tgt} PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
+    target_compile_features(${tgt} PRIVATE cxx_std_17)
+    target_compile_definitions(${tgt} PRIVATE CQR_SYCL_EXPLICIT_SG)
+    target_compile_options(${tgt} PRIVATE -fsycl)
+    target_link_options(${tgt} PRIVATE -fsycl)
+    if(_cqr_sycl_rpath)
+      target_link_options(${tgt} PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
+    endif()
+    if(CQR_BUILD_TESTS)
+      add_test(NAME ${tgt} COMMAND ${tgt})
+    endif()
+  endforeach()
+
   # Fused-pattern example: ONE user-owned parallel_for composing the device
   # primitives (fill -> geqrf -> apply Q^T -> trsm -> unpack) in a single kernel.
   # Self-checking against a known solution, so it is also registered as a test

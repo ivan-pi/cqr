@@ -136,11 +136,22 @@ the realistic usage pattern; the convenience batched entry points are kept as
 thin wrappers over the same primitives (and as the vehicle for validating them
 against the existing test suites).
 
-The primitives use no sub-group collectives -- each lane owns an independent
-matrix (Strategy A), so the sub-group is purely the SIMD packing. Strategy B
-would instead make the primitives cooperative (sub-group reductions over one
-matrix); the interface -- caller-owned launch, composable per-tile primitives --
-is the same.
+The primitives use no cross-lane shuffles or reductions -- each lane owns an
+independent matrix (Strategy A), so the sub-group is purely the SIMD packing.
+Strategy B would instead make the primitives cooperative (sub-group reductions
+over one matrix); the interface -- caller-owned launch, composable per-tile
+primitives -- is the same.
+
+Within Strategy A the primitives ship in **two forms** that differ only in how
+the SIMD memory access is written: *implicit* per-lane indexing
+(`geqrf_slot`/`ormqr_slot`/`trsm_upper_slot`, the default, which the runtime
+coalesces across the pinned sub-group) and *explicit* sub-group block loads and
+stores (`*_slot_sg`, using `group_load`/`group_store`) -- the form Intel's
+"Sub-groups and SIMD Vectorization" guide recommends for predictable, guaranteed
+block memory on Xe. The two are bit-identical (the explicit `larfg` is
+branch-free so the collectives stay convergent); the explicit form is expected to
+pay off on a GPU and is ~parity on the OpenCL CPU device, where the runtime
+already vectorizes the implicit form.
 
 ## 4. Programming Models and Compiler Toolchains
 

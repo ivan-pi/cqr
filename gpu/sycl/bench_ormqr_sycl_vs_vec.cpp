@@ -10,9 +10,10 @@
  * thing the design doc calls out: pinning the sub-group to the interleave width
  * V so the runtime vectorizes V work-items into one SIMD op (batch-in-SIMD,
  * exactly what the vector-types kernel does by hand). Three kernels are timed:
- *   vec           : GNU-vector kernel, OpenMP over the V-matrix groups
- *   sycl-plain    : SYCL range parallel_for (one work-item per matrix, no hint)
- *   sycl-SG(V)    : SYCL nd_range with reqd_sub_group_size(V)
+ *   vec          : GNU-vector kernel, OpenMP over the V-matrix groups
+ *   SG-implicit  : SYCL nd_range, reqd_sub_group_size(V), per-lane indexing
+ *   SG-explicit  : SYCL nd_range, reqd_sub_group_size(V), group_load/group_store
+ *                  block ops (the Intel explicit-SIMD variant, ormqr_slot_sg)
  * Kernel-only timing (buffers resident; no per-op host<->device copy).
  *
  * Build (needs a SYCL compiler + OpenMP; V below is the AVX-512 double width):
@@ -24,7 +25,8 @@
  * Assisted-by: Claude:claude-opus-4.8
  */
 #include <sycl/sycl.hpp>
-#include "cqr_compact.hpp"
+#include "cqr_compact.hpp"      // vector-types kernel
+#include "cqr_compact_sycl.hpp" // explicit sub-group primitive (ormqr_slot_sg)
 #include <omp.h>
 #include <cstdio>
 #include <cmath>
@@ -93,6 +95,20 @@ static sycl::event sycl_ormqr(sycl::queue &q, int n, int nrhs, int nm, const dou
         });
 }
 
+// EXPLICIT sub-group variant: block group_load/group_store (header primitive
+// ormqr_slot_sg), nd_range + reqd_sub_group_size(V).
+static sycl::event sycl_ormqr_sg_explicit(sycl::queue &q, int n, int nrhs, int nm,
+                                          const double *ap, const double *tp, double *bp)
+{
+    const int ng = (nm + V - 1) / V;
+    return q.parallel_for(
+        sycl::nd_range<1>(sycl::range<1>((size_t)ng * V), sycl::range<1>(V)),
+        [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(V)]] {
+            cqr::gpu::ormqr_slot_sg<double, V>(it.get_sub_group(), (int)it.get_group(0),
+                                               ap, n, tp, bp, n, n, nrhs, n, true);
+        });
+}
+
 // vector-types path: OpenMP over the V-matrix groups, tuned contiguous kernel.
 static void vec_ormqr(int n, int nrhs, int nm, const double *ap, const double *tp,
                       double *bp)
@@ -140,10 +156,10 @@ int main()
     for (int nrhs : nrhss) {
         std::printf("\n=== nrhs=%d, batch=%d, V=%d (AVX-512 double), %d cores ===\n", nrhs,
                     nm, V, omp_get_max_threads());
-        std::printf("   n | vec GF/s | sycl-plain GF/s | sycl-SG(V=%d) GF/s | SG:sycl/vec | "
-                    "xcheck\n", V);
-        std::printf("-----+----------+-----------------+-------------------+-------------+"
-                    "-------\n");
+        std::printf("   n | vec GF/s | SG-implicit GF/s | SG-explicit GF/s | expl/impl | "
+                    "expl/vec | xcheck\n");
+        std::printf("-----+----------+------------------+------------------+-----------+"
+                    "----------+-------\n");
         for (int n : ns) {
             const int ng = (nm + V - 1) / V;
             std::vector<double> ap((size_t)ng * n * n * V), tp((size_t)ng * n * V),
@@ -164,16 +180,19 @@ int main()
             q.memcpy(apd, ap.data(), ap.size() * 8).wait();
             q.memcpy(tpd, tp.data(), tp.size() * 8).wait();
             q.memcpy(bpd, bp0.data(), bp0.size() * 8).wait();
-            double ts = best_per_op([&] { sycl_ormqr<false>(q, n, nrhs, nm, apd, tpd, bpd).wait(); });
             double tsg = sg_ok
                 ? best_per_op([&] { sycl_ormqr<true>(q, n, nrhs, nm, apd, tpd, bpd).wait(); })
                 : 0.0;
+            double tse = sg_ok
+                ? best_per_op([&] { sycl_ormqr_sg_explicit(q, n, nrhs, nm, apd, tpd, bpd).wait(); })
+                : 0.0;
 
-            // cross-check the timed SYCL kernel against the vec reference
+            // cross-check the explicit-SG kernel against the vec reference
+            // (implicit-SG is validated separately by the unit suites)
             std::vector<double> bpa = bp0, bpb(bp0.size());
             vec_ormqr(n, nrhs, nm, ap.data(), tp.data(), bpa.data());
             q.memcpy(bpd, bp0.data(), bp0.size() * 8).wait();
-            (sg_ok ? sycl_ormqr<true>(q, n, nrhs, nm, apd, tpd, bpd)
+            (sg_ok ? sycl_ormqr_sg_explicit(q, n, nrhs, nm, apd, tpd, bpd)
                    : sycl_ormqr<false>(q, n, nrhs, nm, apd, tpd, bpd)).wait();
             q.memcpy(bpb.data(), bpd, bp0.size() * 8).wait();
             double err = 0, scale = 0;
@@ -188,11 +207,12 @@ int main()
             sycl::free(bpd, q);
 
             if (sg_ok)
-                std::printf("%4d | %8.2f | %15.2f | %17.2f | %10.2fx | %.0e\n", n,
-                            work / tv / 1e9, work / ts / 1e9, work / tsg / 1e9, tv / tsg, rel);
+                std::printf("%4d | %8.2f | %16.2f | %16.2f | %8.2fx | %7.2fx | %.0e\n", n,
+                            work / tv / 1e9, work / tsg / 1e9, work / tse / 1e9, tsg / tse,
+                            tv / tse, rel);
             else
-                std::printf("%4d | %8.2f | %15.2f | %17s | %11s | %.0e\n", n, work / tv / 1e9,
-                            work / ts / 1e9, "n/a", "n/a", rel);
+                std::printf("%4d | %8.2f | %16s | %16s | %9s | %8s | %.0e\n", n,
+                            work / tv / 1e9, "n/a", "n/a", "n/a", "n/a", rel);
         }
     }
     const double tol = 1e-10;

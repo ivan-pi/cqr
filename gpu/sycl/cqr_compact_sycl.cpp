@@ -75,9 +75,15 @@ void geqrf_launch(sycl::queue &q, bool use_sg, bool rowmajor, int m, int n, T *a
     if (use_sg)
         q.parallel_for(sycl::nd_range<1>(range, sycl::range<1>(V)),
                        [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(V)]] {
+#ifdef CQR_SYCL_EXPLICIT_SG
+                           cqr::gpu::geqrf_slot_sg<T, V>(it.get_sub_group(),
+                                                         (int)it.get_group(0), ap, ldap,
+                                                         tp, m, n, rowmajor);
+#else
                            cqr::gpu::geqrf_slot<T, V>((int)it.get_group(0),
                                                       (int)it.get_local_id(0), ap, ldap,
                                                       tp, m, n, rowmajor);
+#endif
                        })
             .wait();
     else
@@ -113,9 +119,15 @@ void ormqr_launch(sycl::queue &q, bool use_sg, bool trans, int m, int nrhs, int 
     if (use_sg)
         q.parallel_for(sycl::nd_range<1>(range, sycl::range<1>(V)),
                        [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(V)]] {
+#ifdef CQR_SYCL_EXPLICIT_SG
+                           cqr::gpu::ormqr_slot_sg<T, V>(it.get_sub_group(),
+                                                         (int)it.get_group(0), ap, ldap,
+                                                         tp, bp, ldbp, m, nrhs, k, trans);
+#else
                            cqr::gpu::ormqr_slot<T, V>((int)it.get_group(0),
                                                       (int)it.get_local_id(0), ap, ldap,
                                                       tp, bp, ldbp, m, nrhs, k, trans);
+#endif
                        })
             .wait();
     else

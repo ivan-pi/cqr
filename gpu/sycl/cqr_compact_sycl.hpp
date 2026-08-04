@@ -51,6 +51,7 @@
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
+#include <type_traits>
 
 namespace cqr {
 namespace gpu {
@@ -260,6 +261,193 @@ inline void trsm_upper_slot(int g, int v, const T *ap, int ldap, T *bp, int ldbp
             for (int l = i + 1; l < n; ++l)
                 s -= R(i, l) * B(l, j);
             B(i, j) = s / R(i, i);
+        }
+}
+
+/* ================================================================== *
+ * Variant 2: EXPLICIT sub-group (SIMD) primitives.
+ *
+ * Same Strategy A mapping -- one matrix per lane, the sub-group pinned 1-to-1 to
+ * a hardware SIMD unit -- but memory is moved with explicit sub-group block
+ * operations (sycl::ext::oneapi::experimental::group_load / group_store) instead
+ * of per-lane indexing. The compact layout makes this exact: element (i,j) of
+ * the V matrices is a contiguous V-block, so one group_load fills the whole
+ * SIMD register (lane v <- matrix v), the pattern the Intel "Sub-groups and SIMD
+ * Vectorization" guide recommends for coalesced, predictable SIMD codegen
+ * (block reads/writes) rather than relying on the compiler to prove the per-lane
+ * accesses coalesce.
+ *
+ * Call these from a kernel launched with reqd_sub_group_size(V); pass the
+ * sub-group. Every group_load/group_store is a sub-group COLLECTIVE, so it must
+ * run in convergent control flow -- fine here because the compact uniform-shape
+ * rule makes every loop trip count identical across lanes, and larfg is done
+ * branch-free (lane-wise selects, no divergent branch), exactly as the CPU
+ * kernel's larfg_pack. No cross-lane shuffles/reductions are used: each lane's
+ * matrix is independent, so the sub-group is purely the SIMD packing.
+ * ================================================================== */
+
+namespace se = sycl::ext::oneapi::experimental;
+
+/* Block-access view of one V-matrix compact block for the whole sub-group.
+ * `base` is the lane-0 address of element (0,0) (no +v -- group_load/store
+ * distribute the V contiguous elements across the lanes). */
+template <typename ET, int V>
+struct sg_view {
+    using VT = typename std::remove_const<ET>::type; /* value type of a block load */
+    sycl::sub_group sg;
+    ET *base;
+    std::size_t istep, jstep;
+    VT load(int i, int j) const
+    {
+        VT v;
+        se::group_load(sg, base + static_cast<std::size_t>(i) * istep +
+                               static_cast<std::size_t>(j) * jstep, v);
+        return v;
+    }
+    /* store() is instantiated only for non-const ET (never called on const views). */
+    void store(int i, int j, const VT &val) const
+    {
+        se::group_store(sg, val, base + static_cast<std::size_t>(i) * istep +
+                                     static_cast<std::size_t>(j) * jstep);
+    }
+};
+
+/* geqrf, explicit sub-group. Branch-free larfg (selects) so the block loads
+ * stay convergent. Same result as geqrf_slot to working precision. */
+template <typename T, int V>
+inline void geqrf_slot_sg(sycl::sub_group sg, int g, T *ap, int ldap, T *taup, int m,
+                          int n, bool rowmajor = false)
+{
+    const std::size_t gbase =
+        static_cast<std::size_t>(g) * ldap * (rowmajor ? m : n) * V;
+    sg_view<T, V> A{sg, ap + gbase,
+                    (rowmajor ? static_cast<std::size_t>(ldap) : 1) * V,
+                    (rowmajor ? 1 : static_cast<std::size_t>(ldap)) * V};
+    const int k = (m < n) ? m : n;
+    T *Tb = taup + static_cast<std::size_t>(g) * k * V;
+
+    for (int kk = 0; kk < k; ++kk) {
+        const T x0 = A.load(kk, kk);
+        T tail = T(0);
+        for (int i = kk + 1; i < m; ++i) {
+            const T a = A.load(i, kk);
+            tail += a * a;
+        }
+        const T norm = sycl::sqrt(x0 * x0 + tail);
+        const T beta = (x0 >= T(0)) ? -norm : norm;
+        const bool has = tail > T(0);
+        const T t = has ? (beta - x0) / beta : T(0);
+        const T inv = has ? T(1) / (x0 - beta) : T(0);
+        const T rdiag = has ? beta : x0;
+        se::group_store(sg, t, Tb + static_cast<std::size_t>(kk) * V);
+        for (int i = kk + 1; i < m; ++i)
+            A.store(i, kk, A.load(i, kk) * inv);
+        A.store(kk, kk, rdiag);
+
+        int j = kk + 1;
+        for (; j + 4 <= n; j += 4) {
+            T w0 = A.load(kk, j), w1 = A.load(kk, j + 1), w2 = A.load(kk, j + 2),
+              w3 = A.load(kk, j + 3);
+            for (int i = kk + 1; i < m; ++i) {
+                const T av = A.load(i, kk);
+                w0 += av * A.load(i, j);
+                w1 += av * A.load(i, j + 1);
+                w2 += av * A.load(i, j + 2);
+                w3 += av * A.load(i, j + 3);
+            }
+            A.store(kk, j, A.load(kk, j) - t * w0);
+            A.store(kk, j + 1, A.load(kk, j + 1) - t * w1);
+            A.store(kk, j + 2, A.load(kk, j + 2) - t * w2);
+            A.store(kk, j + 3, A.load(kk, j + 3) - t * w3);
+            const T tw0 = t * w0, tw1 = t * w1, tw2 = t * w2, tw3 = t * w3;
+            for (int i = kk + 1; i < m; ++i) {
+                const T av = A.load(i, kk);
+                A.store(i, j, A.load(i, j) - av * tw0);
+                A.store(i, j + 1, A.load(i, j + 1) - av * tw1);
+                A.store(i, j + 2, A.load(i, j + 2) - av * tw2);
+                A.store(i, j + 3, A.load(i, j + 3) - av * tw3);
+            }
+        }
+        for (; j < n; ++j) {
+            T w = A.load(kk, j);
+            for (int i = kk + 1; i < m; ++i)
+                w += A.load(i, kk) * A.load(i, j);
+            A.store(kk, j, A.load(kk, j) - t * w);
+            const T tw = t * w;
+            for (int i = kk + 1; i < m; ++i)
+                A.store(i, j, A.load(i, j) - A.load(i, kk) * tw);
+        }
+    }
+}
+
+/* ormqr, explicit sub-group (side='L', column-major, JB=4). */
+template <typename T, int V>
+inline void ormqr_slot_sg(sycl::sub_group sg, int g, const T *ap, int ldap,
+                          const T *taup, T *bp, int ldbp, int m, int nrhs, int k,
+                          bool trans)
+{
+    sg_view<const T, V> A{sg, ap + static_cast<std::size_t>(g) * ldap * k * V,
+                          static_cast<std::size_t>(V), static_cast<std::size_t>(ldap) * V};
+    sg_view<T, V> B{sg, bp + static_cast<std::size_t>(g) * ldbp * nrhs * V,
+                    static_cast<std::size_t>(V), static_cast<std::size_t>(ldbp) * V};
+    const T *Tb = taup + static_cast<std::size_t>(g) * k * V;
+    const bool fwd = trans;
+
+    for (int s = 0; s < k; ++s) {
+        const int kk = fwd ? s : k - 1 - s;
+        T t;
+        se::group_load(sg, Tb + static_cast<std::size_t>(kk) * V, t);
+        int j = 0;
+        for (; j + 4 <= nrhs; j += 4) {
+            T w0 = B.load(kk, j), w1 = B.load(kk, j + 1), w2 = B.load(kk, j + 2),
+              w3 = B.load(kk, j + 3);
+            for (int i = kk + 1; i < m; ++i) {
+                const T av = A.load(i, kk);
+                w0 += av * B.load(i, j);
+                w1 += av * B.load(i, j + 1);
+                w2 += av * B.load(i, j + 2);
+                w3 += av * B.load(i, j + 3);
+            }
+            B.store(kk, j, B.load(kk, j) - t * w0);
+            B.store(kk, j + 1, B.load(kk, j + 1) - t * w1);
+            B.store(kk, j + 2, B.load(kk, j + 2) - t * w2);
+            B.store(kk, j + 3, B.load(kk, j + 3) - t * w3);
+            const T tw0 = t * w0, tw1 = t * w1, tw2 = t * w2, tw3 = t * w3;
+            for (int i = kk + 1; i < m; ++i) {
+                const T av = A.load(i, kk);
+                B.store(i, j, B.load(i, j) - av * tw0);
+                B.store(i, j + 1, B.load(i, j + 1) - av * tw1);
+                B.store(i, j + 2, B.load(i, j + 2) - av * tw2);
+                B.store(i, j + 3, B.load(i, j + 3) - av * tw3);
+            }
+        }
+        for (; j < nrhs; ++j) {
+            T w = B.load(kk, j);
+            for (int i = kk + 1; i < m; ++i)
+                w += A.load(i, kk) * B.load(i, j);
+            B.store(kk, j, B.load(kk, j) - t * w);
+            const T tw = t * w;
+            for (int i = kk + 1; i < m; ++i)
+                B.store(i, j, B.load(i, j) - A.load(i, kk) * tw);
+        }
+    }
+}
+
+/* trsm (upper), explicit sub-group. */
+template <typename T, int V>
+inline void trsm_upper_slot_sg(sycl::sub_group sg, int g, const T *ap, int ldap, T *bp,
+                               int ldbp, int n, int nrhs)
+{
+    sg_view<const T, V> R{sg, ap + static_cast<std::size_t>(g) * ldap * n * V,
+                          static_cast<std::size_t>(V), static_cast<std::size_t>(ldap) * V};
+    sg_view<T, V> B{sg, bp + static_cast<std::size_t>(g) * ldbp * nrhs * V,
+                    static_cast<std::size_t>(V), static_cast<std::size_t>(ldbp) * V};
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = n - 1; i >= 0; --i) {
+            T s = B.load(i, j);
+            for (int l = i + 1; l < n; ++l)
+                s -= R.load(i, l) * B.load(l, j);
+            B.store(i, j, s / R.load(i, i));
         }
 }
 

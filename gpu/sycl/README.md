@@ -26,6 +26,30 @@ compose the primitives and — the point — **fuse your own steps around them**
 (fill/pack, unpack, RHS build) in a single kernel, with no intermediate
 global-memory passes and no per-step host↔device copies.
 
+### Two SIMD-mapping variants
+
+Both map one matrix per lane with the sub-group pinned 1-to-1 to a SIMD unit;
+they differ only in how memory is moved:
+
+* **Implicit** (`geqrf_slot` / `ormqr_slot` / `trsm_upper_slot`, the default) —
+  per-lane indexing (`A[(j*ld+i)*V + v]`). Consecutive lanes touch consecutive
+  addresses and the runtime coalesces them into one SIMD load.
+* **Explicit** (`*_slot_sg`) — the same algorithm with explicit sub-group block
+  operations (`sycl::ext::oneapi::experimental::group_load` / `group_store`): the
+  contiguous V-block for element `(i,j)` fills one SIMD register directly (lane
+  `v` ← matrix `v`). This is the pattern Intel's *Sub-groups and SIMD
+  Vectorization* guide recommends for predictable, coalesced GPU codegen —
+  guaranteed block reads/writes instead of relying on the compiler to prove the
+  per-lane accesses coalesce. `larfg` is done branch-free so the collectives stay
+  convergent; results are **bit-identical** to the implicit variant.
+
+Prefer the explicit variant on a GPU. On the OpenCL CPU device the two are
+~parity (0.86–1.07×; the runtime already vectorizes the implicit form), which
+`bench_ormqr_sycl_vs_vec` times side by side. The launchers route the sub-group
+path through `*_slot_sg` under `-DCQR_SYCL_EXPLICIT_SG`, so the CMake targets
+`test_geqrf_sycl_sg` / `test_ormqr_sycl_sg` run the **same** suites against the
+explicit variant.
+
 [`example_fused_qr_solve.cpp`](example_fused_qr_solve.cpp) does a full batched
 `AX=B` solve in **one kernel** — fill → `geqrf` → `Qᵀ` → `trsm` → unpack:
 
