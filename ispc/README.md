@@ -46,16 +46,25 @@ make test     # correctness      make shootout # GCC vs clang vs ISPC vs MKL
 | `cqr_ispc.h` | `extern "C"` declarations — drop-ins for `../src/cqr_compact.h`. |
 | `cqr_trsm_compact.hpp` | Templated GNU-vector `trsm` (a counterpart to `mkl_dtrsm_compact` for GCC/clang). |
 | `bench_common.hpp` | Shared harness: pool, timer, pack/unpack, GFLOP helpers. |
-| `test_cqr_ispc.cpp` | Correctness: known-`X` solve + bit-for-bit equivalence vs the GNU kernels. |
+| `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
 | `bench_cqr_ispc.cpp` | The benchmark; built by g++ and clang++ (`make shootout`). |
 | `Makefile` | Standalone build. |
 
 ## Correctness
 
-`test_cqr_ispc` recovers a known `X` to machine precision across `n=10..150`,
-`nrhs=1..8`, and padded partial groups, and the ISPC factor comes out
-**bit-for-bit identical** (`equiv fac 0.0e+00`) to the GNU kernel — same
-algorithm, same FMA selection. Genuine drop-in replacements.
+`test_cqr_ispc` is a set of **per-kernel unit tests**, each against an independent
+oracle so a failure isolates to one routine, plus the end-to-end solve (all pass
+at machine precision; square, tall, padded groups):
+
+- **geqrf** — `A = Q R` residual and orthogonality of `Q` (formed by LAPACK
+  `dorgqr` from the ISPC reflectors) — ~1e-16.
+- **ormqr** — `Q B` *and* `Q^T B` vs `LAPACKE_dormqr` on a LAPACK factorization
+  (independent of the ISPC geqrf), plus a `Q(Q^T B)=B` round-trip — ~1e-15.
+- **trsm** — `R X = alpha B` vs `mkl_dtrsm_compact` and a known `X`, with
+  `alpha != 1` and `nrhs = 1` and `6` — ~1e-16.
+- **solve** — the full pipeline recovers a known `X`; the ISPC factor also matches
+  the GNU kernel to a few ULP (often bit-identical, but that is input/compiler-
+  dependent, not guaranteed).
 
 ## Results — GCC vs clang vs ISPC, normalized to MKL
 
@@ -110,9 +119,9 @@ portable strategy.
 
 ## Takeaways
 
-1. **Correct, drop-in, on par — from far simpler source.** ISPC produces a
-   bit-identical factorization and runs within run-to-run noise of the
-   hand-written GNU vectors on every kernel, written as plain scalar code.
+1. **Correct, drop-in, on par — from far simpler source.** Every kernel matches
+   its LAPACK/MKL oracle to machine precision (isolated unit tests) and runs within
+   run-to-run noise of the hand-written GNU vectors, written as plain scalar code.
 2. **No ISPC-specific speed edge, and none needed.** Where ISPC looked faster than
    GCC it was an LLVM/width effect (clang on the same source tracks ISPC); the
    value is the one-source SPMD model at parity, not a throughput win.
