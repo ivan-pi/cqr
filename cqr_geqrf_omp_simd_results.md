@@ -131,8 +131,12 @@ vectorized at all). The compilers say so directly:
 
 The takeaway: `#pragma omp simd` on a loop asserts that *that* loop's iterations
 are independent, but it does **not** buy loop interchange. When the annotated
-loop is an outer loop wrapping a nontrivial nest, neither GCC nor Clang sinks the
-vectorization inward -- the pragma is dropped and the code stays scalar.
+loop is an outer loop wrapping a nontrivial nest, GCC's and Clang's
+*auto-vectorizers* do not sink the vectorization inward -- the pragma is dropped
+and the code stays scalar. (A dedicated OpenMP SIMD code generator can, though:
+icpx's `-qopenmp-simd` path vectorizes exactly this loop -- see the icpx section.
+It is the lowering path that decides, not that outer-loop vectorization is
+impossible in principle.)
 
 **2. Moving the pragma to the innermost lane loop recovers most of the speed.**
 `omp-inner` reaches **0.79x** (GCC) and **0.88x** (Clang) of the hand-written
@@ -144,32 +148,74 @@ split-loop overhead (per-column stack temporaries `tail`/`tau`/`w`, reloaded
 between the separated simd loops) that the vector-types kernel keeps in
 registers across a single fused loop body, plus its hand JB=4 column blocking.
 
-**3. Practical guidance.** To match GNU vector types with `-fopenmp-simd` on this
-kind of batched kernel, put `simd` on the **innermost** lane loop, not the outer
-batch loop. The outer-loop form reads better (it is the single-element algorithm
-verbatim) but compiles to scalar on both mainstream compilers today. Clang closes
-the gap to the hand-written kernel more than GCC here.
+**3. Practical guidance.** With `-fopenmp-simd` (GCC, Clang, or icpx -- all three
+route it through the LLVM/GCC auto-vectorizer), put `simd` on the **innermost**
+lane loop, not the outer batch loop: the outer-loop form reads better (it is the
+single-element algorithm verbatim) but compiles to scalar there. With **icpx and
+`-qopenmp-simd`** the outer-loop form vectorizes and the distinction disappears
+-- both reach ~0.9x of the hand-written vector types (see the icpx section). So
+the clean outer-loop idiom *is* viable today, on the compiler path that has a
+real OpenMP SIMD code generator behind the pragma.
 
-## icpx (Intel oneAPI) -- the open question
+## icpx (Intel oneAPI) -- the outer loop *does* vectorize
 
-Neither GCC nor Clang does the outer-loop transform, but Intel's compiler ships
-its own vectorizer and is the most likely of the three to vectorize the
-outer-loop `#pragma omp simd` form. That test is **not run here**: this
-environment's network policy allowlists only standard registries (PyPI, npm,
-crates, ...), and every Intel distribution channel is blocked -- `apt`/`yum`
-`repos.intel.com` return 403 at the proxy, the standalone installer host is
-unreachable, `conda.anaconda.org/intel` answers with a Cloudflare bot-challenge,
-and PyPI carries only the oneAPI *runtime* (`dpcpp-cpp-rt`), not the `icpx`
-driver. So icpx could not be installed to measure it.
+Intel's oneAPI DPC++/C++ compiler (**icpx 2026.1.1**) settles the open question,
+and the answer turns on *which SIMD lowering path* `#pragma omp simd` takes --
+not on the compiler brand. icpx exposes two:
 
-`scripts/icpx_outer_simd_check.sh` runs the check wherever icpx *is* reachable
-(a local machine, or a session with `apt.repos.intel.com` allowlisted): it
-installs the oneAPI DPC++/C++ compiler if absent, prints icpx's vectorization
-report for the outer-loop kernel (look for `SIMD LOOP` / remark #15300 on the
-`#pragma omp simd simdlen(V)` line), and runs the three-way benchmark. If icpx
-vectorizes that loop, the `omp-outer` column should jump from ~0.2x toward the
-`omp-inner`/`vec-types` range -- the result that would settle whether the clean
-outer-loop idiom is viable on *any* mainstream compiler today.
+| flag | `#pragma omp simd` lowered by | outer kernel |
+|------|-------------------------------|--------------|
+| `-fopenmp-simd` | the LLVM auto-vectorizer (icpx is LLVM-based, so the *same* path as Clang) | **not vectorized** -- `-Wpass-failed` at the pragma, scalar codegen, ~0.08x |
+| `-qopenmp-simd` (or `-fiopenmp`) | **Intel's own OpenMP SIMD code generator** | **vectorized** -- outer lane loop packed + AVX-512 predication masks, ~0.91x |
+
+Evidence from the generated assembly for the outer-loop kernel
+(`geqrf_compact_group_omp`, all V instantiations, `-O3 -xHost`):
+
+| | scalar `*sd` ops | packed `*pd` ops | mask (`k`) regs |
+|-|------------------|------------------|-----------------|
+| `-fopenmp-simd` | 236 | 36 | 0 |
+| `-qopenmp-simd` | **0** | **600** | 156 |
+
+So Intel's OpenMP SIMD path performs exactly the outer-loop (batch)
+vectorization GCC's and Clang's auto-vectorizers refuse: the clean single-element
+`geqr2` under `#pragma omp simd simdlen(V)` becomes real SIMD, no restructuring.
+`-qopenmp-simd` is simd-only -- it links no OpenMP runtime (`ldd` shows no
+`libiomp5`), the direct counterpart of `-fopenmp-simd`.
+
+### icpx 2026.1.1, `-qopenmp-simd -xHost`, V = 8 (AVX-512)
+
+```
+   n |  vec GF/s |  omp-outer |  omp-inner | out/vec |  in/vec
+-----+-----------+------------+------------+---------+---------
+   8 |       7.86 |       8.02 |       7.31 |    1.02x |    0.93x
+  16 |      11.12 |       9.79 |       9.55 |    0.88x |    0.86x
+  24 |      11.52 |       9.57 |       9.68 |    0.83x |    0.84x
+  30 |      10.29 |       9.25 |       9.37 |    0.90x |    0.91x
+  32 |       9.61 |       9.23 |       9.28 |    0.96x |    0.97x
+  45 |      10.67 |       8.93 |       9.21 |    0.84x |    0.86x
+  48 |      10.50 |       8.82 |       9.20 |    0.84x |    0.88x
+  60 |      10.22 |       9.20 |       9.32 |    0.90x |    0.91x
+  64 |       8.02 |       9.14 |       9.06 |    1.14x |    1.13x
+  96 |      10.15 |       9.35 |       9.50 |    0.92x |    0.94x
+ 105 |      10.81 |       9.20 |       9.35 |    0.85x |    0.87x
+ 128 |       7.73 |       8.81 |       9.01 |    1.14x |    1.17x
+ 168 |       8.30 |       7.87 |       8.08 |    0.95x |    0.97x
+-----+-----------+------------+------------+---------+---------
+geomean: omp-outer 0.91x, omp-inner 0.94x
+```
+
+Under `-qopenmp-simd` the *outer-loop* form -- the one written as the plain
+single-element algorithm, which reads best -- reaches parity with the
+hand-written GNU vector types (0.91x), and matches the inner-loop form (0.94x).
+The choice between outer and inner stops mattering once the compiler's OpenMP
+SIMD path can vectorize the outer loop. (Intel's codegen here used 256-bit `ymm`
+packs even on the AVX-512 host, so vec-types -- which the compiler lowers to
+`zmm` -- keeps a small edge at some sizes; passing a narrower `simdlen` or
+`-qopt-zmm-usage=high` can shift that.)
+
+The CMake build selects `-qopenmp-simd` automatically for `IntelLLVM`;
+`scripts/icpx_outer_simd_check.sh` reproduces the two-path comparison and the
+op-count evidence from a bare checkout (installing the compiler if needed).
 
 ## Reproduce
 
@@ -187,7 +233,18 @@ cmake -S . -B build-clang -DCQR_WITH_MKL=OFF -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-clang -j
 ./build-clang/bench_geqrf_omp_simd 512 7
 
-# drop-in correctness (both backends), any config
+# icpx (Intel oneAPI) -- CMake auto-selects -qopenmp-simd, which vectorizes the
+# outer-loop kernel. scripts/icpx_outer_simd_check.sh also prints the
+# -fopenmp-simd vs -qopenmp-simd instruction-count comparison (installs the
+# compiler if absent).
+. /opt/intel/oneapi/setvars.sh
+cmake -S . -B build-icpx  -DCQR_WITH_MKL=OFF -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER=icpx -DCMAKE_CXX_FLAGS="-O3 -xHost"
+cmake --build build-icpx -j
+./build-icpx/bench_geqrf_omp_simd 512 7
+./scripts/icpx_outer_simd_check.sh
+
+# drop-in correctness (all backends), any config
 ctest --test-dir build-gcc -R portable_geqrf
 ```
 

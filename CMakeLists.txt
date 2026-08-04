@@ -45,22 +45,36 @@ add_library(cqr::compact ALIAS cqr_compact)
 # correct without it -- the pragma is simply ignored and the loop runs scalar.
 # ---------------------------------------------------------------------------
 include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-fopenmp-simd" CQR_HAS_FOPENMP_SIMD)
 set(CQR_OMP_SIMD_FLAGS "")
-if(CQR_HAS_FOPENMP_SIMD)
-  list(APPEND CQR_OMP_SIMD_FLAGS "-fopenmp-simd")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+  # icpx: -qopenmp-simd lowers `#pragma omp simd` through Intel's own SIMD code
+  # generator, which vectorizes the *outer* lane loop -- unlike -fopenmp-simd
+  # (the LLVM auto-vectorizer path, which every compiler including icpx routes
+  # through and which cannot vectorize that nest). It is simd-only: no OpenMP
+  # runtime is linked. See cqr_geqrf_omp_simd_results.md.
+  check_cxx_compiler_flag("-qopenmp-simd" CQR_HAS_QOPENMP_SIMD)
+  if(CQR_HAS_QOPENMP_SIMD)
+    list(APPEND CQR_OMP_SIMD_FLAGS "-qopenmp-simd")
+  else()
+    message(WARNING "icpx rejects -qopenmp-simd; the omp-simd backend builds "
+                    "correct but scalar")
+  endif()
 else()
-  message(WARNING "compiler rejects -fopenmp-simd; the omp-simd geqrf backend "
-                  "will build correct but scalar (no SIMD)")
-endif()
-# The outer-loop simd kernel (geqrf_compact_group_omp) deliberately keeps the
-# `#pragma omp simd` on the lane loop even though neither GCC nor Clang can
-# vectorize that nest -- it is the "requested but not vectorized" data point of
-# the experiment (see cqr_geqrf_omp_simd_results.md). Clang reports the failed
-# transform via -Wpass-failed; silence it here so the build stays warning-clean.
-# GCC does not know this flag but ignores unrecognised -Wno-* options.
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  list(APPEND CQR_OMP_SIMD_FLAGS "-Wno-pass-failed")
+  check_cxx_compiler_flag("-fopenmp-simd" CQR_HAS_FOPENMP_SIMD)
+  if(CQR_HAS_FOPENMP_SIMD)
+    list(APPEND CQR_OMP_SIMD_FLAGS "-fopenmp-simd")
+  else()
+    message(WARNING "compiler rejects -fopenmp-simd; the omp-simd geqrf backend "
+                    "will build correct but scalar (no SIMD)")
+  endif()
+  # The outer-loop simd kernel (geqrf_compact_group_omp) keeps `#pragma omp simd`
+  # on the lane loop even though neither GCC nor Clang can vectorize that nest --
+  # the "requested but not vectorized" data point of the experiment. Clang
+  # reports the failed transform via -Wpass-failed; silence it so the build stays
+  # warning-clean. GCC does not know this flag but ignores unrecognised -Wno-*.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    list(APPEND CQR_OMP_SIMD_FLAGS "-Wno-pass-failed")
+  endif()
 endif()
 
 # Drop-in variant of the portable library: the ormqr entry points from the
