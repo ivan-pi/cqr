@@ -17,6 +17,11 @@ Both routines come in single and double precision. Paired with MKL's own
 `mkl_?trsm_compact`, they factor and solve batched systems in the compact
 format.
 
+A third routine, **`cqr_mkl_?potrf_compact`** -- a portable, vectorized
+`mkl_?potrf_compact` for the batched **Cholesky factorization** of
+symmetric-positive-definite matrices -- is specified in its
+[design document](cqr_mkl_dpotrf_compact_design.md) but not yet implemented.
+
 The kernels are written with GNU vector types (`__attribute__((vector_size))`),
 which the compiler lowers to SSE, AVX, or AVX-512 -- one portable source for
 every width. That is the project's central SIMD decision.
