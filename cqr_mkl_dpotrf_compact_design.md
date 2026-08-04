@@ -72,6 +72,13 @@ shares the same order `n`, leading dimension `ldap`, storage `layout`, and
 `format`. The batch is processed one *pack* (group of `V` interleaved matrices)
 at a time; `V` is derived from `format`.
 
+Like ArmPL's `armpl_?potrf_interleave_batch`, this is an interleave-batch
+Cholesky that -- unlike LAPACK -- does not verify that the inputs are SPD (section
+6.2). Where ArmPL exposes the interleaved layout through explicit
+`ninter`/`bstrd`/`istrd`/`jstrd` strides, this API abstracts it behind the
+`MKL_COMPACT_PACK` parameter and `MKL_LAYOUT`, preserving symmetry with MKL's
+native compact API so `mkl_?gepack_compact` output feeds it directly.
+
 ## 4. Input Parameters
 
 * **`layout`** (`MKL_LAYOUT`): `MKL_COL_MAJOR` (tuned path) or `MKL_ROW_MAJOR`.
@@ -139,11 +146,15 @@ negligible next to the `O(n^2)` scaling and `O(n^3)` update.
 Cholesky is numerically simpler than QR here: there is *no* data-dependent branch
 to vectorize away. Scalar `dpotf2` contains one check -- `if (ajj <= 0 ||
 isnan(ajj))` set `info = j` and stop, flagging a non-positive-definite leading
-minor. Across a pack that test would diverge per lane, and MKL's own
-`mkl_?potrf_compact` omits it entirely (its `info` is "reserved for future use").
-This routine follows MKL: it computes `d = sqrt(A(j,j))` unconditionally and does
-not test the pivot. The consequences are the graceful "garbage in, garbage out"
-of an unchecked factorization, and they matter for two reasons:
+minor. Across a pack that test would diverge per lane, so the interleave-batch
+APIs of both major vendors drop it: MKL's `mkl_?potrf_compact` leaves `info`
+"reserved for future use" (and its compact routines "skip error checking for
+performance reasons"), and ArmPL's `armpl_?potrf_interleave_batch` states outright
+that it "does not check that the input matrices are SPD; no error will be returned
+if any `A_i` are not SPD." This routine follows the same rule: it computes
+`d = sqrt(A(j,j))` unconditionally and does not test the pivot. The consequences
+are the graceful "garbage in, garbage out" of an unchecked factorization, and
+they matter for two reasons:
 
 * **Padding is safe with no mask.** A partial final pack is filled with identity
   matrices (section 6.4). The Cholesky factor of `I` is `I`: every pivot is
