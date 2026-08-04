@@ -64,8 +64,10 @@ int main(int argc, char **argv)
     LAPACKE_set_nancheck(0);
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = (fmt == MKL_COMPACT_SSE ? 16 : fmt == MKL_COMPACT_AVX ? 32 : 64) / 8;
-    if (V != 8) {
-        std::printf("needs V=8 (avx512skx-x8); host MKL format is V=%d.\n", V);
+    if (cqr_ispc_gang_width() != V) { /* the kernels need gang width == MKL's V */
+        std::printf("ISPC gang width %d != MKL compact V %d; rebuild the ISPC target "
+                    "with a width-%d gang (e.g. avx512skx-x%d).\n",
+                    cqr_ispc_gang_width(), V, V, V);
         return 77;
     }
 
@@ -73,10 +75,10 @@ int main(int argc, char **argv)
     const int ns = (int)(sizeof(sizes) / sizeof(*sizes));
     Row geqrf[16], ormqr[16], trsm[16], solve[16];
 
-    std::printf("native=%s  vs  ISPC  vs  MKL   nmat=%d reps=%d nrhs=%d V=8 (AVX512) "
+    std::printf("native=%s  vs  ISPC  vs  MKL   nmat=%d reps=%d nrhs=%d V=%d "
                 "sequential\n(GFLOP/s; speedups vs MKL. Indicative only -- see README "
                 "caveats.)\n",
-                CC, nmat, reps, nrhs);
+                CC, nmat, reps, nrhs, V);
 
     for (int si = 0; si < ns; ++si) {
         const int n = sizes[si];

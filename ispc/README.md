@@ -6,12 +6,19 @@ Intel MKL's Compact/interleaved format) reimplemented in
 GNU `vector_size` kernels in `../src` — and, since ISPC uses the LLVM backend,
 against GCC and clang compiling those same kernels — all normalized to MKL.
 
-## The idea: a compact pack *is* a `varying`
+## The idea: SPMD across the SIMD lanes
 
-MKL Compact stores element `(i,j)` of the `V` interleaved matrices of a group
-contiguously — `ap[g*ldap*ncol*V + (j*ldap+i)*V + v]` — and an ISPC
-`varying double` *is* `programCount` consecutive doubles. So when `V ==
-programCount`, a compact pack is exactly one `varying double`:
+ISPC runs a *gang* of program instances concurrently, mapped onto the SIMD lanes
+of one core — you write the scalar computation for a single instance and the gang
+executes it in lockstep across the lanes (the same model as a CUDA warp or an
+OpenCL work-item). That is exactly the batched-vectorization we want: **one
+program instance per matrix, one gang per interleaved group.**
+
+It lands on the compact layout with no shuffling. MKL Compact stores element
+`(i,j)` of the `V` interleaved matrices of a group contiguously —
+`ap[g*ldap*ncol*V + (j*ldap+i)*V + v]` — and an ISPC `varying double` is one value
+per lane, laid out as `V` consecutive doubles. So when the gang width equals `V`,
+a compact pack *is* one `varying double`:
 
 ```c
 varying double * uniform A = (varying double * uniform)(ap + group_offset);
@@ -20,9 +27,11 @@ varying double aij = A[j*ldap + i];   // one aligned vector load: (i,j) of V mat
 
 Each kernel is then the ordinary **scalar** `geqr2` / `dorm2r` /
 back-substitution, which ISPC vectorizes across the `V` matrices — no hand-rolled
-vector types or masks, no gather/scatter (zero ISPC perf warnings). The gang
-width fixes `V`, so this targets `avx512skx-x8` → `programCount == 8 == V`, the
-AVX-512 FP64 compact format MKL selects on this host. Column-major, double.
+vector types or masks, no gather/scatter (zero ISPC perf warnings). Column-major,
+double. The gang width is set by the `--target`'s `-xN` suffix; the kernels work
+at any width as long as the data is packed at `V` = the gang width. The MKL-interop
+test and benchmark use MKL's AVX-512 FP64 format (`V = 8`, `avx512skx-x8`); the
+gang-size sweep (below) varies it.
 
 ## Install, flags, build
 
@@ -40,26 +49,30 @@ ctest --test-dir build --output-on-failure     # per-kernel correctness tests
 ./build/bench_cqr_ispc                           # the benchmark
 ```
 
-- **ISPC target — required, must be width 8** so `programCount == V == 8`:
-  `-DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8` (AVX-512; `avx2-i32x8` for AVX2).
-  ISPC's default here is `avx512spr-x16` (width 16), which `cqr_ispc.ispc` rejects
-  with an `#error`. `-DCMAKE_BUILD_TYPE=Release` gives ISPC `-O3` too; add extra
-  ISPC flags (e.g. `--opt=disable-assertions`) via `CMAKE_ISPC_FLAGS`, and
-  `CMAKE_ISPC_HEADER_DIRECTORY` selects ISPC's generated header over the shipped
-  `cqr_ispc.h` if you prefer it.
+- **ISPC target:** `-DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8` sets the ISA and
+  the gang width (`-x8`). The MKL-interop test/benchmark need the gang to equal
+  MKL's compact `V` (8 on AVX-512) and check it at runtime — ISPC's default here is
+  `avx512spr-x16` (width 16), which they reject with a clear message.
+  `-DCMAKE_BUILD_TYPE=Release` gives ISPC `-O3`; add ISPC flags via
+  `CMAKE_ISPC_FLAGS`, and `CMAKE_ISPC_HEADER_DIRECTORY` selects ISPC's generated
+  header over the shipped `cqr_ispc.h` if you prefer it.
 - **Fair benchmark:** `-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-march=native`
   so the GNU `vector_size` kernels use the host's full width (correctness needs
   neither). The drivers pin MKL sequential at startup — no env var.
 - **Compiler shootout:** the benchmark's `native` column is whichever CXX compiler
   configured the tree, so compare with a second tree:
   `cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ ...` and run both binaries.
+- **Gang-size sweep:** `bench_gang` packs at `V` = the gang width (no MKL), so build
+  a tree per target to sweep it — `for w in 4 8 16 32 64; do cmake -S . -B build-x$w
+  -DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x$w ...; done` (see Results).
 
 ## Files
 
 | File | Role |
 |------|------|
-| `cqr_ispc.ispc` | The three ISPC kernels (`cqr_ispc_d{geqrf,ormqr,trsm}_compact`). |
+| `cqr_ispc.ispc` | The three ISPC kernels + `cqr_ispc_gang_width` (gang-generic). |
 | `cqr_ispc.h` | `extern "C"` declarations — drop-ins for `../src/cqr_compact.h`. |
+| `bench_gang.cpp` | Gang-size sweep (packs at `V` = gang width; ISPC-only, no MKL). |
 | `cqr_trsm_compact.hpp` | Templated GNU-vector `trsm` (a counterpart to `mkl_dtrsm_compact` for GCC/clang). |
 | `bench_common.hpp` | Shared harness: pool, timer, pack/unpack, GFLOP helpers. |
 | `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
@@ -123,6 +136,29 @@ not hold. So: the width difference is real and fixed per toolchain; **which widt
 wins, and by how much, is machine-specific and unmeasured here.** A "mix by
 kernel" build (which ISPC couldn't do at gang-8 anyway) would be an overfit, not a
 portable strategy.
+
+### Gang size — ISPC's SIMD-width knob (`bench_gang`)
+
+Because the kernels are gang-generic, `bench_gang` sweeps the gang size (the
+`-xN` suffix) with the *same* source, packing at `V` = the gang width. All widths
+validate to machine precision; throughput (geomean over `n=10..150`, `nrhs=4`,
+standalone pipeline, no MKL) peaks at gang 16:
+
+| gang (`avx512skx-x`) | 4 | 8 | **16** | 32 | 64 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| GFLOP/s (geomean) | 13.8 | 16.4 | **17.3** | 14.2 | 11.8 |
+| registers (from the asm) | ymm | ymm | **zmm** | zmm×2 | zmm×4 |
+
+**The gang size also picks the register width, and this is the same 256-vs-512
+knob as above.** ISPC's `avx512skx-x8` emits **256-bit YMM** (a deliberate choice
+that dodges the AVX-512 downclock — verified: 0 `zmm`); only `-x16` and up emit
+**512-bit ZMM**. So gang 16 wins on two counts: 512-bit registers (2× the data per
+instruction vs gang 8's YMM) *and* 16 matrices in flight, whose independent work
+hides the `larfg`/`trsm` division and sqrt latency (ISPC's "2–4× native width"
+guidance). Past that, 32/64 issue 2–4 ZMM per gang op and register pressure wins,
+more so at large `n`. Here — standalone, compute-bound — 512-bit wins. (The
+MKL-interop pipeline is pinned to gang 8 = MKL's `V`, i.e. 256-bit YMM; only
+`bench_gang` reaches gang 16 / ZMM.)
 
 > **Measurement caveats — indicative only, not benchmark-grade.** Shared,
 > virtualized 4-vCPU node with **no frequency control** (governor/turbo

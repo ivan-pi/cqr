@@ -278,9 +278,12 @@ int main()
     mkl_set_num_threads(1);
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = (fmt == MKL_COMPACT_SSE ? 16 : fmt == MKL_COMPACT_AVX ? 32 : 64) / 8;
-    std::printf("ISPC compact-QR correctness (compact format=%d, V=%d)\n", (int)fmt, V);
-    if (V != 8) {
-        std::printf("prototype built for V=8 (avx512skx-x8); host V=%d -- rebuild.\n", V);
+    std::printf("ISPC compact-QR correctness (compact format=%d, V=%d, ISPC gang=%d)\n",
+                (int)fmt, V, cqr_ispc_gang_width());
+    if (cqr_ispc_gang_width() != V) { /* kernels need gang width == MKL's V */
+        std::printf("ISPC gang width %d != MKL compact V %d -- rebuild the ISPC target "
+                    "with a width-%d gang (e.g. avx512skx-x%d).\n",
+                    cqr_ispc_gang_width(), V, V, V);
         return 77;
     }
 

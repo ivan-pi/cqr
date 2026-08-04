@@ -10,22 +10,21 @@
 // and each kernel is the plain scalar geqr2 / dorm2r / back-substitution that ISPC
 // vectorizes across the V matrices -- no hand-written vectors or masks.
 //
-// Build --target=avx512skx-x8 so programCount == 8 == V (AVX-512 FP64 compact, what
-// MKL picks on an AVX-512 host). Column-major, double precision. Exported extern "C"
-// as drop-in siblings of ../src/cqr_compact.h, plus a compact trsm:
+// The kernels are gang-generic: they work whenever the data is packed at
+// V == the gang width. The MKL-interop test/benchmark use MKL's AVX-512 FP64
+// compact format (V = 8, e.g. --target=avx512skx-x8) and check the gang width at
+// runtime; the gang sweep (bench_gang) packs at V = gang width for any target.
+// Column-major, double. Exported extern "C" as drop-in siblings of
+// ../src/cqr_compact.h, plus a compact trsm and a gang-width query:
 //   cqr_ispc_dgeqrf_compact  A = Q R
 //   cqr_ispc_dormqr_compact  B := op(Q) B          (side 'L', trans 0=Q / 1=Q^T)
 //   cqr_ispc_dtrsm_compact   B := alpha op(A)^-1 B  (left, upper, no-trans, non-unit)
+//   cqr_ispc_gang_width      returns the gang width (= the V the data must use)
 //
 // Assisted-by: Claude:claude-opus-4.8
 
-// The compact-pack == varying mapping requires the gang width to equal the
-// interleave width V = 8, so guard it: the default ISPC target is not
-// necessarily width 8 (e.g. avx512spr-x16). Set a width-8 target, e.g.
-// -DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8 (AVX-512) or avx2-i32x8 (AVX2).
-#if TARGET_WIDTH != 8
-#error "cqr_ispc requires an ISPC gang width of 8 (programCount == V == 8); build with a width-8 --target such as avx512skx-x8 or avx2-i32x8."
-#endif
+// The gang width is the interleave width V these kernels expect the data to use.
+export uniform int cqr_ispc_gang_width() { return programCount; }
 
 // QR factorization (unblocked geqr2), one group of programCount matrices at a time;
 // mirrors cqr::detail::geqrf_compact_group. ap (m x n col-major) -> (R, Householder

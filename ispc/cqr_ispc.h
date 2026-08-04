@@ -3,16 +3,22 @@
 
 /* cqr_ispc.h -- extern "C" surface of the ISPC compact-QR prototype
  * (cqr_ispc.ispc). Drop-in siblings of the portable C API in
- * ../src/cqr_compact.h over the same MKL Compact buffers, with two deliberate
- * differences: the interleave width is fixed at compile time by the ISPC gang
- * (build --target=avx512skx-x8 -> V = programCount = 8, the AVX-512 FP64 format),
- * and it is column-major / double only. No argument checking; an empty problem is
- * a no-op; a partial final group must be identity-padded by the caller.
+ * ../src/cqr_compact.h over the same MKL Compact buffers, column-major / double
+ * only. The interleave width V is fixed at compile time by the ISPC gang width
+ * (set by the --target's -xN suffix): the data must be packed at V == the gang
+ * width -- query it with cqr_ispc_gang_width(). For MKL Compact interop that is
+ * MKL's format V (8 on AVX-512, from --target=avx512skx-x8). No argument
+ * checking; an empty problem is a no-op; a partial final group must be
+ * identity-padded by the caller.
  * Assisted-by: Claude:claude-opus-4.8 */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* The gang width these kernels were compiled for; the compact data must be packed
+ * at this interleave width V. */
+int cqr_ispc_gang_width(void);
 
 /* QR: ap (m x n) -> (R, Householder vectors); taup -> k=min(m,n) tau per matrix. */
 void cqr_ispc_dgeqrf_compact(int m, int n, double *ap, int ldap, double *taup, int nm);
