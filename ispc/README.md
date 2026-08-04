@@ -219,6 +219,41 @@ changes hands per kernel — GCC owns `trsm`, clang/ISPC own `geqrf`. ISPC is ne
 the worst and never far from the best, from far simpler source; no single toolchain
 wins everything.
 
+### Why the per-kernel lead flips: 256-bit vs 512-bit
+
+The GNU `pack<double,8>` is a 64-byte (512-bit) vector type, and the toolchains
+disagree on how wide to run it — this is the *whole* story on Cascade Lake:
+
+- **GCC → 512-bit ZMM** (honors the 64-byte vector type; `-mprefer-vector-width`
+  doesn't override it for *explicit* vectors).
+- **clang → 2×256-bit YMM** (splits it; respects `-mprefer-vector-width`).
+- **ISPC → 2×256-bit YMM.** `avx512skx-x8` is 256-bit *by design* — only
+  `avx512skx-x16` emits ZMM, and that means gang/`V`=16, which breaks the MKL
+  `V`=8 compact layout. ISPC 1.22 has no ZMM-at-gang-8 switch, and neither
+  `--opt=fast-math` nor `--device=skx` changes it (verified: still 0 `zmm`).
+
+Forcing clang to each width on the *same source* (`-mprefer-vector-width=256/512`)
+isolates it — width alone flips which kernel wins (speedup vs MKL, n=100):
+
+| n=100 | 256-bit (ymm) | 512-bit (zmm) |
+|---|:---:|:---:|
+| `geqrf` (FMA-dense) | **1.54×** | 1.17× |
+| `trsm` (division / latency-bound) | 0.85× | **1.11×** |
+
+- **`trsm` likes 512-bit:** half the instructions and half the `vdivpd`, and its
+  low sustained-FMA density doesn't trip the AVX-512 frequency license — so the
+  wider path just wins. That is exactly why GCC (always ZMM here) leads `trsm`.
+- **`geqrf` likes 256-bit:** it *is* FMA-dense, so 512-bit triggers the AVX-512
+  downclock and loses — why clang/ISPC (256-bit) beat GCC on the factorization.
+
+**So matching GCC on `trsm` needs 512-bit, which ISPC can't emit at gang-8.** The
+practical answer is to *mix*: keep ISPC (256-bit) for `geqrf`/`ormqr` where it
+wins, and run a 512-bit `trsm` (the GCC-compiled `cqr_trsm_compact.hpp`, or
+`mkl_dtrsm_compact`) for the solve step. No single width — or toolchain — is best
+for the whole pipeline. (All builds are release + native: C++ `-O3 -march=native`,
+ISPC `-O3` on the host's AVX-512 ISA; the `trsm` gap is architectural width, not a
+missing flag.)
+
 ## Takeaways
 
 1. **Correct and drop-in.** The ISPC kernels recover the known solution to machine
