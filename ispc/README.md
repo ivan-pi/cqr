@@ -26,28 +26,33 @@ AVX-512 FP64 compact format MKL selects on this host. Column-major, double.
 
 ## Install, flags, build
 
+Built with CMake's native ISPC language (`project(... LANGUAGES CXX ISPC)`),
+CMake >= 3.19 and Intel MKL (`libmkl-dev`). The build imposes no ISA, build type,
+or optimization flags — those are the caller's, as in the parent project:
+
 ```sh
 sudo apt-get install ispc            # 1.22 on Ubuntu 24.04 (or pip install ispc,
                                      # or a github.com/ispc/ispc release tarball)
-cmake -S . -B build                  # needs CMake >= 3.19 and Intel MKL (libmkl-dev)
+cmake -S . -B build -DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8 \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-march=native
 cmake --build build -j
-ctest --test-dir build --output-on-failure    # the per-kernel correctness tests
-./build/bench_cqr_ispc                          # the benchmark
+ctest --test-dir build --output-on-failure     # per-kernel correctness tests
+./build/bench_cqr_ispc                           # the benchmark
 ```
 
-CMake's native ISPC language does the work (`project(... LANGUAGES CXX ISPC)`):
-
-- **ISA:** `set(CMAKE_ISPC_INSTRUCTION_SETS "avx512skx-x8")` — the key setting
-  (`programCount = 8 = V`; one target = one width). `CMAKE_ISPC_FLAGS` adds
-  `-O3 --opt=disable-assertions`; PIC and the generated-header dir
-  (`CMAKE_ISPC_HEADER_DIRECTORY`, unused here — we ship `cqr_ispc.h`) are the
-  other knobs.
-- **C++ kernels:** `-march=native` (Release) so the `vector_size` kernels get the
-  host's full width. The drivers pin MKL sequential at startup (no env var).
+- **ISPC target — required, must be width 8** so `programCount == V == 8`:
+  `-DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8` (AVX-512; `avx2-i32x8` for AVX2).
+  ISPC's default here is `avx512spr-x16` (width 16), which `cqr_ispc.ispc` rejects
+  with an `#error`. `-DCMAKE_BUILD_TYPE=Release` gives ISPC `-O3` too; add extra
+  ISPC flags (e.g. `--opt=disable-assertions`) via `CMAKE_ISPC_FLAGS`, and
+  `CMAKE_ISPC_HEADER_DIRECTORY` selects ISPC's generated header over the shipped
+  `cqr_ispc.h` if you prefer it.
+- **Fair benchmark:** `-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-march=native`
+  so the GNU `vector_size` kernels use the host's full width (correctness needs
+  neither). The drivers pin MKL sequential at startup — no env var.
 - **Compiler shootout:** the benchmark's `native` column is whichever CXX compiler
   configured the tree, so compare with a second tree:
-  `cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build-clang`,
-  then run `./build/bench_cqr_ispc` and `./build-clang/bench_cqr_ispc`.
+  `cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ ...` and run both binaries.
 
 ## Files
 

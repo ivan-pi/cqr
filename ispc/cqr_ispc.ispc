@@ -19,6 +19,14 @@
 //
 // Assisted-by: Claude:claude-opus-4.8
 
+// The compact-pack == varying mapping requires the gang width to equal the
+// interleave width V = 8, so guard it: the default ISPC target is not
+// necessarily width 8 (e.g. avx512spr-x16). Set a width-8 target, e.g.
+// -DCMAKE_ISPC_INSTRUCTION_SETS=avx512skx-x8 (AVX-512) or avx2-i32x8 (AVX2).
+#if TARGET_WIDTH != 8
+#error "cqr_ispc requires an ISPC gang width of 8 (programCount == V == 8); build with a width-8 --target such as avx512skx-x8 or avx2-i32x8."
+#endif
+
 // QR factorization (unblocked geqr2), one group of programCount matrices at a time;
 // mirrors cqr::detail::geqrf_compact_group. ap (m x n col-major) -> (R, Householder
 // vectors); taup -> k=min(m,n) tau per matrix. A padded final group factors to
