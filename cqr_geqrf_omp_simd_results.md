@@ -150,6 +150,27 @@ batch loop. The outer-loop form reads better (it is the single-element algorithm
 verbatim) but compiles to scalar on both mainstream compilers today. Clang closes
 the gap to the hand-written kernel more than GCC here.
 
+## icpx (Intel oneAPI) -- the open question
+
+Neither GCC nor Clang does the outer-loop transform, but Intel's compiler ships
+its own vectorizer and is the most likely of the three to vectorize the
+outer-loop `#pragma omp simd` form. That test is **not run here**: this
+environment's network policy allowlists only standard registries (PyPI, npm,
+crates, ...), and every Intel distribution channel is blocked -- `apt`/`yum`
+`repos.intel.com` return 403 at the proxy, the standalone installer host is
+unreachable, `conda.anaconda.org/intel` answers with a Cloudflare bot-challenge,
+and PyPI carries only the oneAPI *runtime* (`dpcpp-cpp-rt`), not the `icpx`
+driver. So icpx could not be installed to measure it.
+
+`scripts/icpx_outer_simd_check.sh` runs the check wherever icpx *is* reachable
+(a local machine, or a session with `apt.repos.intel.com` allowlisted): it
+installs the oneAPI DPC++/C++ compiler if absent, prints icpx's vectorization
+report for the outer-loop kernel (look for `SIMD LOOP` / remark #15300 on the
+`#pragma omp simd simdlen(V)` line), and runs the three-way benchmark. If icpx
+vectorizes that loop, the `omp-outer` column should jump from ~0.2x toward the
+`omp-inner`/`vec-types` range -- the result that would settle whether the clean
+outer-loop idiom is viable on *any* mainstream compiler today.
+
 ## Reproduce
 
 ```sh
