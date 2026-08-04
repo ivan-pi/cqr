@@ -41,7 +41,63 @@ Correctness does **not** depend on `-fopenmp-simd`: without the flag the pragma
 is ignored and each group runs as a plain scalar loop over its `V` matrices, still
 a valid factorization. The flag only changes throughput.
 
-## Benchmark
+## Speedup vs `mkl_dgeqrf_compact` (GCC, Clang, icpx)
+
+The headline comparison: how each cqr kernel -- GNU vector types, and the two
+omp-simd variants -- factors a batch relative to Intel's own
+`mkl_dgeqrf_compact`, across all three compilers. Geometric-mean speedup over the
+small-matrix size range (n = 8..168, the design's target; see note), `nmat = 512`,
+4 OpenMP threads over the group loop with MKL pinned to 1, AVX-512 host (V = 8).
+`examples/bench_geqrf_compact.cpp` (`> 1x` = faster than MKL); every kernel is
+gated against per-matrix LAPACK each run. MKL is the Debian `libmkl-dev` 2020.4.
+
+| compiler (flag)              | vec-types | omp-outer | omp-inner |
+|------------------------------|:---------:|:---------:|:---------:|
+| GCC 13.3  (`-fopenmp-simd`)  |  ~1.30x   |  0.22x    |  0.97x    |
+| Clang 18.1 (`-fopenmp-simd`) |  ~1.27x   |  0.09x    |  1.00x    |
+| icpx 2026.1 (`-qopenmp-simd`)|  1.24x    |  **1.13x**|  1.11x    |
+
+Reading it:
+
+* **Vector types beat MKL on every compiler** (~1.2--1.3x) -- it is hand-written
+  SIMD, so the result barely depends on the compiler. This is the project's
+  existing kernel; the omp-simd work is measured against it and against MKL.
+* **`omp-inner` reaches MKL parity everywhere** (0.97--1.00x on GCC/Clang) and
+  **beats MKL on icpx** (1.11x). So the compiler-vectorized inner-loop kernel is
+  competitive with both MKL and, within ~3--10%, the hand-written vector types.
+* **`omp-outer` -- the clean single-element idiom -- depends entirely on the
+  compiler.** On GCC/Clang its `#pragma omp simd` is not vectorized (scalar,
+  0.1--0.2x of MKL). On **icpx with `-qopenmp-simd` it vectorizes and beats MKL
+  (1.13x)** -- within ~9% of the hand-written vector types. (Why: the outer-loop
+  SIMD only materializes on Intel's OpenMP SIMD code generator; see the icpx
+  section.)
+
+So "is omp-simd slower than the vector types?" -- for the *inner* form, only
+marginally (and it matches or beats MKL); for the *outer* form, only on compilers
+whose auto-vectorizer drops the pragma. On icpx both omp-simd forms land within
+~10% of the hand-written kernel and ahead of MKL.
+
+Representative per-size detail (icpx `-qopenmp-simd -xHost`), GFLOP/s and speedup
+vs MKL:
+
+```
+   n |  vec GF/s |  oOut GF/s |  oIn GF/s |  mkl GF/s | vec/mkl | oOut/mkl | oIn/mkl
+-----+-----------+------------+-----------+-----------+---------+----------+--------
+  32 |     36.76 |      34.94 |     34.09 |     29.22 |   1.26x |    1.20x |   1.17x
+  64 |     41.94 |      42.89 |     41.10 |     37.58 |   1.12x |    1.14x |   1.09x
+  96 |     48.40 |      42.32 |     42.00 |     35.41 |   1.37x |    1.20x |   1.19x
+ 128 |     40.90 |      41.67 |     41.31 |     35.96 |   1.14x |    1.16x |   1.15x
+ 168 |     37.07 |      36.21 |     36.52 |     28.04 |   1.32x |    1.29x |   1.30x
+```
+
+Notes. Absolute GFLOP/s is noisy at the ~10--30% level on this shared VM (the
+back-to-back speedup *ratios* within a run are stable, since all kernels see the
+same conditions). The size list stops at n = 168: past there the compact format
+loses to per-matrix LAPACK anyway, and the scalar `omp-outer` path (GCC/Clang)
+makes a single large-n pass minutes long. Run it yourself with
+`OMP_NUM_THREADS=4 ./build-*/bench_geqrf_compact 512 5`.
+
+## Benchmark (vector types vs omp-simd, no MKL)
 
 `examples/bench_geqrf_omp_simd.cpp` (portable, no MKL): the three kernel
 templates are called directly on identical compact buffers, single-threaded, at

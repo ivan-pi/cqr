@@ -109,7 +109,7 @@ not part of the supported interface:
 |------|------|
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
-| `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
+| `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization*: the vector-types and both omp-simd compact kernels vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`, reporting geomean speedup over MKL. |
 | `examples/bench_geqrf_omp_simd.cpp` | Portable (no-MKL) head-to-head of the GNU vector-types geqrf vs the `#pragma omp simd` variants; see [the experiment writeup](cqr_geqrf_omp_simd_results.md). |
 
 ## Related work

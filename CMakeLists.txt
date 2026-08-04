@@ -137,11 +137,14 @@ if(CQR_WITH_MKL)
     target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
   endif()
 
-  # Throughput benchmark of the QR factorization itself: cqr_mkl_dgeqrf_compact
-  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (design doc benchmark 1).
+  # Throughput benchmark of the QR factorization itself: the GNU vector-types and
+  # both OpenMP-SIMD compact kernels vs mkl_dgeqrf_compact and per-matrix
+  # LAPACKE_dgeqrf (design doc benchmark 1). The omp-simd flag makes its
+  # `#pragma omp simd` kernels vectorize (via Intel's codegen under icpx).
   add_executable(bench_geqrf_compact examples/bench_geqrf_compact.cpp)
   target_link_libraries(bench_geqrf_compact
     PRIVATE cqr_mkl_ext MKL::Compact)
+  target_compile_options(bench_geqrf_compact PRIVATE ${CQR_OMP_SIMD_FLAGS})
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
   endif()
