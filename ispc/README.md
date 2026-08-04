@@ -246,13 +246,20 @@ isolates it — width alone flips which kernel wins (speedup vs MKL, n=100):
 - **`geqrf` likes 256-bit:** it *is* FMA-dense, so 512-bit triggers the AVX-512
   downclock and loses — why clang/ISPC (256-bit) beat GCC on the factorization.
 
-**So matching GCC on `trsm` needs 512-bit, which ISPC can't emit at gang-8.** The
-practical answer is to *mix*: keep ISPC (256-bit) for `geqrf`/`ormqr` where it
-wins, and run a 512-bit `trsm` (the GCC-compiled `cqr_trsm_compact.hpp`, or
-`mkl_dtrsm_compact`) for the solve step. No single width — or toolchain — is best
-for the whole pipeline. (All builds are release + native: C++ `-O3 -march=native`,
-ISPC `-O3` on the host's AVX-512 ISA; the `trsm` gap is architectural width, not a
-missing flag.)
+**Matching GCC on `trsm` needs 512-bit, which ISPC can't emit at gang-8** — but a
+"mix by kernel" build (ISPC `geqrf`/`ormqr` + a 512-bit `trsm`) would be an
+*overfit to this exact CPU and compiler set, not a portable strategy.* The
+256-vs-512 crossover moves — and can invert — with the microarchitecture: the
+AVX-512 frequency license that penalizes wide FMA on Skylake-SP / Cascade Lake is
+much milder on Ice Lake / Sapphire Rapids and absent off-x86, and it shifts with
+compiler version too. Even the *direction* here is only inferred: this shared VM
+pins its reported clock at 2.8 GHz and exposes no PMU, so the downclock cannot be
+measured — at a genuinely fixed frequency, 512-bit might win `geqrf` as well,
+collapsing the flip. All builds are release + native (C++ `-O3 -march=native`,
+ISPC `-O3` on the host AVX-512 ISA); the gap is *width*, not a missing flag — but
+**which width wins is machine-specific, so this is an observation, not a
+recommendation.** The portable conclusion is the opposite: let the target pick the
+width and take the one-source ~parity.
 
 ## Takeaways
 
@@ -285,9 +292,21 @@ missing flag.)
    host's native compact width (here AVX-512, `V=8`) that is a non-issue; for a
    library shipping every width it means one ISPC object per target.
 
-*Caveats:* single virtualized Xeon, one toolchain set (GCC 13.3, clang 18.1.3,
-ISPC 1.22/LLVM 17), double precision, `V=8` only. Numbers are indicative, not a
-portable claim. Reproduce with `make bench` and `make shootout`.
+*Measurement caveats — read every number here as indicative only, not a
+benchmark result.* These runs are on a **shared, virtualized 4-vCPU node with no
+frequency control**: the governor/turbo are inaccessible, the guest reports a
+**fixed 2.8 GHz and exposes no PMU**, so the achieved core clock — and any
+AVX-512 downclock — is neither pinned nor even observable here. Best-of-3 wall
+time hides some neighbor noise but nothing about DVFS. A result you could trust
+needs a **non-shared / bare-metal node at pinned frequency** (turbo off,
+`performance` governor or a fixed P-state), isolated and pinned cores, PMU cycle
+counts, repeated with reported variance/CI, across **several microarchitectures**
+and compiler versions — none of which this environment provides. Also: one
+toolchain set (GCC 13.3, clang 18.1.3, ISPC 1.22/LLVM 17), double precision,
+`V=8`. The one conclusion that survives all of that is the portable one — ISPC
+gives a **correct, drop-in, ~parity** batched pipeline from far simpler source,
+ISA/width delegated to the target; the absolute speedups are not a portable
+claim. Reproduce with `make bench` / `make shootout`.
 
 ---
 *Assisted-by: Claude:claude-opus-4.8*
