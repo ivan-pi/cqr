@@ -29,14 +29,25 @@ AVX-512 FP64 compact format MKL selects on this host. Column-major, double.
 ```sh
 sudo apt-get install ispc            # 1.22 on Ubuntu 24.04 (or pip install ispc,
                                      # or a github.com/ispc/ispc release tarball)
-make          # test + gcc/clang benchmarks   (needs Intel MKL: apt libmkl-dev)
-make test     # correctness      make shootout # GCC vs clang vs ISPC vs MKL
+cmake -S . -B build                  # needs CMake >= 3.19 and Intel MKL (libmkl-dev)
+cmake --build build -j
+ctest --test-dir build --output-on-failure    # the per-kernel correctness tests
+./build/bench_cqr_ispc                          # the benchmark
 ```
 
-- **ISPC:** `--target=avx512skx-x8 --arch=x86-64 -O3 --pic --opt=disable-assertions`.
-  `avx512skx-x8` is the key flag (`programCount = 8 = V`). One target = one width.
-- **C++ kernels:** `-O3 -march=native -std=c++17` so the `vector_size` kernels get
-  the host's full width. The drivers pin MKL sequential at startup (no env var).
+CMake's native ISPC language does the work (`project(... LANGUAGES CXX ISPC)`):
+
+- **ISA:** `set(CMAKE_ISPC_INSTRUCTION_SETS "avx512skx-x8")` — the key setting
+  (`programCount = 8 = V`; one target = one width). `CMAKE_ISPC_FLAGS` adds
+  `-O3 --opt=disable-assertions`; PIC and the generated-header dir
+  (`CMAKE_ISPC_HEADER_DIRECTORY`, unused here — we ship `cqr_ispc.h`) are the
+  other knobs.
+- **C++ kernels:** `-march=native` (Release) so the `vector_size` kernels get the
+  host's full width. The drivers pin MKL sequential at startup (no env var).
+- **Compiler shootout:** the benchmark's `native` column is whichever CXX compiler
+  configured the tree, so compare with a second tree:
+  `cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build-clang`,
+  then run `./build/bench_cqr_ispc` and `./build-clang/bench_cqr_ispc`.
 
 ## Files
 
@@ -47,8 +58,8 @@ make test     # correctness      make shootout # GCC vs clang vs ISPC vs MKL
 | `cqr_trsm_compact.hpp` | Templated GNU-vector `trsm` (a counterpart to `mkl_dtrsm_compact` for GCC/clang). |
 | `bench_common.hpp` | Shared harness: pool, timer, pack/unpack, GFLOP helpers. |
 | `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
-| `bench_cqr_ispc.cpp` | The benchmark; built by g++ and clang++ (`make shootout`). |
-| `Makefile` | Standalone build. |
+| `bench_cqr_ispc.cpp` | The benchmark; the `native` column is the configuring CXX compiler. |
+| `CMakeLists.txt` | Standalone build via CMake's ISPC language (>= 3.19). |
 
 ## Correctness
 
@@ -69,7 +80,7 @@ at machine precision; square, tall, padded groups):
 ## Results — GCC vs clang vs ISPC, normalized to MKL
 
 Geomean speedup over the matching MKL compact routine, `n=10..150`, `nrhs=4`,
-sequential (`make shootout`). **On this shared, frequency-unpinned node the
+sequential (two build trees, GCC and clang). **On this shared, frequency-unpinned node the
 numbers swing ~15–30% run to run** (two independent runs bracket each cell) — so
 these are rough ranges, not point estimates:
 
