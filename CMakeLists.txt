@@ -37,6 +37,53 @@ target_compile_features(cqr_compact PUBLIC cxx_std_17)
 add_library(cqr::compact ALIAS cqr_compact)
 
 # ---------------------------------------------------------------------------
+# OpenMP SIMD experiment (portable; no BLAS/MKL)
+#
+# An alternative geqrf backend that vectorizes the outer batch loop with
+# `#pragma omp simd simdlen(V)` instead of GNU vector types. -fopenmp-simd
+# enables only the SIMD lowering (no OpenMP runtime, no threads); the kernel is
+# correct without it -- the pragma is simply ignored and the loop runs scalar.
+# ---------------------------------------------------------------------------
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-fopenmp-simd" CQR_HAS_FOPENMP_SIMD)
+set(CQR_OMP_SIMD_FLAGS "")
+if(CQR_HAS_FOPENMP_SIMD)
+  list(APPEND CQR_OMP_SIMD_FLAGS "-fopenmp-simd")
+else()
+  message(WARNING "compiler rejects -fopenmp-simd; the omp-simd geqrf backend "
+                  "will build correct but scalar (no SIMD)")
+endif()
+# The outer-loop simd kernel (geqrf_compact_group_omp) deliberately keeps the
+# `#pragma omp simd` on the lane loop even though neither GCC nor Clang can
+# vectorize that nest -- it is the "requested but not vectorized" data point of
+# the experiment (see cqr_geqrf_omp_simd_results.md). Clang reports the failed
+# transform via -Wpass-failed; silence it here so the build stays warning-clean.
+# GCC does not know this flag but ignores unrecognised -Wno-* options.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  list(APPEND CQR_OMP_SIMD_FLAGS "-Wno-pass-failed")
+endif()
+
+# Drop-in variant of the portable library: the ormqr entry points from the
+# vector-types dispatch (shared, unchanged) plus the geqrf entry points routed
+# to the omp-simd kernel. It defines the same dgeqrf_compact / sgeqrf_compact C
+# symbols as cqr_compact, so a program links exactly one of the two.
+add_library(cqr_compact_ompsimd
+  src/cqr_compact_dispatch.cpp
+  src/cqr_geqrf_compact_dispatch_omp.cpp)
+target_include_directories(cqr_compact_ompsimd PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(cqr_compact_ompsimd PUBLIC cxx_std_17)
+target_compile_options(cqr_compact_ompsimd PRIVATE ${CQR_OMP_SIMD_FLAGS})
+add_library(cqr::compact_ompsimd ALIAS cqr_compact_ompsimd)
+
+# Portable head-to-head benchmark: vector-types vs omp-simd geqrf, no MKL. The
+# two kernel templates are called directly (header-only), so it needs the
+# source include dir and -fopenmp-simd, nothing else.
+add_executable(bench_geqrf_omp_simd examples/bench_geqrf_omp_simd.cpp)
+target_include_directories(bench_geqrf_omp_simd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(bench_geqrf_omp_simd PRIVATE cxx_std_17)
+target_compile_options(bench_geqrf_omp_simd PRIVATE ${CQR_OMP_SIMD_FLAGS})
+
+# ---------------------------------------------------------------------------
 # Intel MKL compact extension: cqr_mkl_dormqr_compact (design doc section 2)
 # ---------------------------------------------------------------------------
 if(CQR_WITH_MKL)
@@ -102,6 +149,19 @@ if(CQR_BUILD_TESTS)
   add_executable(test_cqr_geqrf_compact src/test_cqr_geqrf_compact.cpp)
   target_link_libraries(test_cqr_geqrf_compact PRIVATE cqr_compact)
   add_test(NAME portable_geqrf COMMAND test_cqr_geqrf_compact)
+
+  # The same geqrf test source, linked against the omp-simd backend instead:
+  # a literal drop-in swap of the dgeqrf_compact / sgeqrf_compact C entry
+  # points, which must pass identically to the vector-types build above.
+  add_executable(test_cqr_geqrf_compact_omp src/test_cqr_geqrf_compact.cpp)
+  target_link_libraries(test_cqr_geqrf_compact_omp PRIVATE cqr_compact_ompsimd)
+  add_test(NAME portable_geqrf_ompsimd COMMAND test_cqr_geqrf_compact_omp)
+
+  # The head-to-head benchmark carries a correctness gate (both kernels vs a
+  # scalar geqr2 reference), so a small quick run doubles as an integration
+  # test. 33 exercises a padded final group.
+  add_test(NAME bench_geqrf_omp_simd_integration COMMAND bench_geqrf_omp_simd 33 1)
+  set_tests_properties(bench_geqrf_omp_simd_integration PROPERTIES LABELS "integration")
 
   # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)

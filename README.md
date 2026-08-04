@@ -90,6 +90,8 @@ not part of the supported interface:
 | File | Role |
 |------|------|
 | `src/cqr_geqrf_compact.hpp` | Templated SIMD QR-factorization kernel (vectorized `geqr2`; scalar `T`, interleave width `V`). |
+| `src/cqr_geqrf_compact_omp.hpp` | Experimental geqrf kernel that vectorizes the batch with `#pragma omp simd simdlen(V)` instead of GNU vector types (outer-loop and inner-loop variants). See [the experiment writeup](cqr_geqrf_omp_simd_results.md). |
+| `src/cqr_geqrf_compact_dispatch_omp.cpp` | Drop-in geqrf C entry points routed to the omp-simd kernel (same `dgeqrf_compact` symbols; library `cqr_compact_ompsimd`). |
 | `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
 | `src/cqr_geqrf_compact_dispatch.cpp` | Portable geqrf C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
@@ -108,6 +110,7 @@ not part of the supported interface:
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
 | `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
+| `examples/bench_geqrf_omp_simd.cpp` | Portable (no-MKL) head-to-head of the GNU vector-types geqrf vs the `#pragma omp simd` variants; see [the experiment writeup](cqr_geqrf_omp_simd_results.md). |
 
 ## Related work
 
