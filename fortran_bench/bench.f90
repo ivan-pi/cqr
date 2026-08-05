@@ -7,8 +7,7 @@
 !>   * verify all four geqr2 and all four orm2r variants elementwise vs it,
 !>   * time each variant (copy cost measured and subtracted) and report GFLOP/s.
 program bench
-   use, intrinsic :: iso_fortran_env, only: dp => real64
-   use omp_lib, only: omp_get_wtime
+   use, intrinsic :: iso_fortran_env, only: dp => real64, int64
    use vec8_mod, only: VW
    use batched_qr
    implicit none
@@ -214,7 +213,7 @@ contains
       real(dp) :: t0, tfull, tcopy
       integer :: r, reps
       reps = 0
-      t0 = omp_get_wtime()
+      t0 = wtime()
       do
          ac = a0
          select case (which)
@@ -225,15 +224,15 @@ contains
          end select
          sink = sink + ac(1, 1, 1, 1) + tc(1, 1, 1)
          reps = reps + 1
-         if (omp_get_wtime() - t0 > BUDGET .and. reps >= 3) exit
+         if (wtime() - t0 > BUDGET .and. reps >= 3) exit
       end do
-      tfull = omp_get_wtime() - t0
-      t0 = omp_get_wtime()
+      tfull = wtime() - t0
+      t0 = wtime()
       do r = 1, reps
          ac = a0
          sink = sink + ac(1, 1, 1, 1)
       end do
-      tcopy = omp_get_wtime() - t0
+      tcopy = wtime() - t0
       kt = max(tfull - tcopy, 1.0e-9_dp)/real(reps, dp)
    end function time_geqr2
 
@@ -244,7 +243,7 @@ contains
       real(dp) :: t0, tfull, tcopy
       integer :: r, reps
       reps = 0
-      t0 = omp_get_wtime()
+      t0 = wtime()
       do
          bc = b0
          select case (which)
@@ -255,15 +254,15 @@ contains
          end select
          sink = sink + bc(1, 1, 1, 1)
          reps = reps + 1
-         if (omp_get_wtime() - t0 > BUDGET .and. reps >= 3) exit
+         if (wtime() - t0 > BUDGET .and. reps >= 3) exit
       end do
-      tfull = omp_get_wtime() - t0
-      t0 = omp_get_wtime()
+      tfull = wtime() - t0
+      t0 = wtime()
       do r = 1, reps
          bc = b0
          sink = sink + bc(1, 1, 1, 1)
       end do
-      tcopy = omp_get_wtime() - t0
+      tcopy = wtime() - t0
       kt = max(tfull - tcopy, 1.0e-9_dp)/real(reps, dp)
    end function time_orm2r
 
@@ -297,5 +296,13 @@ contains
       sd = 20260804
       call random_seed(put=sd)
    end subroutine seed_fixed
+
+   !> Wall-clock seconds via SYSTEM_CLOCK -- no OpenMP runtime needed, so the
+   !> benchmark builds with SIMD-only flags (-qopenmp-simd / -fopenmp-simd).
+   real(dp) function wtime()
+      integer(int64) :: cnt, rate
+      call system_clock(cnt, rate)
+      wtime = real(cnt, dp)/real(rate, dp)
+   end function wtime
 
 end program bench

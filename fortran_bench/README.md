@@ -44,12 +44,14 @@ unmasked with identical semantics to LAPACK `?geqr2` / `?orm2r`.
 
 ```sh
 cd fortran_bench
-make run          # gfortran -O3 -march=native -ffast-math -fopenmp, then run
-make run FC=ifx   # or the Intel compiler
+make run          # gfortran -O3 -march=native -ffast-math -fopenmp-simd
+make run FC=ifx   # Intel: ifx -O3 -xHOST -qopenmp-simd
 ```
 
-Single-threaded by design (`make run` sets `OMP_NUM_THREADS=1`): the question is
-vectorization of the batch, not threading.
+Only the `!$omp simd` directive is used (no threading); timing is via
+`SYSTEM_CLOCK`, so the SIMD-only flags `-fopenmp-simd` / `-qopenmp-simd` are all
+that is needed and the build carries no OpenMP-runtime dependency. The question
+is vectorization of the batch, not threading.
 
 ## Correctness
 
@@ -143,7 +145,22 @@ The `-fopt-info-vec` report is decisive -- vectorized loops per `geqr2` variant:
 4. A **custom `vec8` type** gives C++-like readability but costs ~3-4x on
    gfortran; it does not reproduce C++ GNU-vector-type performance.
 
-Run `make run FC=ifx` to see how much of #3 and #4 is compiler-specific -- Intel's
-`ifx` is generally far more aggressive at both `omp simd` outer-loop vectorization
-and small-array / derived-type SIMD, so those gaps may narrow or reorder. (Not
-installed in this environment; the numbers above are gfortran.)
+### Intel `ifx`
+
+The numbers above are **gfortran only**. `ifx` was not runnable in the
+environment these results were produced in -- installing it needs Intel's oneAPI
+apt repo (`apt.repos.intel.com`), which that environment's network policy blocks
+(HTTP 403) -- so the Intel column is left for whoever has `ifx` on hand:
+
+```sh
+make run FC=ifx        # ifx -O3 -xHOST -qopenmp-simd
+```
+
+`ifx` is generally far more aggressive than gfortran at exactly the two styles
+gfortran handles poorly here: it genuinely SIMD-vectorizes `!$omp simd` loops
+that contain inner loops (variant 2), and it lowers small fixed-size arrays and
+derived types onto vector registers (variant 4). So on `ifx` the **outer-loop and
+vector-type gaps are expected to narrow substantially, and the ranking may
+reorder** -- plausibly with all four converging near the array/inner throughput.
+Running the command above prints the same correctness + GFLOP/s tables for a
+direct comparison.
