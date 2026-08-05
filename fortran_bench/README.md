@@ -38,7 +38,9 @@ unmasked with identical semantics to LAPACK `?geqr2` / `?orm2r`.
 | `vec8_mod.f90` | The `vec8` type (`v(8)`, `VW = 8`) with overloaded operators (`pure` functions), `vsqrt`, `vmerge`, `load8`/`store8`. |
 | `batched_qr.f90` | Scalar reference (`ref_geqr2`, `ref_orm2r`) + the four `geqr2` and four `orm2r` variants. |
 | `bench.f90` | Driver: correctness vs the reference at every size, then adaptive-rep timing. |
-| `Makefile` | `make` (gfortran) or `make FC=ifx`; `make run`. |
+| `mkl_compact.f90` | iso_c_binding interface to MKL's compact API (`mkl_dgeqrf_compact`, pack/unpack). |
+| `bench_mkl.f90` | Head-to-head: fastest Fortran `dgeqrf` vs `mkl_dgeqrf_compact` on identical matrices. |
+| `Makefile` | `make` (gfortran) or `make FC=ifx`; `make run`; `make run-mkl`. |
 
 ## Build and run
 
@@ -46,6 +48,7 @@ unmasked with identical semantics to LAPACK `?geqr2` / `?orm2r`.
 cd fortran_bench
 make run          # gfortran -O3 -march=native -ffast-math -fopenmp-simd -flto
 make run FC=ifx   # ifx      -O3 -xHOST -qopenmp-simd -flto
+make run-mkl      # + the MKL comparison (needs libmkl-dev; FC=ifx works too)
 ```
 
 Only `!$omp simd` is used (no threading); timing is via `SYSTEM_CLOCK`, so the
@@ -177,6 +180,62 @@ cliff it first appeared to sit on. (`elemental` vs `pure` on the operators makes
 **no** measurable difference -- the operators are only ever called on scalars;
 the lever is inlining, and only inlining.)
 
+## Versus MKL's compact API
+
+The natural question: how does the fastest Fortran `dgeqrf` compare to Intel
+MKL's own batched `mkl_dgeqrf_compact` -- a proprietary, hand-tuned kernel doing
+exactly this job? `bench_mkl.f90` answers it directly. The **same** random batch
+is fed to MKL through its own `mkl_dgepack_compact` and to the Fortran kernels
+through the `A(VW,m,n,ng)` interleave; only the factorization call is timed
+(pack/copy excluded), MKL runs single-threaded (sequential MKL, `MKL_NUM_THREADS=1`)
+against the single-thread SIMD Fortran, and MKL's unpacked result is checked
+against the scalar reference (agreement at `~1e-14`, so this is a like-for-like
+race, not a mismatch).
+
+Representative GFLOP/s (`nm` = 512-8192 matrices per size):
+
+**gfortran** -- fastest Fortran ≈ MKL (rough parity)
+
+| m×n | MKL | f-array | f-inner | best-Fortran / MKL |
+|-----|----:|--------:|--------:|:------------------:|
+| 8×8   | 5.46 | 4.97 | 5.71 | 1.05x |
+| 16×16 | 6.19 | 5.43 | 7.89 | 1.27x |
+| 32×16 | 7.80 | 7.81 | 7.96 | 1.02x |
+| 32×32 | 3.53 | 5.31 | 7.49 | 2.1x  |
+| 48×48 | 7.14 | 8.38 | 7.82 | 1.17x |
+| 64×64 | 9.44 | 8.83 | 8.54 | 0.94x |
+
+**ifx** -- fastest Fortran clearly ahead
+
+| m×n | MKL | f-array | f-inner | best-Fortran / MKL |
+|-----|----:|--------:|--------:|:------------------:|
+| 8×8   | 4.89 | 7.42 | 8.05 | 1.6x |
+| 16×16 | 6.53 | 10.37 | 9.88 | 1.6x |
+| 32×16 | 6.48 | 9.66 | 9.90 | 1.5x |
+| 32×32 | 6.30 | 11.90 | 12.59 | 2.0x |
+| 48×48 | 7.18 | 12.35 | 12.61 | 1.8x |
+| 64×64 | 7.49 | 10.72 | 11.04 | 1.4x |
+
+So a **plain-Fortran unblocked Householder QR -- array syntax or an explicit
+`do b = 1, 8` -- matches or beats MKL's proprietary compact `geqrf`**: parity on
+gfortran, ~1.4-2x on `ifx`. That mirrors what this project's C++ kernel already
+showed (cqr outruns `mkl_dgeqrf_compact` on small sizes); the Fortran port gets
+there too, without any intrinsics. `f-inner` is the steadiest -- it holds up where
+`array` occasionally dips (e.g. the 32×32 shape) and where MKL itself has a slow
+path (MKL repeatedly dips to ~3-6 GFLOP/s at 32×32).
+
+Two caveats worth stating plainly:
+
+* **Only `dgeqrf` is compared.** MKL ships `mkl_dgeqrf_compact` but **no**
+  `mkl_dormqr_compact` -- there is no supported way to apply `Q`/`Q^T` to a
+  compact batch in MKL at all. So the apply-`Q^T` half of this benchmark
+  (`dormqr`) has no MKL counterpart to race; filling that gap is the reason this
+  project's C++ side exists.
+* **These are noisy absolute numbers** on a shared 4-core cloud VM (both MKL and
+  the Fortran kernels swing 10-20% run to run). The *ranking* -- Fortran ≥ MKL on
+  gfortran, Fortran clearly > MKL on `ifx` -- is stable across runs; treat the
+  per-cell GFLOP/s as indicative, not precise.
+
 ## Bottom line
 
 All four variants are correct to machine precision on both compilers; the rest is
@@ -194,6 +253,9 @@ throughput.
 4. Pinning the interleave width to a compile-time constant (8 = one AVX-512
    register) is worth ~2x over a runtime batch dimension (see git history),
    regardless of style.
+5. **The result is competitive with MKL.** The fastest plain-Fortran `dgeqrf`
+   matches `mkl_dgeqrf_compact` on gfortran and beats it ~1.4-2x on `ifx`, with
+   no intrinsics -- and covers `dormqr`, which MKL's compact API omits entirely.
 
-Environment: single core, Intel AVX-512 (Cascade Lake), gfortran 13.3 and
-`ifx` 2026.1, all builds with `-flto`.
+Environment: single core, Intel AVX-512 (Cascade Lake), gfortran 13.3, `ifx`
+2026.1, MKL (Debian `libmkl-dev`); all builds with `-flto`.
