@@ -3,8 +3,8 @@
 A self-contained Fortran experiment that writes the two workhorse batched-QR
 kernels of this project -- the unblocked Householder factorization (`dgeqrf` /
 `geqr2`) and the apply-`Q^T` step (`dormqr` / `orm2r`) -- **four different ways**,
-then checks that all four agree with a scalar reference and measures which is
-fastest.
+checks that all four agree with a scalar reference, and measures which is
+fastest under **both gfortran and Intel `ifx`**.
 
 The batch is interleaved in groups of a **fixed, compile-time width `VW = 8`** --
 exactly one 512-bit AVX register of doubles -- with layout `A(VW, m, n, ng)`: the
@@ -35,29 +35,28 @@ unmasked with identical semantics to LAPACK `?geqr2` / `?orm2r`.
 
 | File | Role |
 |------|------|
-| `vec8_mod.f90` | The `vec8` type (`v(8)`, `VW = 8`) with overloaded operators, `vsqrt`, `vmerge`, `load8`/`store8`. |
+| `vec8_mod.f90` | The `vec8` type (`v(8)`, `VW = 8`) with overloaded operators (`pure` functions), `vsqrt`, `vmerge`, `load8`/`store8`. |
 | `batched_qr.f90` | Scalar reference (`ref_geqr2`, `ref_orm2r`) + the four `geqr2` and four `orm2r` variants. |
 | `bench.f90` | Driver: correctness vs the reference at every size, then adaptive-rep timing. |
-| `Makefile` | `make` (gfortran, host-tuned) or `make FC=ifx`; `make run`. |
+| `Makefile` | `make` (gfortran) or `make FC=ifx`; `make run`. |
 
 ## Build and run
 
 ```sh
 cd fortran_bench
-make run          # gfortran -O3 -march=native -ffast-math -fopenmp-simd
-make run FC=ifx   # Intel: ifx -O3 -xHOST -qopenmp-simd
+make run          # gfortran -O3 -march=native -ffast-math -fopenmp-simd -flto
+make run FC=ifx   # ifx      -O3 -xHOST -qopenmp-simd -flto
 ```
 
-Only the `!$omp simd` directive is used (no threading); timing is via
-`SYSTEM_CLOCK`, so the SIMD-only flags `-fopenmp-simd` / `-qopenmp-simd` are all
-that is needed and the build carries no OpenMP-runtime dependency. The question
-is vectorization of the batch, not threading.
+Only `!$omp simd` is used (no threading); timing is via `SYSTEM_CLOCK`, so the
+SIMD-only flags `-fopenmp-simd` / `-qopenmp-simd` suffice with no OpenMP-runtime
+dependency. **`-flto` matters** -- see [The vec8 twist](#the-vec8-twist-a-cross-module-inlining-trap) below; without it the vector-type variant is ~4x slower for reasons that have nothing to do with the abstraction.
 
 ## Correctness
 
 Every variant is checked elementwise against the scalar per-matrix reference, and
 the reference itself is self-checked via `|| Q^T A - R ||`. All four pass at
-machine precision (max error `~1e-14`), e.g.:
+machine precision (max error `~1e-14`) under both compilers, e.g. (gfortran):
 
 ```
    m    n nrhs     ng | ref-selfchk |  geqr2 (max err)  | orm2r (max err)
@@ -65,102 +64,136 @@ machine precision (max error `~1e-14`), e.g.:
   64   64    8     64 |   6.6E-16   |   1.4E-14         |   1.6E-15   [PASS]
 ```
 
-## Results (gfortran 13.3, `-O3 -march=native -ffast-math`, single core, AVX-512)
+## Results
 
-Achieved **GFLOP/s** (higher is better). Numbers vary a few % run to run; the
-ranking is stable at every size.
+Achieved **GFLOP/s** (higher is better), single core, AVX-512, default flags
+(`-flto`). Numbers vary a few % run to run; the rankings are stable.
 
-**dgeqrf (factorization)**
+### gfortran 13.3
 
-| m×n | inner | outer | array | vtype |
-|-----|------:|------:|------:|------:|
-| 8×8   | 5.36 | 1.94 | **5.60** | 1.48 |
-| 16×16 | 6.93 | 2.64 | **8.30** | 1.91 |
-| 32×16 | 7.92 | 2.19 | **8.24** | 1.85 |
-| 32×32 | 7.48 | 2.46 | **8.66** | 2.00 |
-| 48×48 | 8.19 | 2.36 | **8.89** | 2.33 |
-| 64×64 | **8.75** | 2.27 | 8.61 | 2.30 |
-
-**dormqr (apply Q^T, nrhs = 8)**
+**dgeqrf**
 
 | m×n | inner | outer | array | vtype |
 |-----|------:|------:|------:|------:|
-| 8×8   | **9.32** | 1.98 | 8.53 | 1.74 |
-| 16×16 | **8.61** | 2.45 | 8.14 | 1.82 |
-| 32×16 | 8.17 | 2.47 | **9.00** | 1.98 |
-| 32×32 | **7.85** | 2.50 | 7.70 | 1.94 |
-| 48×48 | **8.29** | 2.33 | 8.04 | 1.98 |
-| 64×64 | 8.13 | 2.20 | **9.06** | 1.98 |
+| 8×8   | 5.45 | 1.98 | **5.55** | 4.43 |
+| 16×16 | **8.21** | 2.48 | 8.06 | 6.69 |
+| 32×16 | 9.74 | 2.20 | **10.03** | 8.27 |
+| 32×32 | 8.66 | 2.48 | **9.50** | 9.03 |
+| 48×48 | 10.11 | 2.38 | **10.55** | 8.25 |
+| 64×64 | 9.96 | 2.31 | **10.82** | 8.29 |
 
-**Fastest: array-ops and inner-loop, essentially tied** (~5-9 GFLOP/s). They trade
-the lead by a few percent from size to size. The vector type and the outer-loop
-`simd` trail at ~2 GFLOP/s -- **3-4x slower**.
+**dormqr** (nrhs = 8)
 
-### Effect of fixing the width to 8
+| m×n | inner | outer | array | vtype |
+|-----|------:|------:|------:|------:|
+| 8×8   | 7.76 | 2.04 | **8.67** | 6.75 |
+| 16×16 | 8.07 | 2.56 | **8.10** | 6.78 |
+| 32×16 | 8.62 | 2.58 | **8.81** | 8.12 |
+| 32×32 | 8.01 | 2.50 | **8.84** | 7.12 |
+| 48×48 | 8.94 | 2.37 | **9.31** | 6.89 |
+| 64×64 | 9.04 | 2.26 | **9.67** | 7.60 |
 
-Pinning the batch to a compile-time `8` (versus the earlier runtime `nb`
-dimension, see git history) **roughly doubled throughput for every variant**
-(fast ones went from ~3-5 to ~5-9 GFLOP/s): the compiler now knows each lane loop
-is exactly one AVX-512 register wide, with no remainder and clean unrolling. But
-it did **not** change the ranking.
+### Intel `ifx` 2026.1
 
-### Why the ranking looks like this
+**dgeqrf**
 
-The `-fopt-info-vec` report is decisive -- vectorized loops per `geqr2` variant:
+| m×n | inner | outer | array | vtype |
+|-----|------:|------:|------:|------:|
+| 8×8   | 9.25 | **9.72** | 7.85 | 6.27 |
+| 16×16 | 10.69 | **10.83** | 10.51 | 6.99 |
+| 32×16 | **11.60** | 11.43 | 11.20 | 7.08 |
+| 32×32 | 12.59 | **12.73** | 12.67 | 8.72 |
+| 48×48 | 11.64 | **13.45** | 12.59 | 9.14 |
+| 64×64 | 11.39 | 12.32 | **12.34** | 9.02 |
 
-| variant | vectorized loops | what that means |
-|---------|-----------------:|-----------------|
-| inner-loop  | 8 | every batch loop → real 8-wide SIMD |
-| array-ops   | 8 | array sections → the same SIMD code |
-| outer-loop  | **0** | the `!$omp simd` batch loop is **not** vectorized |
-| vector-type | 2 | only the pack/unpack copies -- **not** the compute |
+**dormqr** (nrhs = 8)
 
-* **array-ops and inner-loop win** because both present the batch as a clean
-  width-8 loop that gfortran turns into unmasked AVX-512 (`vfmadd…pd`, `vsqrtpd`),
-  fully unrolled. Array syntax and an explicit `do b = 1, 8` compile to
-  effectively the same thing.
+| m×n | inner | outer | array | vtype |
+|-----|------:|------:|------:|------:|
+| 8×8   | 8.40 | **9.79** | 7.47 | 5.09 |
+| 16×16 | 9.10 | **10.09** | 8.32 | 5.20 |
+| 32×16 | 9.46 | **11.16** | 10.08 | 5.79 |
+| 32×32 | 7.29 | **8.55** | 7.46 | 4.91 |
+| 48×48 | 7.63 | **9.09** | 7.88 | 4.97 |
+| 64×64 | 8.12 | 6.41 | **8.59** | 5.19 |
 
-* **outer-loop `!$omp simd` gets *zero* vectorized loops even at a fixed width
-  of 8.** gfortran cannot SIMD-vectorize a batch loop whose body contains inner
-  loops with data-dependent trip counts, pragma or not. It still runs ~4x faster
-  than the old runtime-`nb` version only because the fixed trip count lets it
-  cleanly *unroll to 8 scalar iterations* instead of emitting gathers -- honest
-  scalar, but scalar, hence ~2 GFLOP/s.
+## What the numbers say
 
-* **vector-type is correct and reads beautifully but lands slowest.** The only
-  loops that vectorize are the `load8`/`store8` copies; the `vec8` compute
-  operators are inlined but gfortran does not fuse their length-8 bodies into
-  single wide instructions here. The abstraction that maps straight onto a
-  hardware register in C++ (`__attribute__((vector_size))`) does not get the same
-  treatment from gfortran's derived-type path.
+Three findings, each with a mechanism confirmed by the compilers' vectorization
+reports.
 
-### Takeaways
+### 1. array-ops and inner-loop are the portable winners
 
-1. **Express batch SIMD as array operations over the batch dimension** (or the
-   equivalent innermost `do b = 1, 8`). Fastest *and* most readable.
-2. Fixing the width to one register (8) is worth ~2x on its own -- but it does
-   **not** rescue the two abstraction-heavy styles.
-3. **`!$omp simd` over the batch does not vectorize** on gfortran when the body
-   has inner loops -- not even at a constant width of 8.
-4. A **custom `vec8` type** gives C++-like readability but costs ~3-4x on
-   gfortran; it does not reproduce C++ GNU-vector-type performance.
+Both express the batch as a clean width-8 loop that **both** compilers turn into
+unmasked AVX-512. They are in the fastest tier everywhere, on gfortran and `ifx`
+alike, and they are the most readable. `-fopt-info-vec` (gfortran) shows 8
+vectorized loops each; array-syntax and an explicit `do b = 1, 8` compile to
+effectively the same code. **If you write the kernels one way, write them this
+way.**
 
-### Intel `ifx`
+### 2. outer-loop `!$omp simd` is a compiler gamble
 
-The numbers above are **gfortran only**. `ifx` was not runnable in the
-environment these results were produced in -- installing it needs Intel's oneAPI
-apt repo (`apt.repos.intel.com`), which that environment's network policy blocks
-(HTTP 403) -- so the Intel column is left for whoever has `ifx` on hand:
+This is the biggest cross-compiler swing in the benchmark:
 
-```sh
-make run FC=ifx        # ifx -O3 -xHOST -qopenmp-simd
+| | gfortran | ifx |
+|--|---------:|----:|
+| outer-loop dgeqrf | ~2 GFLOP/s (**worst**) | ~10-13 GFLOP/s (**best/tied**) |
+
+`ifx` genuinely SIMD-vectorizes the batch loop the pragma sits on -- its
+`-qopt-report` prints, for that exact loop:
+
+```
+OMP SIMD BEGIN at batched_qr.f90 (174, 16)
+    LOOP BEGIN at batched_qr.f90 (176, 13)
+        remark #15301: SIMD LOOP WAS VECTORIZED
+        remark #15305: vectorization support: vector length 8
 ```
 
-`ifx` is generally far more aggressive than gfortran at exactly the two styles
-gfortran handles poorly here: it genuinely SIMD-vectorizes `!$omp simd` loops
-that contain inner loops (variant 2), and it lowers small fixed-size arrays and
-derived types onto vector registers (variant 4). So on `ifx` the **outer-loop and
-vector-type gaps are expected to narrow substantially, and the ranking may
-reorder** -- plausibly with all four converging near the array/inner throughput.
-Running the command above prints the same correctness + GFLOP/s tables for a
-direct comparison.
+gfortran gives the **same** loop *zero* vectorized loops: it cannot SIMD a batch
+loop whose body has inner loops with data-dependent trip counts, pragma or not,
+so it falls back to (honest, unrolled) scalar -- hence ~2 GFLOP/s. Same source,
+5x difference, purely by compiler. Great when you know your toolchain; risky as
+portable code.
+
+### 3. The vec8 twist: a cross-module inlining trap
+
+The vector type *looks* like a clear loser -- until you notice **why**. Built the
+naive way (vec8 operators in their own module, no LTO), it runs at ~2 GFLOP/s on
+*both* compilers. That is not the cost of the abstraction; it is the compiler
+failing to inline the operators across the module boundary, leaving a real
+function call per `+`/`*`. Fix the inlining and it collapses:
+
+| vtype dgeqrf 64×64 | gfortran | ifx |
+|--------------------|---------:|----:|
+| separate module, **no** LTO | 2.3 | 2.4 |
+| separate module, **`-flto`** (default here) | **8.3** | **9.0** |
+| same file / one translation unit, no LTO | 6.8 | — |
+
+So the whole `~4x` deficit was the module split, not the `vec8` type. With `-flto`
+(or `-ipo` on `ifx`, or simply compiling the operators in the same translation
+unit as the kernels), the vector type joins the competitive tier -- close behind
+array/inner on gfortran, a bit further behind on `ifx`, but nowhere near the
+cliff it first appeared to sit on. (`elemental` vs `pure` on the operators makes
+**no** measurable difference -- the operators are only ever called on scalars;
+the lever is inlining, and only inlining.)
+
+## Bottom line
+
+All four variants are correct to machine precision on both compilers; the rest is
+throughput.
+
+1. **`array-ops` (or the equivalent innermost `do b = 1, 8`) is the safe default.**
+   Fastest-tier on both compilers, most readable, no special flags needed.
+2. **`!$omp simd` over the batch is compiler-dependent:** near-peak on `ifx`,
+   ~5x slower than everything else on gfortran. Use it only when you control the
+   compiler.
+3. **A custom `vec8` type is viable** -- readable *and* competitive -- **but only
+   if its operators actually inline.** Keep them in the same translation unit as
+   the kernels, or build with `-flto` / `-ipo`. Without that it silently costs
+   ~4x, which is easy to misread as "the abstraction is slow."
+4. Pinning the interleave width to a compile-time constant (8 = one AVX-512
+   register) is worth ~2x over a runtime batch dimension (see git history),
+   regardless of style.
+
+Environment: single core, Intel AVX-512 (Cascade Lake), gfortran 13.3 and
+`ifx` 2026.1, all builds with `-flto`.

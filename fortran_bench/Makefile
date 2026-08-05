@@ -10,12 +10,17 @@
 
 FC = gfortran
 
+# -flto is important here: the vec8 operators live in a separate module, and
+# without link-time optimization neither compiler inlines them across the module
+# boundary -- which alone makes the vector-type variant ~4x slower (an artifact
+# of the module split, not the abstraction). -flto (ifx also accepts -ipo)
+# restores it. See README "The vec8 twist".
 ifeq ($(FC),ifx)
-  FFLAGS ?= -O3 -xHOST -qopenmp-simd
+  FFLAGS ?= -O3 -xHOST -qopenmp-simd -flto
 else
   # gfortran (default). -fopenmp-simd enables the !$omp simd directives only
   # (no threading runtime); timing uses SYSTEM_CLOCK, so this is self-contained.
-  FFLAGS ?= -O3 -march=native -funroll-loops -ffast-math -fopenmp-simd
+  FFLAGS ?= -O3 -march=native -funroll-loops -ffast-math -fopenmp-simd -flto
 endif
 
 OBJ = vec8_mod.o batched_qr.o bench.o
@@ -35,4 +40,4 @@ run: bench
 	./bench
 
 clean:
-	rm -f *.o *.mod bench
+	rm -f *.o *.mod *.optrpt bench

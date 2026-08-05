@@ -24,9 +24,11 @@ module vec8_mod
       real(dp) :: v(8)
    end type vec8
 
-   ! Elementwise arithmetic. All ELEMENTAL, so they also apply over arrays of
-   ! vec8 and broadcast a scalar vec8 against a vec8 array -- exactly how a
-   ! `type(vec8) :: A(m,n)` reads in the kernels.
+   ! Lane-wise arithmetic on one register (VW lanes). These are plain PURE
+   ! functions on scalar vec8 operands -- the kernels only ever combine scalar
+   ! registers, so they need no elemental array-broadcast machinery. (elemental
+   ! vs pure made no measurable performance difference; what matters is that the
+   ! operators inline -- build with -flto or keep them in the kernels' TU.)
    interface operator(+)
       module procedure vv_add
    end interface
@@ -45,32 +47,32 @@ module vec8_mod
 
 contains
 
-   elemental function vv_add(a, b) result(c)
+   pure function vv_add(a, b) result(c)
       type(vec8), intent(in) :: a, b
       type(vec8) :: c
       c%v = a%v + b%v
    end function
 
-   elemental function vv_sub(a, b) result(c)
+   pure function vv_sub(a, b) result(c)
       type(vec8), intent(in) :: a, b
       type(vec8) :: c
       c%v = a%v - b%v
    end function
 
-   elemental function v_neg(a) result(c)
+   pure function v_neg(a) result(c)
       type(vec8), intent(in) :: a
       type(vec8) :: c
       c%v = -a%v
    end function
 
-   elemental function vv_mul(a, b) result(c)
+   pure function vv_mul(a, b) result(c)
       type(vec8), intent(in) :: a, b
       type(vec8) :: c
       c%v = a%v*b%v
    end function
 
    !> vec8 * scalar
-   elemental function vs_mul(a, s) result(c)
+   pure function vs_mul(a, s) result(c)
       type(vec8), intent(in) :: a
       real(dp), intent(in) :: s
       type(vec8) :: c
@@ -78,21 +80,21 @@ contains
    end function
 
    !> scalar * vec8
-   elemental function sv_mul(s, a) result(c)
+   pure function sv_mul(s, a) result(c)
       real(dp), intent(in) :: s
       type(vec8), intent(in) :: a
       type(vec8) :: c
       c%v = s*a%v
    end function
 
-   elemental function vv_div(a, b) result(c)
+   pure function vv_div(a, b) result(c)
       type(vec8), intent(in) :: a, b
       type(vec8) :: c
       c%v = a%v/b%v
    end function
 
    !> Lane-wise sqrt (lowers to a single vsqrtpd).
-   elemental function vsqrt(a) result(c)
+   pure function vsqrt(a) result(c)
       type(vec8), intent(in) :: a
       type(vec8) :: c
       c%v = sqrt(a%v)
@@ -109,7 +111,7 @@ contains
    end function
 
    !> Broadcast a scalar into every lane.
-   elemental function splat(s) result(c)
+   pure function splat(s) result(c)
       real(dp), intent(in) :: s
       type(vec8) :: c
       c%v = s

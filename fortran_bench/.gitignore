@@ -1,2 +1,3 @@
-# built executable (objects/mods already ignored at repo root)
+# built executable + reports (objects/mods already ignored at repo root)
 bench
+*.optrpt
