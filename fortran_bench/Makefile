@@ -16,14 +16,14 @@ else
   FFLAGS ?= -O3 -march=native -funroll-loops -ffast-math -fopenmp
 endif
 
-OBJ = dvec_mod.o batched_qr.o bench.o
+OBJ = vec8_mod.o batched_qr.o bench.o
 
 bench: $(OBJ)
 	$(FC) $(FFLAGS) -o $@ $(OBJ)
 
 # module dependency order
-batched_qr.o: dvec_mod.o
-bench.o: batched_qr.o dvec_mod.o
+batched_qr.o: vec8_mod.o
+bench.o: batched_qr.o vec8_mod.o
 
 %.o: %.f90
 	$(FC) $(FFLAGS) -c $<
