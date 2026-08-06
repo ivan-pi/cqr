@@ -1,0 +1,90 @@
+site_name: cqr
+site_description: >-
+  Batched QR, Cholesky, and triangular solve for many small matrices in Intel
+  MKL's Compact (interleaved) format — portable, SIMD-vectorized kernels behind
+  an MKL-style API.
+site_url: https://ivan-pi.github.io/cqr/
+site_author: cqr contributors
+
+repo_name: ivan-pi/cqr
+repo_url: https://github.com/ivan-pi/cqr
+copyright: Copyright &copy; cqr contributors — Apache-2.0
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - User guide: guide.md
+  - API reference: reference.md
+  - Design notes:
+      - Overview: design/index.md
+      - geqrf — QR factorization: design/geqrf.md
+      - ormqr — apply Q: design/ormqr.md
+      - potrf — Cholesky: design/potrf.md
+      - trsm — triangular solve: design/trsm.md
+  - Download: download.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  # Publish the repo-root design documents into the site without duplicating
+  # them: docs/design/*.md pull the source files in with `--8<--`. base_path is
+  # the repo root (where this config lives and where mkdocs is invoked).
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  # The ormqr design doc uses $...$ math; render it with MathJax.
+  - pymdownx.arithmatex:
+      generic: true
+
+plugins:
+  - search
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ivan-pi/cqr
