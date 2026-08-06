@@ -6,11 +6,12 @@ set output 'figures/speedup_x86.pdf'
 
 set title "Speedup over per-matrix LAPACK (x86, AVX-512)"
 set logscale x
+set logscale y
 set xlabel "matrix order {/:Italic n}"
-set ylabel "speedup ({/:Italic x})"
+set ylabel "speedup ({/:Italic x}, log scale)"
 set xrange [7:560]
-set yrange [0.8:5]
-set key top right
+set yrange [0.1:8]
+set key bottom left
 
 plot \
   1.0 with lines ls 9 title 'parity', \

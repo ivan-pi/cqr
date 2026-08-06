@@ -414,14 +414,16 @@ Not supported     & complex (\code{c},\code{z}); column pivoting; underflow/over
 specifications and confirm the details match the runs that produce the data.}
 
 \paragraph{Machines.}
-\textbf{x86:} \draftnote{CPU model, base/all-core clock, cores used, L2/L3, MKL
-version, GCC/Clang version and flags (e.g.\ \code{-O3 -march=native}).}
+\textbf{x86 (provisional):} an AVX-512 Xeon (VNNI-capable) at 2.8\,GHz, 4 vCPUs
+on a shared virtual machine; GCC~13.3 with \code{-O3 -march=native}; Intel MKL
+(Ubuntu \code{libmkl}). \draftnote{shared, non-pinned VM --- provisional only;
+replace with the empty pinned node's specs and re-run.}
 \textbf{Arm:} \draftnote{AArch64 CPU, SVE vector length, cores, ArmPL version,
 compiler and flags.}
 
 \paragraph{Workload.}
-Each data point factors a pool of \draftnote{$n_m$ (e.g.\ 512)} random,
-well-conditioned square matrices of a fixed order $n$, in double precision. The
+Each data point factors a pool of $512$ random, well-conditioned square matrices
+of a fixed order $n$, in double precision. The
 size list spans the target range and deliberately mixes powers of two with the
 non-power stencil sizes $30,45,60,105,168$ (Section~\ref{sec:apps}) so the
 remainder staircase is visible: $\{8,16,24,30,32,45,48,60,64,96,105,128,168,170,256,384,500\}$.
@@ -429,7 +431,8 @@ remainder staircase is visible: $\{8,16,24,30,32,45,48,60,64,96,105,128,168,170,
 \paragraph{What is timed.}
 The pool is packed into compact form \emph{once}, up front; only the
 factorization is timed, and the destroyed input is restored (untimed) before each
-pass. Reported times are the best of \draftnote{$r$} passes. The two compact
+pass. Timing uses Google Benchmark: a warm-up, then $10$ repetitions per point,
+reported as the median. The two compact
 paths (\cqr{}, vendor) are driven from an outer parallel loop over packs --- the
 intended usage --- with the vendor library's own threading pinned to one thread;
 the per-matrix LAPACK baseline parallelizes over matrices the same way. This
@@ -447,13 +450,15 @@ peak, measured with LIKWID~\cite{likwid2010} on the same node and core count as
 the runs (the \code{likwid-bench} peak-flops kernels; the kernel's achieved rate
 can also be read back with \code{likwid-perfctr -g FLOPS\_DP}). Reading the
 achieved rate against that ceiling is a roofline view~\cite{roofline2009} of the
-factorization. \draftnote{record the LIKWID kernel used and the measured peak for
-each machine, at the benchmark's core count.}
+factorization. For the provisional x86 machine the ceiling is $316.9$\,GFLOP/s
+(\code{likwid-bench -t peakflops\_avx512\_fma}, 4 threads, ${\sim}88\%$ of the
+2.8\,GHz AVX-512 FMA theoretical peak). \draftnote{measure the Arm peak, and
+re-measure x86 on the pinned node at the run's core count.}
 
 \paragraph{Reproducibility.}
-The \cqr{} x86 numbers come from the repository's \code{bench\_geqrf\_compact}
-driver; the ArmPL numbers require the AArch64 harness described in
-Section~\ref{sec:future}. Scripts, data, and this document build with a single
+The x86 numbers come from the report's Google Benchmark collector
+(\code{report/bench}, a separate CMake project); the ArmPL numbers require the
+AArch64 harness described in Section~\ref{sec:future}. Scripts, data, and this document build with a single
 \code{make} (see the report \code{README}).
 
 % =============================================================================
@@ -461,38 +466,44 @@ Section~\ref{sec:future}. Scripts, data, and this document build with a single
 \label{sec:results}
 
 \begin{center}\fbox{\parbox{0.94\linewidth}{\centering
-\draftnote{All figures below use \textbf{synthetic placeholder data}
-(\code{report/data/*.dat}). They exist to validate the plotting pipeline and the
-narrative shape; replace them with measured runs before drawing any conclusion.
-See \code{report/data/README.md}.}}}\end{center}
+\draftnote{The x86 figures show \textbf{real measurements}, but from a shared,
+non-frequency-pinned virtual machine --- treat them as \emph{provisional} and
+re-run on the target node for the paper. The Arm figures remain \textbf{synthetic
+placeholders} pending hardware (Section~\ref{sec:future}). See
+\code{report/data/README.md}.}}}\end{center}
 
 \paragraph{Throughput on x86 (vs MKL Compact).}
 Figure~\ref{fig:tput-x86} plots throughput (matrices/s) against order for \cqr{},
-\code{mkl\_?geqrf\_compact}, and the per-matrix LAPACK loop. The expected pattern,
-and the one the project reports on its AVX-512 test machine, is that both compact
-paths dominate the per-matrix loop across the small-size range --- where
-cross-matrix SIMD is the only way to fill the vector units --- and that \cqr{}
-leads MKL at the smallest orders, the two converging as $n$ grows and per-matrix
-internal vectorization begins to pay for the vendor kernel.
-Figure~\ref{fig:speedup-x86} shows the same story as speedups over the per-matrix
-baseline, with the crossover made explicit. \draftnote{state the geometric-mean
-speedup and the crossover order once measured.}
+\code{mkl\_?geqrf\_compact}, and the per-matrix LAPACK loop;
+Figure~\ref{fig:speedup-x86} recasts it as speedups over the per-matrix baseline.
+Two effects stand out. First, the compact format's regime is the small sizes:
+both compact paths beat the per-matrix loop by a wide margin at the smallest
+orders (several-fold at $n\!\lesssim\!32$), the advantage shrinking with $n$ until,
+around $n\!\approx\!128$, per-matrix LAPACK draws level and then overtakes --- its
+internally blocked, cache-blocked \code{geqrf} scales into a regime the unblocked
+compact kernel is not meant for. This is the expected crossover, and it places the
+compact format exactly where the motivating applications live (stencils of a few
+tens up to ${\sim}150$ points). Second, \cqr{} matches or beats MKL's own compact
+\code{geqrf} across essentially the whole range, so the open kernel costs nothing
+against the closed one on this machine. \draftnote{quote the small-$n$ speedup, the
+crossover order, and the cqr/MKL geometric mean from the pinned-node run.}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{figures/throughput_x86.pdf}
 \caption{Batched QR factorization throughput on x86 (AVX-512): \cqr{} vs MKL
 Compact vs a per-matrix LAPACK loop, over the target size range.
-\emph{Placeholder data.}}
+\emph{Measured on a shared VM (provisional).}}
 \label{fig:tput-x86}
 \end{figure}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{figures/speedup_x86.pdf}
-\caption{Speedup over the per-matrix LAPACK baseline on x86. The batched
-advantage is largest at the smallest orders and narrows toward the parity line as
-$n$ grows. \emph{Placeholder data.}}
+\caption{Speedup over the per-matrix LAPACK baseline on x86 (log scale; dashed
+line is parity). The compact paths win at small orders and cross below parity
+near $n\!\approx\!128$, where blocked per-matrix LAPACK takes over; \cqr{} stays
+at or above MKL Compact throughout. \emph{Measured on a shared VM (provisional).}}
 \label{fig:speedup-x86}
 \end{figure}
 
@@ -517,22 +528,23 @@ the table. Figures~\ref{fig:gflops-x86} and~\ref{fig:gflops-arm} therefore plot
 the achieved rate (GFLOP/s) of all three drivers --- \cqr{}, the vendor compact
 kernel, and the per-matrix LAPACK loop --- against the machine's
 double-precision compute ceiling measured with LIKWID~\cite{likwid2010}. Three
-things to read off them. First, how far every driver sits below the ceiling:
-these are small, unblocked, latency- and memory-bound factorizations, so a large
-gap to the FMA peak is expected and is shared by all three --- the interesting
-question is relative standing, not absolute peak fraction. Second, the compact
-paths' advantage over the per-matrix loop at equal $n$, now in absolute units.
-Third, the gentle staircase on the \cqr{} curve, dipping at orders that are not
-multiples of the interleave width --- the remainder effect of
-Section~\ref{sec:cqr}, and the reason the size list includes the odd stencil
-sizes. The rate also climbs and saturates as $n$ grows, as the vector units fill.
+things to read off them. First, the compact paths lead in absolute GFLOP/s at
+the small orders but plateau early: the unblocked kernel is latency- and
+memory-bound and never approaches the FMA peak. Second, per-matrix LAPACK does
+the opposite --- low at small $n$, then climbing steeply as blocking and cache
+reuse engage, overtaking the compact paths and running several times closer to
+the ceiling at the largest orders; the throughput crossover is, in absolute
+units, this gap opening. Third, the gentle staircase on the \cqr{} curve, dipping
+at orders that are not multiples of the interleave width --- the remainder effect
+of Section~\ref{sec:cqr}, and the reason the size list includes the odd stencil
+sizes.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{figures/gflops_x86.pdf}
 \caption{Achieved rate (GFLOP/s) of \cqr{}, MKL Compact, and per-matrix LAPACK
 on x86 (AVX-512), against the LIKWID-measured double-precision peak.
-\emph{Placeholder data; placeholder roofline.}}
+\emph{Rates measured on a shared VM (provisional); roofline from LIKWID.}}
 \label{fig:gflops-x86}
 \end{figure}
 

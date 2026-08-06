@@ -92,22 +92,23 @@ template <typename T> struct aligned_allocator {
 template <typename T> using aligned_vector = std::vector<T, aligned_allocator<T>>;
 
 /* A pool of `nmat` dense column-major m x n matrices, well conditioned
- * (diagonal-boosted), fixed seed so every run factors the identical batch. */
-struct Pool {
+ * (diagonal-boosted), fixed seed so every run factors the identical batch.
+ * Templated on the scalar type so it serves both float and double precision. */
+template <typename T> struct Pool {
     int m, n, nmat;
-    aligned_vector<double> a;
+    aligned_vector<T> a;
 
     Pool(int m_, int n_, int nmat_)
         : m(m_), n(n_), nmat(nmat_), a((size_t)nmat_ * m_ * n_)
     {
-        std::mt19937_64 rng(2025);
-        std::uniform_real_distribution<double> dist(-1.0, 1.0);
+        std::mt19937_64 rng(2026);
+        std::uniform_real_distribution<T> dist(-1.0, 1.0);
         for (int v = 0; v < nmat; ++v) {
-            double *A = a.data() + (size_t)v * m * n;
+            T *A = a.data() + (size_t)v * m * n;
             for (int i = 0; i < m * n; ++i)
                 A[i] = dist(rng);
             for (int i = 0; i < std::min(m, n); ++i)
-                A[i + (size_t)i * m] += 2.0 * n;
+                A[i + (size_t)i * m] += T(2 * n);
         }
     }
 };
@@ -151,7 +152,7 @@ void factor_unbatched(double *a, int m, int n, int nmat)
 
 /* Elementwise (H, tau) error of the cqr compact path vs per-matrix LAPACK,
  * scaled by the matrix L1 norm. Untimed correctness gate (see the example). */
-double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
+double factor_error(const Pool<double> &P, MKL_COMPACT_PACK fmt, int V)
 {
     const int m = P.m, n = P.n, nmat = P.nmat, k = std::min(m, n);
     const size_t sA = (size_t)m * n;
@@ -216,7 +217,7 @@ void BM_geqrf(benchmark::State &state)
     const int V = vlen_for_format<double>(fmt);
     const int ngroups = (nmat + V - 1) / V;
 
-    Pool P(m, n, nmat);
+    Pool<double> P(m, n, nmat);
 
     if constexpr (I == Impl::LAPACK) {
         aligned_vector<double> work = P.a; /* standard-layout working copy */

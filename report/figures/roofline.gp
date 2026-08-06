@@ -16,5 +16,9 @@
 #   likwid-perfctr -C 0-<ncores-1> -g FLOPS_DP ./bench_geqrf_collect ...
 #
 # Units: GFLOP/s (aggregate over the cores used).
-roof_x86 = 120.0   # PLACEHOLDER -- LIKWID DP peak, x86 node
+# x86 value below is a real measurement on the development VM:
+#   likwid-bench -t peakflops_avx512_fma -w S0:100kB:4  ->  316899 MFlops/s
+# (4 threads, ~88% of the 2.8 GHz AVX-512 FMA theoretical peak). Re-measure on
+# the final node at the run's core count.
+roof_x86 = 316.9   # MEASURED (dev VM, 4 threads); GFLOP/s
 roof_arm = 90.0    # PLACEHOLDER -- LIKWID DP peak, Arm node
