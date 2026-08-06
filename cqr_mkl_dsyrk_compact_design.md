@@ -87,23 +87,26 @@ storage `layout`, `format`, and the same `uplo`/`trans`. The batch is processed
 one *pack* (group of `V` interleaved matrices) at a time; `V` is derived from
 `format`.
 
-**Relationship to MKL and ArmPL.** The behavior captured here is the intersection
-of the two production batched rank-k updates, expressed through MKL's compact
-interface:
+**Relationship to MKL and ArmPL.** Neither production interleave-batch library
+provides a symmetric rank-k update; both offer only the general batched matrix
+multiply, so a batched `syrk` today must be formed through that general multiply,
+forgoing the symmetry. `cqr_mkl_?syrk_compact` supplies the missing
+specialization, expressed through MKL's compact interface:
 
 * **Intel MKL** exposes the rank-k update only as the general
   `mkl_?gemm_compact` (there is no `mkl_?syrk_compact`); `cqr_mkl_?syrk_compact`
   adds the symmetry-exploiting specialization over the same Compact
   (interleaved) format, selected by an opaque `MKL_COMPACT_PACK`, with the BLAS
   `?syrk` parameter set (`uplo`, `trans`, `n`, `k`, `alpha`, `beta`).
-* **Arm Performance Libraries** provide `armpl_?syrk_interleave_batch` -- the same
-  mathematical operation over Arm's interleave-batch format, with the interleaving
-  exposed explicitly through `ninter`/`nbatch` and arbitrary strides. As with the
-  other cqr routines, this API keeps MKL's abstraction instead, hiding the
-  interleave width and strides behind `MKL_COMPACT_PACK` + `MKL_LAYOUT` + the
-  compact leading dimensions, for symmetry with MKL's native compact ecosystem.
-  ArmPL's real interface has no conjugate transpose; neither do the real types
-  here.
+* **Arm Performance Libraries** likewise offer the general batched multiply
+  (`armpl_?gemm_interleave_batch`) but no interleave-batch `syrk`, so the
+  symmetric update is unavailable there too and would have to be formed with the
+  general `gemm`. Where ArmPL's interleave-batch API exposes the layout
+  explicitly through `ninter`/`nbatch` and arbitrary strides, this routine keeps
+  MKL's abstraction instead, hiding the interleave width and strides behind
+  `MKL_COMPACT_PACK` + `MKL_LAYOUT` + the compact leading dimensions, for symmetry
+  with MKL's native compact ecosystem. ArmPL's real `gemm` interface has no
+  conjugate transpose; neither do the real types here.
 
 ## 4. Input Parameters
 
