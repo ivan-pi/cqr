@@ -191,10 +191,8 @@ int suiteA(bool rowmajor, bool lower, bool trans, int nm, int n, int k, T alpha,
     const size_t sA = (size_t)Arows * Acols, sC = (size_t)n * n;
 
     std::vector<T> A(nm * sA), C(nm * sC), Cref(nm * sC), Cout(nm * sC);
-    for (auto &x : A)
-        x = frand<T>();
-    for (auto &x : C)
-        x = frand<T>();
+    std::generate(A.begin(), A.end(), frand<T>);
+    std::generate(C.begin(), C.end(), frand<T>);
     Cref = C;
     for (int v = 0; v < nm; ++v)
         syrk(cl, cu, ctr, n, k, alpha, A.data() + v * sA, ldA, beta, Cref.data() + v * sC,
@@ -254,10 +252,8 @@ int suiteB(bool rowmajor, bool lower, bool trans, int nm, int n, int k, T alpha,
     const size_t sA = (size_t)Arows * Acols, sC = (size_t)n * n;
 
     std::vector<T> A(nm * sA), C(nm * sC);
-    for (auto &x : A)
-        x = frand<T>();
-    for (auto &x : C)
-        x = frand<T>();
+    std::generate(A.begin(), A.end(), frand<T>);
+    std::generate(C.begin(), C.end(), frand<T>);
 
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Cp = batch_ptrs<const T>(C.data(), nm, sC);
@@ -309,8 +305,8 @@ int suiteC(int nm, int m, int n)
 
     const size_t sA = (size_t)m * n, sG = (size_t)n * n;
     std::vector<double> A(nm * sA);
-    for (auto &x : A)
-        x = frand<double>(); /* tall random A (m >= n) is well-conditioned */
+    /* tall random A (m >= n) is well-conditioned */
+    std::generate(A.begin(), A.end(), frand<double>);
 
     auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
     auto a_buf =
@@ -403,12 +399,10 @@ template <typename T> int run_precision()
     for (bool rowmajor : {false, true})
         for (bool lower : {false, true})
             for (bool trans : {false, true})
-                for (auto &sh : shapes)
-                    for (auto &co : coeffs) {
-                        fails += suiteA<T>(rowmajor, lower, trans, sh[0], sh[1], sh[2],
-                                           co[0], co[1]);
-                        fails += suiteB<T>(rowmajor, lower, trans, sh[0], sh[1], sh[2],
-                                           co[0], co[1]);
+                for (auto &[nm, n, k] : shapes)
+                    for (auto &[alpha, beta] : coeffs) {
+                        fails += suiteA<T>(rowmajor, lower, trans, nm, n, k, alpha, beta);
+                        fails += suiteB<T>(rowmajor, lower, trans, nm, n, k, alpha, beta);
                     }
     return fails;
 }
