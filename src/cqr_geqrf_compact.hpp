@@ -36,7 +36,7 @@
 #ifndef CQR_GEQRF_COMPACT_HPP
 #define CQR_GEQRF_COMPACT_HPP
 
-#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
+#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, make_const_view, vsqrt */
 
 #include <cstddef>
 #include <cstdint>
@@ -67,8 +67,7 @@ template <typename T, int V> using mask_t = typename pack<int_bits_t<T>, V>::typ
  * argument/return ABI, which GCC and Clang (rightly) flag via -Wpsabi; a
  * reference is just a pointer, so there is no such boundary -- and once inlined
  * the codegen is identical -- keeping the build warning-clean with no compiler
- * flag. Results are written through an out-parameter (named first). vsqrt<T,V>
- * (the pivot/column-norm sqrt) is shared machinery and lives in cqr_compact.hpp. */
+ * flag. Results are written through an out-parameter (named first). */
 
 /* r := mask ? a : b, lane-wise. Mask lanes are all-ones (true) or zero (false),
  * as produced by the GNU vector relational operators. The blend runs on the

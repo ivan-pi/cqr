@@ -1,17 +1,15 @@
 #ifndef CQR_COMPACT_H
 #define CQR_COMPACT_H
 
-/* Portable C API (FFI-stable) for the templated C++ kernels in
- * cqr_geqrf_compact.hpp, cqr_potrf_compact.hpp and cqr_compact.hpp. Batched QR
- * and Cholesky of matrices stored in MKL Compact (interleaved) format, with an
- * explicit interleave width V and no MKL dependency -- the portable form of
- * mkl_?geqrf_compact / mkl_?potrf_compact / a mkl_?ormqr_compact:
+/* Portable, FFI-stable C API for this project's batched QR and Cholesky
+ * kernels: dense factorizations of many small matrices stored in the compact
+ * (interleaved) format, with an explicit interleave width V.
  *
  *   dgeqrf_compact / sgeqrf_compact  -- QR factorization  A = Q R
  *   dormqr_compact / sormqr_compact  -- apply Q or Q^T from the left, B := op(Q) B
- *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T / U^T U
+ *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T or A = U^T U
  *
- * Compact layout (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V:
+ * Compact layout; group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncol*V + (j*ldap + i)*V + v ]   (column-major)
  *   tau_v(kk) = taup[ g*k*V         +  kk*V          + v ]
  *   B_v(i,j)  = bp [ g*ldbp*nrhs*V  + (j*ldbp + i)*V + v ]
@@ -19,20 +17,20 @@
  * (ldap, k) reflector batch, exactly as LAPACK ?ormqr's A(LDA,K)). Row-major
  * ?geqrf swaps the in-matrix index roles (i -> i*ldap + j).
  *
- * V is the interleave width: 2, 4, 8, or 16 elements (MKL: SSE d=2/s=4,
- * AVX d=4/s=8, AVX512 d=8/s=16; any of these also work on NEON/SVE as unrolled
- * bursts). Pointer arguments are not inspected in release builds (LAPACK
- * convention). An empty problem is a valid no-op returning 0. The routines never
- * abort the calling process.
+ * V is the interleave width: 2, 4, 8, or 16 elements (SSE d=2/s=4, AVX d=4/s=8,
+ * AVX512 d=8/s=16; any of these also work on NEON/SVE as unrolled bursts).
+ * Pointer arguments are not inspected in release builds (LAPACK convention). An
+ * empty problem is a valid no-op returning 0. The routines never abort the
+ * calling process.
  *
  * Alignment: the compact buffers may start at any address aligned to the scalar
  * type (the SIMD element carries relaxed alignment, so loads and stores never
  * fault); results are identical regardless. For full speed, align each buffer's
  * base to the pack width in bytes -- 64 covers every format (V*sizeof(T) <= 64),
- * e.g. mkl_malloc(bytes, 64), posix_memalign, or std::aligned_alloc. Because
- * every element sits at a pack-multiple offset, a pack-aligned base keeps every
- * vector access on one cache line; a non-pack-aligned base splits each access
- * across two lines, costing up to ~40% on small, cache-resident sizes.
+ * e.g. posix_memalign or std::aligned_alloc. Because every element sits at a
+ * pack-multiple offset, a pack-aligned base keeps every vector access on one
+ * cache line; a non-pack-aligned base splits each access across two lines,
+ * costing up to ~40% on small, cache-resident sizes.
  *
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
  */
@@ -60,8 +58,8 @@ int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, float *taup, 
                    int nm);
 
 /* Apply Q (or Q^T) of a compact QR to a compact RHS block from the left,
- * B := op(Q) B -- the missing mkl_?ormqr_compact (side='L') between
- * mkl_?geqrf_compact and mkl_?trsm_compact.
+ * B := op(Q) B -- the reflector-application (side='L') step between a compact
+ * QR factorization (?geqrf_compact) and a triangular solve.
  *   trans    'T' (Q^T B, the solve case) or 'N' (Q B)
  *   m, nrhs  rows of B (and A); columns of B
  *   k        number of reflectors (min(m,n) of the factorization)
