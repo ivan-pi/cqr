@@ -155,9 +155,8 @@ is the only thing that would diverge per lane across a pack. Both vendors'
 interleave-batch Cholesky drop it: MKL leaves `info` "reserved for future use"
 (its compact routines "skip error checking for performance reasons"), and ArmPL
 "does not check that the input matrices are SPD; no error will be returned if any
-`A_i` are not SPD." This routine does the same -- it computes `d = sqrt(A(j,j))`
-unconditionally -- and every claim below that the SPD check is omitted refers back
-here.
+`A_i` are not SPD." This routine does the same: it computes `d = sqrt(A(j,j))`
+unconditionally.
 
 The consequence is graceful "garbage in, garbage out": a genuinely non-SPD lane
 has some pivot `A(j,j) <= 0`, so `sqrt` yields `NaN` (or the following `1/d`
@@ -191,8 +190,8 @@ When `nm` is not a multiple of `V`, `mkl_?gepack_compact` fills the unused slots
 of the last pack with identity matrices. The Cholesky factor of the identity is
 the identity (`L = I`, all pivots `1`, no off-diagonal fill), so the padded lanes
 compute a mathematical no-op and the kernel runs the whole final pack unmasked at
-full width without corrupting real data. Because the pivot path is unconditional
-(section 6.2), the identity flows through it with no lane mask -- unlike `geqrf`,
+full width without corrupting real data. Because the pivot path is
+unconditional, the identity flows through it with no lane mask -- unlike `geqrf`,
 whose `larfg` needs a mask to neutralize padded columns.
 
 ### 6.5 No argument checking (Compact convention)
@@ -211,7 +210,7 @@ element (the SPD Cholesky factor with positive diagonal is unique, so agreement
 is expected far below the backward-error bound -- see 7.1). Three limits are the
 deliberate scope of this routine:
 
-* **Positive definiteness is assumed, not enforced** (section 6.2). Non-SPD and
+* **Positive definiteness is assumed, not enforced.** Non-SPD and
   borderline-semidefinite inputs -- where rounding can drive a true-zero pivot
   slightly negative -- poison their lane with `NaN`/`Inf` instead of taking a
   safeguarded path or reporting `info = j`.
