@@ -254,12 +254,11 @@ CTest-registered.
 `test_cqr_trsm_compact.cpp` validates the templated kernel directly against a
 scalar `?trsm` (the same algorithm, one matrix at a time) over the full
 `side x uplo x transa x diag` matrix, across precisions (FP32/FP64), interleave
-widths, and padded final packs, column-major (the tuned path). The scalar
-reference is itself cross-checked against `cblas_?trsm` so it is a trustworthy
-oracle. The row-dot kernels run the identical operation sequence one lane per
-matrix and so match the reference to the last bit (relative error `0`); the
-column-axpy no-transpose kernel accumulates in a different (but equally
-backward-stable) order and agrees to working precision (~`1e-16`).
+widths, and padded final packs, column-major. The row-dot kernels run the
+identical operation sequence one lane per matrix and so match the reference to
+the last bit (relative error `0`); the column-axpy no-transpose kernel
+accumulates in a different (but equally backward-stable) order and agrees to
+working precision (~`1e-16`).
 Two gates, both at a generous multiple of `eps` on the diagonal-boosted (well
 conditioned) factors: the relative forward error of `X` against the reference
 solve, and the solve's own residual `||op(A) X - alpha B||` formed with an

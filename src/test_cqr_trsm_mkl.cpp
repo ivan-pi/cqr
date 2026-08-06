@@ -8,7 +8,7 @@
  *   same packed batch and the compact results are compared elementwise (relative,
  *   working precision).
  * Suite 2 (design doc section 7.3) -- end-to-end AX = B with no MKL compute
- *   kernel: the open pipeline mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T')
+ *   kernel: the open pipeline cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T')
  *   -> cqr_mkl_dtrsm_compact must recover a known X (gates forward error and
  *   residual). See cqr_mkl_dtrsm_compact_design.md.
  *
