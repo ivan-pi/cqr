@@ -28,33 +28,40 @@ vectorized `mkl_?geqrf_compact`. Status vs. its design document:
 - **Deferred:** a comparison benchmark against the open-source `batmat` project's
   `geqrf` (same interleaved format) is left for a future change.
 
-## potrf (`cqr_mkl_dpotrf_compact`) -- design only
+## potrf (`cqr_mkl_dpotrf_compact`)
 
 The compact Cholesky *factorization* (`cqr_mkl_dpotrf_compact_design.md`): a
 portable, vectorized `mkl_?potrf_compact` for symmetric positive-definite
-batches. **Status: design document only; no code yet.** The document specifies:
+batches. Status vs. its design document:
 
-- **API (design sections 2-5):** the MKL-style `cqr_mkl_?potrf_compact`
-  (`MKL_UPLO` + `MKL_LAYOUT` + `MKL_COMPACT_PACK`, no `work`/`lwork`, scalar
-  `info`) and a portable `?potrf_compact` C API (`char` layout/uplo, explicit
-  `V`, LAPACK-style `info = -j` validation), both FP64 + FP32.
-- **Algorithm (section 6):** vectorized unblocked `potf2` run `V` matrices at a
-  time, right-looking with a `JB = 4` register-blocked rank-1 trailing update,
-  reusing the `pack<T,V>` / `vsqrt<T,V>` / `BatchView` machinery from `geqrf`.
-  Column-major lower is the tuned contiguous path (row-major upper folds onto it
-  by transpose duality); the other two `(layout, uplo)` combinations route through
-  the stride-generalized kernel.
-- **Validation plan (section 7):** BLAS-free test vs a scalar `potf2` reference;
-  MKL/LAPACK test gating the reconstruction residual (`20 n eps`), the untouched
-  triangle, and -- since the SPD factor is unique -- an elementwise gate vs
-  `LAPACKE_?potrf`; cross-check vs `mkl_?potrf_compact`; and an end-to-end SPD
-  solve (`potrf` + two `mkl_?trsm_compact`).
-- **Scoped out (section 6.6):** no positive-definiteness test (`NaN`/`Inf` in a
-  bad lane instead of `info = j`, mirroring MKL's reserved `info`), no
-  overflow/underflow-safe scaling, no pivoting, and complex (`c`/`z`) Hermitian
-  variants -- consistent with the QR routines.
-- **Not yet done:** the kernel, dispatchers, tests, and `CMakeLists` wiring
-  (suggested file layout in design section 8.2).
+- **Implemented (design sections 6-8):** the vectorized unblocked `potf2` with a
+  branch-free unconditional-`sqrt` pivot (FP64 + FP32) and a `JB = 4`
+  register-blocked rank-1 trailing update, the portable C API
+  `dpotrf_compact`/`spotrf_compact` (LAPACK-style `info = -j` validation) and the
+  MKL-style `cqr_mkl_?potrf_compact` (no checking, scalar `info`, no `work`).
+  Column-major lower is the tuned contiguous path; row-major upper folds onto it
+  by transpose duality, and the other two `(layout, uplo)` combinations route
+  through the stride-generalized kernel. The shared `vsqrt<T,V>` helper now lives
+  in `cqr_compact.hpp` alongside `pack`/`BatchView`.
+- **Validated (design section 7):** a BLAS-free test vs. a scalar `potf2`
+  reference (both `uplo`, all layouts, padded final packs, and a non-SPD
+  lane-isolation case gating that a poisoned lane never contaminates its
+  siblings), and an MKL/LAPACK test gating the reconstruction residual
+  (`20 n eps`), the untouched triangle (bit-for-bit), and -- since the SPD factor
+  is unique -- the elementwise factor vs. `LAPACKE_dpotrf` (`20 n eps`),
+  cross-checking vs. `mkl_dpotrf_compact` (both layouts, both `uplo`; observed
+  bit-exact), and closing the SPD `AX = B` solve (`potrf` + two
+  `mkl_dtrsm_compact`). All match LAPACK/MKL to machine precision.
+- **Known gaps / scoped out (design section 6.6):** positive-definiteness is
+  assumed, not enforced (a non-SPD lane poisons itself with `NaN`/`Inf` instead
+  of `info = j`, mirroring MKL's reserved `info`); no overflow/underflow-safe
+  scaling; no pivoting; and the strided (column-major upper / row-major lower)
+  inner sweep is correctness-first, not separately SIMD-tuned. Blocked
+  (`syrk`/`trsm`) factorization is intentionally not used at the target sizes.
+  Complex (`c`/`z`) Hermitian variants are out of scope, as for the QR routines.
+- **Deferred:** a throughput benchmark (`cqr_mkl_?potrf_compact` vs.
+  `mkl_?potrf_compact` vs. per-matrix `LAPACKE_?potrf`), mirroring
+  `bench_geqrf_compact`, is left for a future change.
 
 ## Known gaps
 

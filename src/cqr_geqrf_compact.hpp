@@ -67,17 +67,8 @@ template <typename T, int V> using mask_t = typename pack<int_bits_t<T>, V>::typ
  * argument/return ABI, which GCC and Clang (rightly) flag via -Wpsabi; a
  * reference is just a pointer, so there is no such boundary -- and once inlined
  * the codegen is identical -- keeping the build warning-clean with no compiler
- * flag. Results are written through an out-parameter (named first). */
-
-/* r := sqrt(x), lane-wise. The short loop lowers to one vsqrt* on GCC/Clang; it
- * runs once per column, negligible next to the O(n^2)/O(n^3) vector arithmetic. */
-template <typename T, int V>
-inline void vsqrt(typename pack<T, V>::type &r,
-                  const typename pack<T, V>::type &x) noexcept
-{
-    for (int v = 0; v < V; ++v)
-        r[v] = std::sqrt(x[v]);
-}
+ * flag. Results are written through an out-parameter (named first). vsqrt<T,V>
+ * (the pivot/column-norm sqrt) is shared machinery and lives in cqr_compact.hpp. */
 
 /* r := mask ? a : b, lane-wise. Mask lanes are all-ones (true) or zero (false),
  * as produced by the GNU vector relational operators. The blend runs on the

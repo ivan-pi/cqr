@@ -2,12 +2,14 @@
 #define CQR_COMPACT_H
 
 /* Portable C API (FFI-stable) for the templated C++ kernels in
- * cqr_geqrf_compact.hpp and cqr_compact.hpp. Batched QR of matrices stored in
- * MKL Compact (interleaved) format, with an explicit interleave width V and no
- * MKL dependency -- the portable form of mkl_?geqrf_compact / a mkl_?ormqr_compact:
+ * cqr_geqrf_compact.hpp, cqr_potrf_compact.hpp and cqr_compact.hpp. Batched QR
+ * and Cholesky of matrices stored in MKL Compact (interleaved) format, with an
+ * explicit interleave width V and no MKL dependency -- the portable form of
+ * mkl_?geqrf_compact / mkl_?potrf_compact / a mkl_?ormqr_compact:
  *
  *   dgeqrf_compact / sgeqrf_compact  -- QR factorization  A = Q R
  *   dormqr_compact / sormqr_compact  -- apply Q or Q^T from the left, B := op(Q) B
+ *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T / U^T U
  *
  * Compact layout (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncol*V + (j*ldap + i)*V + v ]   (column-major)
@@ -78,6 +80,26 @@ int dormqr_compact(char trans, int m, int nrhs, int k, const double *ap, int lda
 
 int sormqr_compact(char trans, int m, int nrhs, int k, const float *ap, int ldap,
                    const float *taup, float *bp, int ldbp, int V, int nm);
+
+/* Cholesky factorization of a batch of symmetric positive-definite n x n
+ * matrices A: A = L L^T (uplo 'L') or A = U^T U (uplo 'U'), one matrix per
+ * compact lane. On exit the named triangle of ap holds its Cholesky factor; the
+ * strictly-opposite triangle is neither referenced nor modified.
+ *   layout   'C'/'c' column-major (tuned when lower) or 'R'/'r' row-major
+ *   uplo     'L'/'l' factor/store the lower triangle L, or 'U'/'u' the upper U
+ *   n        order of each A
+ *   ap       compact A (n x n); the named triangle is overwritten with L or U
+ *   ldap     compact leading dimension (>= n)
+ *   V, nm    interleave width; total number of matrices (padded last group)
+ * Positive-definiteness is assumed, not checked: a non-SPD lane yields NaN/Inf
+ * in its factor rather than an error (see cqr_mkl_dpotrf_compact_design.md 6.2).
+ * Returns 0, or -j (LAPACK sign convention) for an illegal j-th argument:
+ *   -1 layout   -2 uplo   -3 n (<0)   -5 ldap (< max(1,n))
+ *   -6 V (not 2/4/8/16)   -7 nm (<0)
+ */
+int dpotrf_compact(char layout, char uplo, int n, double *ap, int ldap, int V, int nm);
+
+int spotrf_compact(char layout, char uplo, int n, float *ap, int ldap, int V, int nm);
 
 #ifdef __cplusplus
 }

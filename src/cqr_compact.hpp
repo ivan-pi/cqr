@@ -77,6 +77,7 @@
 
 #include <cstddef>
 #include <cassert>
+#include <cmath>
 #include <type_traits>
 
 namespace cqr {
@@ -120,6 +121,29 @@ template <typename T, int V> struct pack {
        "compiler that supports them (GCC, Clang, Intel icpx/icpc). These " \
        "attributes are available under strict -std=c++17, not only GNU mode."
 #endif
+
+/* ------------------------------------------------------------------ */
+/* Lane-wise vector helpers shared by the compact kernels.             */
+/*                                                                     */
+/* These V-wide helpers take and return their vectors by reference.    */
+/* Passing a GNU vector by value would, without -march, commit the     */
+/* base-ISA vector argument/return ABI, which GCC and Clang (rightly)  */
+/* flag via -Wpsabi; a reference is just a pointer, so there is no such */
+/* boundary -- and once inlined the codegen is identical -- keeping the */
+/* build warning-clean with no compiler flag. Results are written      */
+/* through an out-parameter (named first).                             */
+/* ------------------------------------------------------------------ */
+
+/* r := sqrt(x), lane-wise. The short loop lowers to one vsqrt* on GCC/Clang; it
+ * runs once per column, negligible next to the O(n^2)/O(n^3) vector arithmetic.
+ * Used by geqrf's larfg (column norm) and potrf's pivot. */
+template <typename T, int V>
+inline void vsqrt(typename pack<T, V>::type &r,
+                  const typename pack<T, V>::type &x) noexcept
+{
+    for (int v = 0; v < V; ++v)
+        r[v] = std::sqrt(x[v]);
+}
 
 /* ------------------------------------------------------------------ */
 /* Reflector sweep direction (internal control flag).                  */

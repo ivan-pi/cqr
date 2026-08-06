@@ -1,12 +1,14 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- batched QR for matrices in Intel MKL's Compact format.
+/* cqr_mkl_ext.h -- batched QR and Cholesky for matrices in Intel MKL's Compact
+ * format.
  *
  *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
  *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
+ *   cqr_mkl_?potrf_compact -- Cholesky factorization of an SPD Compact-format batch
  *
- * Both use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
+ * All use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
  * MKL compact ecosystem, but are backed by this project's own portable SIMD
  * kernels rather than MKL's.
  *
@@ -93,6 +95,26 @@ void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
                             MKL_INT n, MKL_INT k, const float *ap, MKL_INT ldap,
                             const float *taup, float *cp, MKL_INT ldcp, float *work,
                             MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
+
+/* Cholesky factorization of a batch of symmetric positive-definite n x n
+ * matrices in Compact format: A = L L^T (uplo = MKL_LOWER) or A = U^T U
+ * (uplo = MKL_UPPER). Drop-in for mkl_?potrf_compact (identical signature).
+ * On exit the named triangle of each ap holds its Cholesky factor; the other
+ * triangle is not referenced or modified. Unlike ?geqrf there is no workspace,
+ * so -- as in mkl_?potrf_compact -- there are no work/lwork arguments.
+ *
+ * No argument checking and no positive-definiteness test (MKL Compact
+ * convention): a non-SPD lane poisons itself with NaN/Inf rather than reporting
+ * info = j. info is a single scalar status, 0 on success; the one value it can
+ * set is dispatch-level, info = -1 for an unrecognized format (no kernel to
+ * select). See cqr_mkl_dpotrf_compact_design.md. */
+void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
+                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm);
+
+void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
+                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
                             MKL_INT nm);
 
 #ifdef __cplusplus
