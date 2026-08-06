@@ -41,6 +41,9 @@ target_link_libraries(test_cqr_ispc PRIVATE cqr_ispc_iface cqr_mkl)
 add_executable(bench_cqr_ispc bench_cqr_ispc.cpp)
 target_link_libraries(bench_cqr_ispc PRIVATE cqr_ispc_iface cqr_mkl)
 
+add_executable(bench_potrf bench_potrf.cpp)
+target_link_libraries(bench_potrf PRIVATE cqr_ispc_iface cqr_mkl)
+
 # Gang-size sweep: ISPC kernels only, no MKL.
 add_executable(bench_gang bench_gang.cpp)
 target_link_libraries(bench_gang PRIVATE cqr_ispc_iface)

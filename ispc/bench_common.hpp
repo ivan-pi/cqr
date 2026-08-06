@@ -135,6 +135,10 @@ inline double fl_trsm(int n, int r)
 {
     return 1.0 * r * n * (double)n;
 }
+inline double fl_potrf(int n) /* Cholesky ~ n^3/3 (leading term, add+mul each 1) */
+{
+    return (1.0 / 3.0) * n * n * (double)n;
+}
 
 } /* namespace bench */
 #endif

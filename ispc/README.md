@@ -79,6 +79,7 @@ ctest --test-dir build --output-on-failure     # per-kernel correctness tests
 | `bench_common.hpp` | Shared harness: pool, timer, pack/unpack, GFLOP helpers. |
 | `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
 | `bench_cqr_ispc.cpp` | The benchmark; the `native` column is the configuring CXX compiler. |
+| `bench_potrf.cpp` | ISPC Cholesky vs `mkl_dpotrf_compact` (SPD batch, both uplo). |
 | `CMakeLists.txt` | Standalone build via CMake's ISPC language (>= 3.19). |
 
 ## Correctness
@@ -178,6 +179,28 @@ At `V=8` (the native width) GCC's hand-lowered vectors edge ISPC. At `V=16` — 
 scheduling a gang *wider* than the native SIMD width is exactly what it is built
 for. So the one width MKL doesn't offer is where ISPC's model earns its keep.
 (Absolute numbers are noisy here; the crossover direction is stable across runs.)
+
+### Cholesky (`potrf`) vs MKL (`bench_potrf`)
+
+`bench_potrf` factors an SPD batch (`A = MᵀM + nI`) with `cqr_ispc_dpotrf_compact`
+and with `mkl_dpotrf_compact`, and reports the ISPC speedup over MKL (both factors
+agree to the ULP). This is the one kernel where **MKL is clearly faster** — geomean
+ISPC/MKL ≈ **0.76×** (lower, the contiguous path) and **0.72×** (upper, strided),
+and unusually stable across runs:
+
+| ISPC/MKL | n=10 | 30–40 | 60 | 100 | 150 | geomean |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| lower (contiguous) | 0.80× | **~1.0×** | 0.75× | 0.64× | 0.58× | **0.76×** |
+| upper (strided) | 0.70× | 0.83× | 0.72× | 0.70× | 0.66× | **0.72×** |
+
+The two **tie for cache-resident batches** (`n ≲ 40`, where a group of 8 packed
+matrices is ~0.1 MB) and MKL pulls away as `n` grows. The prototype is an
+**unblocked** right-looking `potf2`: it re-streams the trailing submatrix `O(n)`
+times, so once the working set spills L2 (past `n ≈ 50`) it turns memory-bound and
+ISPC plateaus at ~10 GFLOP/s while MKL — which evidently cache-blocks its `potrf` —
+keeps climbing to ~15–18. So unlike the QR kernels (unblocked ISPC/GNU matched or
+beat MKL), Cholesky is where MKL's blocking earns a clear win at scale; a blocked
+ISPC `potrf` is the way to close it. (Errors track MKL to the ULP throughout.)
 
 > **Measurement caveats — indicative only, not benchmark-grade.** Shared,
 > virtualized 4-vCPU node with **no frequency control** (governor/turbo

@@ -2,5 +2,7 @@
 build*/
 test_cqr_ispc
 bench_cqr_ispc
+bench_gang
+bench_potrf
 *.o
 cqr_ispc_generated.h
