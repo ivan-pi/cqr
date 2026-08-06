@@ -389,11 +389,234 @@ void larft_forward_compact(Int mm, Int jb, const typename pack<T, V>::type *A, I
     }
 }
 
+/* ------------------------------------------------------------------
+ * Two 2-D (4x4) register-tiled GEMM microkernels for larfb's rectangular
+ * bulk (the V2 block below the jb x jb triangular corner). Both reduce down
+ * the contiguous row axis and hold a 4x4 output tile in registers, so each
+ * loaded operand feeds 16 FMAs and the trailing matrix is streamed once per
+ * 4 columns rather than once per reflector. Sizes need not be multiples of 4
+ * (2x and 1x edge paths). These are the compact-format analogue of a packed
+ * GEMM microkernel; A-panel packing buys little here because the reduction
+ * is already contiguous (see cqr_geqrf_compact_cache_blocking.md).
+ * ------------------------------------------------------------------ */
+
+/* W(0:jb, 0:nb) += A(i0:mm, 0:jb)^T * C(i0:mm, 0:nb), reducing rows [i0, mm).
+ * A/C column-major (col stride ldap/ldc), W column-major (col stride ldw). */
+template <typename T, int V, typename Int = int>
+void larfb_tn_acc(Int jb, Int nb, Int i0, Int mm, const typename pack<T, V>::type *A,
+                  Int ldap, const typename pack<T, V>::type *C, Int ldc,
+                  typename pack<T, V>::type *W, Int ldw)
+{
+    using VT = typename pack<T, V>::type;
+    Int c = 0;
+    for (; c + 4 <= jb; c += 4) {
+        const VT *A0 = A + (std::size_t)(c + 0) * ldap,
+                 *A1 = A + (std::size_t)(c + 1) * ldap,
+                 *A2 = A + (std::size_t)(c + 2) * ldap,
+                 *A3 = A + (std::size_t)(c + 3) * ldap;
+        Int l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            const VT *C0 = C + (std::size_t)(l + 0) * ldc,
+                     *C1 = C + (std::size_t)(l + 1) * ldc,
+                     *C2 = C + (std::size_t)(l + 2) * ldc,
+                     *C3 = C + (std::size_t)(l + 3) * ldc;
+            VT w00{}, w01{}, w02{}, w03{}, w10{}, w11{}, w12{}, w13{};
+            VT w20{}, w21{}, w22{}, w23{}, w30{}, w31{}, w32{}, w33{};
+            for (Int i = i0; i < mm; ++i) {
+                const VT a0 = A0[i], a1 = A1[i], a2 = A2[i], a3 = A3[i];
+                const VT b0 = C0[i], b1 = C1[i], b2 = C2[i], b3 = C3[i];
+                w00 += a0 * b0;
+                w10 += a1 * b0;
+                w20 += a2 * b0;
+                w30 += a3 * b0;
+                w01 += a0 * b1;
+                w11 += a1 * b1;
+                w21 += a2 * b1;
+                w31 += a3 * b1;
+                w02 += a0 * b2;
+                w12 += a1 * b2;
+                w22 += a2 * b2;
+                w32 += a3 * b2;
+                w03 += a0 * b3;
+                w13 += a1 * b3;
+                w23 += a2 * b3;
+                w33 += a3 * b3;
+            }
+            VT *W0 = W + (std::size_t)(l + 0) * ldw + c,
+               *W1 = W + (std::size_t)(l + 1) * ldw + c;
+            VT *W2p = W + (std::size_t)(l + 2) * ldw + c,
+               *W3 = W + (std::size_t)(l + 3) * ldw + c;
+            W0[0] += w00;
+            W0[1] += w10;
+            W0[2] += w20;
+            W0[3] += w30;
+            W1[0] += w01;
+            W1[1] += w11;
+            W1[2] += w21;
+            W1[3] += w31;
+            W2p[0] += w02;
+            W2p[1] += w12;
+            W2p[2] += w22;
+            W2p[3] += w32;
+            W3[0] += w03;
+            W3[1] += w13;
+            W3[2] += w23;
+            W3[3] += w33;
+        }
+        for (; l < nb; ++l) { /* 4 c x 1 l */
+            const VT *Cl = C + (std::size_t)l * ldc;
+            VT w0{}, w1{}, w2{}, w3{};
+            for (Int i = i0; i < mm; ++i) {
+                const VT b = Cl[i];
+                w0 += A0[i] * b;
+                w1 += A1[i] * b;
+                w2 += A2[i] * b;
+                w3 += A3[i] * b;
+            }
+            VT *Wl = W + (std::size_t)l * ldw + c;
+            Wl[0] += w0;
+            Wl[1] += w1;
+            Wl[2] += w2;
+            Wl[3] += w3;
+        }
+    }
+    for (; c < jb; ++c) { /* 1 c x 4 l */
+        const VT *Ac = A + (std::size_t)c * ldap;
+        Int l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            const VT *C0 = C + (std::size_t)(l + 0) * ldc,
+                     *C1 = C + (std::size_t)(l + 1) * ldc,
+                     *C2 = C + (std::size_t)(l + 2) * ldc,
+                     *C3 = C + (std::size_t)(l + 3) * ldc;
+            VT w0{}, w1{}, w2{}, w3{};
+            for (Int i = i0; i < mm; ++i) {
+                const VT a = Ac[i];
+                w0 += a * C0[i];
+                w1 += a * C1[i];
+                w2 += a * C2[i];
+                w3 += a * C3[i];
+            }
+            W[(std::size_t)(l + 0) * ldw + c] += w0;
+            W[(std::size_t)(l + 1) * ldw + c] += w1;
+            W[(std::size_t)(l + 2) * ldw + c] += w2;
+            W[(std::size_t)(l + 3) * ldw + c] += w3;
+        }
+        for (; l < nb; ++l) {
+            const VT *Cl = C + (std::size_t)l * ldc;
+            VT w{};
+            for (Int i = i0; i < mm; ++i)
+                w += Ac[i] * Cl[i];
+            W[(std::size_t)l * ldw + c] += w;
+        }
+    }
+}
+
+/* C(i0:mm, 0:nb) -= A(i0:mm, 0:jb) * W2(0:jb, 0:nb), rows [i0, mm), reduce c. */
+template <typename T, int V, typename Int = int>
+void larfb_nn_sub(Int jb, Int nb, Int i0, Int mm, const typename pack<T, V>::type *A,
+                  Int ldap, const typename pack<T, V>::type *W2, Int ldw,
+                  typename pack<T, V>::type *C, Int ldc)
+{
+    using VT = typename pack<T, V>::type;
+    Int i = i0;
+    for (; i + 4 <= mm; i += 4) {
+        Int l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            VT c00{}, c01{}, c02{}, c03{}, c10{}, c11{}, c12{}, c13{};
+            VT c20{}, c21{}, c22{}, c23{}, c30{}, c31{}, c32{}, c33{};
+            for (Int c = 0; c < jb; ++c) {
+                const VT *Ac = A + (std::size_t)c * ldap + i;
+                const VT a0 = Ac[0], a1 = Ac[1], a2 = Ac[2], a3 = Ac[3];
+                const VT b0 = W2[(std::size_t)(l + 0) * ldw + c],
+                         b1 = W2[(std::size_t)(l + 1) * ldw + c],
+                         b2 = W2[(std::size_t)(l + 2) * ldw + c],
+                         b3 = W2[(std::size_t)(l + 3) * ldw + c];
+                c00 += a0 * b0;
+                c10 += a1 * b0;
+                c20 += a2 * b0;
+                c30 += a3 * b0;
+                c01 += a0 * b1;
+                c11 += a1 * b1;
+                c21 += a2 * b1;
+                c31 += a3 * b1;
+                c02 += a0 * b2;
+                c12 += a1 * b2;
+                c22 += a2 * b2;
+                c32 += a3 * b2;
+                c03 += a0 * b3;
+                c13 += a1 * b3;
+                c23 += a2 * b3;
+                c33 += a3 * b3;
+            }
+            VT *C0 = C + (std::size_t)(l + 0) * ldc + i,
+               *C1 = C + (std::size_t)(l + 1) * ldc + i;
+            VT *C2 = C + (std::size_t)(l + 2) * ldc + i,
+               *C3 = C + (std::size_t)(l + 3) * ldc + i;
+            C0[0] -= c00;
+            C0[1] -= c10;
+            C0[2] -= c20;
+            C0[3] -= c30;
+            C1[0] -= c01;
+            C1[1] -= c11;
+            C1[2] -= c21;
+            C1[3] -= c31;
+            C2[0] -= c02;
+            C2[1] -= c12;
+            C2[2] -= c22;
+            C2[3] -= c32;
+            C3[0] -= c03;
+            C3[1] -= c13;
+            C3[2] -= c23;
+            C3[3] -= c33;
+        }
+        for (; l < nb; ++l) { /* 4 i x 1 l */
+            VT s0{}, s1{}, s2{}, s3{};
+            for (Int c = 0; c < jb; ++c) {
+                const VT *Ac = A + (std::size_t)c * ldap + i;
+                const VT b = W2[(std::size_t)l * ldw + c];
+                s0 += Ac[0] * b;
+                s1 += Ac[1] * b;
+                s2 += Ac[2] * b;
+                s3 += Ac[3] * b;
+            }
+            VT *Cl = C + (std::size_t)l * ldc + i;
+            Cl[0] -= s0;
+            Cl[1] -= s1;
+            Cl[2] -= s2;
+            Cl[3] -= s3;
+        }
+    }
+    for (; i < mm; ++i) { /* 1 i x 4 l */
+        Int l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            VT s0{}, s1{}, s2{}, s3{};
+            for (Int c = 0; c < jb; ++c) {
+                const VT a = A[(std::size_t)c * ldap + i];
+                s0 += a * W2[(std::size_t)(l + 0) * ldw + c];
+                s1 += a * W2[(std::size_t)(l + 1) * ldw + c];
+                s2 += a * W2[(std::size_t)(l + 2) * ldw + c];
+                s3 += a * W2[(std::size_t)(l + 3) * ldw + c];
+            }
+            C[(std::size_t)(l + 0) * ldc + i] -= s0;
+            C[(std::size_t)(l + 1) * ldc + i] -= s1;
+            C[(std::size_t)(l + 2) * ldc + i] -= s2;
+            C[(std::size_t)(l + 3) * ldc + i] -= s3;
+        }
+        for (; l < nb; ++l) {
+            VT s{};
+            for (Int c = 0; c < jb; ++c)
+                s += A[(std::size_t)c * ldap + i] * W2[(std::size_t)l * ldw + c];
+            C[(std::size_t)l * ldc + i] -= s;
+        }
+    }
+}
+
 /* Apply C := (I - V T^T V^T) C to the trailing block C (mm x nt) from the left, V
  * the panel at A (mm x jb, unit-lower-trapezoidal), T at Tf (jb x jb upper-tri).
  * Trailing-column-tiled by NC so the workspace stays cache-resident and V is
- * reused across tiles; scratch W must hold 2*jb*NC packs (W and W2). Every inner
- * reduction runs down the contiguous (row) axis of the compact layout. */
+ * reused across tiles; scratch W must hold 2*jb*NC packs (W and W2). The jb x jb
+ * unit-lower corner (V1) is handled with small direct loops; the (mm-jb) x jb
+ * bulk (V2) goes through the 2-D register-tiled kernels above. */
 template <typename T, int V, typename Int = int>
 void larfb_forward_left_compact(Int mm, Int nt, Int jb,
                                 const typename pack<T, V>::type *A, Int ldap,
@@ -407,38 +630,18 @@ void larfb_forward_left_compact(Int mm, Int nt, Int jb,
         const Int nb = (nt - l0 < NC) ? (nt - l0) : NC;
         VT *Cb = C + (std::size_t)l0 * ldc; /* C(:, l0 : l0+nb) */
 
-        /* W = V^T Cb :  W(c,l) = Cb(c,l) + sum_{i>c} A(i,c) Cb(i,l).
-         * 4 trailing columns at a time so each reflector load A(i,c) feeds 4 FMAs. */
-        Int l = 0;
-        for (; l + 4 <= nb; l += 4) {
-            VT *c0 = Cb + (std::size_t)(l + 0) * ldc,
-               *c1 = Cb + (std::size_t)(l + 1) * ldc,
-               *c2 = Cb + (std::size_t)(l + 2) * ldc,
-               *c3 = Cb + (std::size_t)(l + 3) * ldc;
-            for (Int c = 0; c < jb; ++c) {
-                VT w0 = c0[c], w1 = c1[c], w2 = c2[c], w3 = c3[c];
-                for (Int i = c + 1; i < mm; ++i) {
-                    const VT a = A[(std::size_t)c * ldap + i];
-                    w0 += a * c0[i];
-                    w1 += a * c1[i];
-                    w2 += a * c2[i];
-                    w3 += a * c3[i];
-                }
-                W[(std::size_t)(l + 0) * jb + c] = w0;
-                W[(std::size_t)(l + 1) * jb + c] = w1;
-                W[(std::size_t)(l + 2) * jb + c] = w2;
-                W[(std::size_t)(l + 3) * jb + c] = w3;
-            }
-        }
-        for (; l < nb; ++l) { /* remainder trailing columns */
-            VT *cl = Cb + (std::size_t)l * ldc;
-            for (Int c = 0; c < jb; ++c) {
-                VT w = cl[c];
-                for (Int i = c + 1; i < mm; ++i)
-                    w += A[(std::size_t)c * ldap + i] * cl[i];
+        /* W = V^T Cb :  W(c,l) = Cb(c,l) + sum_{i>c} A(i,c) Cb(i,l). The jb x jb
+         * unit-lower corner (rows < jt) is direct; the bulk rows [jt,mm) go through
+         * the 2-D register-tiled kernel. */
+        const Int jt = (jb < mm) ? jb : mm;
+        for (Int c = 0; c < jb; ++c)
+            for (Int l = 0; l < nb; ++l) {
+                VT w = Cb[(std::size_t)l * ldc + c];
+                for (Int i = c + 1; i < jt; ++i)
+                    w += A[(std::size_t)c * ldap + i] * Cb[(std::size_t)l * ldc + i];
                 W[(std::size_t)l * jb + c] = w;
             }
-        }
+        larfb_tn_acc<T, V, Int>(jb, nb, jt, mm, A, ldap, Cb, ldc, W, jb);
 
         /* W2 = T^T W :  W2(c,l) = sum_{p<=c} T(p,c) W(p,l)  (small, jb x nb) */
         for (Int ll = 0; ll < nb; ++ll)
@@ -449,41 +652,16 @@ void larfb_forward_left_compact(Int mm, Int nt, Int jb,
                 W2[(std::size_t)ll * jb + c] = s;
             }
 
-        /* Cb -= V W2 :  column c hits rows c..mm-1 (unit at row c, A(i,c) below).
-         * 4 trailing columns at a time, same reflector-load reuse. */
-        l = 0;
-        for (; l + 4 <= nb; l += 4) {
-            VT *c0 = Cb + (std::size_t)(l + 0) * ldc,
-               *c1 = Cb + (std::size_t)(l + 1) * ldc,
-               *c2 = Cb + (std::size_t)(l + 2) * ldc,
-               *c3 = Cb + (std::size_t)(l + 3) * ldc;
-            for (Int c = 0; c < jb; ++c) {
-                const VT x0 = W2[(std::size_t)(l + 0) * jb + c];
-                const VT x1 = W2[(std::size_t)(l + 1) * jb + c];
-                const VT x2 = W2[(std::size_t)(l + 2) * jb + c];
-                const VT x3 = W2[(std::size_t)(l + 3) * jb + c];
-                c0[c] -= x0;
-                c1[c] -= x1;
-                c2[c] -= x2;
-                c3[c] -= x3;
-                for (Int i = c + 1; i < mm; ++i) {
-                    const VT a = A[(std::size_t)c * ldap + i];
-                    c0[i] -= a * x0;
-                    c1[i] -= a * x1;
-                    c2[i] -= a * x2;
-                    c3[i] -= a * x3;
-                }
+        /* Cb -= V W2 :  bulk rows [jt,mm) 2-D tiled; the jb x jb unit-lower corner
+         * (rows < jt, C(i,l) -= W2(i,l) + sum_{c<i} A(i,c) W2(c,l)) direct. */
+        larfb_nn_sub<T, V, Int>(jb, nb, jt, mm, A, ldap, W2, jb, Cb, ldc);
+        for (Int l = 0; l < nb; ++l)
+            for (Int i = 0; i < jt; ++i) {
+                VT acc = W2[(std::size_t)l * jb + i];
+                for (Int c = 0; c < i; ++c)
+                    acc += A[(std::size_t)c * ldap + i] * W2[(std::size_t)l * jb + c];
+                Cb[(std::size_t)l * ldc + i] -= acc;
             }
-        }
-        for (; l < nb; ++l) { /* remainder trailing columns */
-            VT *cl = Cb + (std::size_t)l * ldc;
-            for (Int c = 0; c < jb; ++c) {
-                const VT w2 = W2[(std::size_t)l * jb + c];
-                cl[c] -= w2;
-                for (Int i = c + 1; i < mm; ++i)
-                    cl[i] -= A[(std::size_t)c * ldap + i] * w2;
-            }
-        }
     }
 }
 
