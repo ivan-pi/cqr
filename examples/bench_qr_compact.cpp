@@ -30,7 +30,11 @@
  *
  * Build: needs Intel MKL plus this repo's cqr_mkl_ormqr_compact and
  * cqr_mkl_trsm_compact; wired up by CMakeLists.txt as the `bench_qr_compact`
- * target. OpenMP is used when available.
+ * target. OpenMP is used when available. For a fair cqr-vs-MKL comparison, build
+ * with host-tuned flags (e.g. `-DCMAKE_CXX_FLAGS="-O3 -march=native"`) so the
+ * open compact kernels emit the full vector width, matching MKL's AVX-512 runtime
+ * dispatch; without it the geqrf-dominated cqr path runs the V-wide packs on the
+ * baseline ISA and is unfairly slow (cqr/MKL well below 1).
  *
  * Assisted-by: Claude:claude-opus-4.8
  */

@@ -66,10 +66,11 @@ Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 * `solve_qr_compact` - a batch of square systems `A_v X_v = B_v` solved end to
   end with the compact pipeline (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact`
   -> `cqr_mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
-* `bench_qr_compact [nmat] [reps]` - throughput of the batched *solve* pipeline
-  vs. the one-matrix-at-a-time LAPACK path over pools of small matrices (order
-  10-100), reporting a geometric-mean speedup. Both paths are checked against the
-  known solution.
+* `bench_qr_compact [nmat] [reps]` - throughput of the fully open compact *solve*
+  pipeline vs. MKL's batched pipeline and the one-matrix-at-a-time LAPACK path,
+  over pools of small matrices (order 10-100), reporting geometric-mean speedups.
+  As for `bench_geqrf_compact`, build with host-tuned flags (`-march=native`) for
+  a fair comparison against MKL. All paths are checked against the known solution.
 * `bench_geqrf_compact [nmat] [reps]` - throughput of the *factorization*:
   `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs per-matrix
   `LAPACKE_dgeqrf`, across the target square-size range, reporting GFLOP/s and a
