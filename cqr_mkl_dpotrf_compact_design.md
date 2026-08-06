@@ -84,17 +84,14 @@ the factor feeds a solve, so no unpack is needed until the final result is read)
 
 ## 4. Input Parameters
 
-* **`layout`** (`MKL_LAYOUT`): `MKL_COL_MAJOR` (tuned path) or `MKL_ROW_MAJOR`.
+* **`layout`** (`MKL_LAYOUT`): the in-memory storage order of each matrix --
+  `MKL_COL_MAJOR` (tuned path) or `MKL_ROW_MAJOR`.
 * **`uplo`** (`MKL_UPLO`): `MKL_LOWER` (factor and store the lower triangle `L`;
   tuned path) or `MKL_UPPER` (upper triangle `U`). The other triangle is not
   referenced.
 * **`n`** (`MKL_INT`): the order of each `A` (`n >= 0`).
 * **`ap`** (`double *`): the compact buffer of `nm` matrices `A`, packed with
-  `mkl_?gepack_compact`. Overwritten in place with the Cholesky factor. Any
-  alignment is correct; align the base to the pack width (64 B covers every
-  format) so the SIMD sweeps avoid cache-line splits -- worth up to ~40% on
-  small, cache-resident sizes. `mkl_malloc(bytes, 64)` (the default of this
-  project's `mkl_alloc_bytes`) already does this.
+  `mkl_?gepack_compact`. Overwritten in place with the Cholesky factor.
 * **`ldap`** (`MKL_INT`): leading dimension of each matrix within the compact
   buffer (column stride for column-major, row stride for row-major), `>= n`.
 * **`format`** (`MKL_COMPACT_PACK`): the pack format from
@@ -102,16 +99,21 @@ the factor feeds a solve, so no unpack is needed until the final result is read)
   (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32).
 * **`nm`** (`MKL_INT`): total number of matrices in the batch (`nm >= 0`).
 
+**Buffer alignment.** Any base alignment of `ap` is correct. For full speed,
+align the base to the pack width (64 B covers every format) so each SIMD access
+stays on one cache line instead of splitting across two -- worth up to ~40% on
+small, cache-resident sizes. `mkl_malloc(bytes, 64)` (the default of this
+project's `mkl_alloc_bytes`) already does this.
+
 ## 5. Output Parameters
 
 * **`ap`**: the named triangle is overwritten with its Cholesky factor `L` or
   `U`, in Compact format; the other triangle is left untouched.
-* **`info`** (`MKL_INT *`): MKL leaves the compact `info` reserved (it does not
-  report a non-positive-definite leading minor the way LAPACK `?potrf` does), so
-  we define it as a single scalar status, `0` on success. The routine performs no
-  argument checking and no per-matrix positive-definiteness test (sections 6.2,
-  6.5); the one exception is an unrecognized `format`, which selects no kernel and
-  sets `info = -1`.
+* **`info`** (`MKL_INT *`): a single scalar status, `0` on success. MKL leaves
+  the compact `info` reserved rather than reporting a non-SPD leading minor the
+  way LAPACK `?potrf` does, and this routine does the same (section 6.2). The one
+  value it can set is dispatch-level: an unrecognized `format` selects no kernel
+  and sets `info = -1`.
 
 ## 6. Design Considerations & Compatibility
 
@@ -136,42 +138,33 @@ A(i,jj)-= A(i,j)*A(jj,j)  for jj > j, i >= jj   // symmetric rank-1 trailing upd
 Only the lower trapezoid is ever touched, so the strictly-upper triangle passes
 through untouched as `?potrf` requires. The trailing update -- the `O(n^3)` bulk
 of the work -- is register-blocked `JB = 4` trailing columns at a time so each
-`A(i,j)` reflector-column load is reused across four columns, exactly as the
+pivot-column entry `A(i,j)` load is reused across four columns, exactly as the
 `geqrf` trailing update. Blocked (`potrf`) factorization with `syrk`/`trsm`
 panels is deliberately *not* used: for the target sizes the panels are short, and
-the interleaved batch already saturates the vector units without the extra
-blocking bookkeeping. `vsqrt<T,V>` (a short lane loop that GCC and Clang lower to
-a single `vsqrt*`) is the only special function needed; it runs once per column,
-negligible next to the `O(n^2)` scaling and `O(n^3)` update.
+the interleaved batch is already likely to saturate the vector units without the
+extra blocking bookkeeping. `vsqrt<T,V>` (a short lane loop that GCC and Clang
+lower to a single `vsqrt*`) is the only special function needed; it runs once per
+column, negligible next to the `O(n^2)` scaling and `O(n^3)` update.
 
-### 6.2 The pivot: `sqrt` and a deliberately unchecked positive-definiteness test
+### 6.2 The pivot: `sqrt`, and no positive-definiteness check
 
-Cholesky is numerically simpler than QR here: there is *no* data-dependent branch
-to vectorize away. Scalar `dpotf2` contains one check -- `if (ajj <= 0 ||
-isnan(ajj))` set `info = j` and stop, flagging a non-positive-definite leading
-minor. Across a pack that test would diverge per lane, so the interleave-batch
-APIs of both major vendors drop it: MKL's `mkl_?potrf_compact` leaves `info`
-"reserved for future use" (and its compact routines "skip error checking for
-performance reasons"), and ArmPL's `armpl_?potrf_interleave_batch` states outright
-that it "does not check that the input matrices are SPD; no error will be returned
-if any `A_i` are not SPD." This routine follows the same rule: it computes
-`d = sqrt(A(j,j))` unconditionally and does not test the pivot. The consequences
-are the graceful "garbage in, garbage out" of an unchecked factorization, and
-they matter for two reasons:
+Cholesky needs no branch-free trickery: unlike QR's `larfg`, its math has no
+data-dependent branch. Scalar `dpotf2` has exactly one test -- `if (ajj <= 0 ||
+isnan(ajj))` set `info = j` and stop, flagging a non-SPD leading minor -- and that
+is the only thing that would diverge per lane across a pack. Both vendors'
+interleave-batch Cholesky drop it: MKL leaves `info` "reserved for future use"
+(its compact routines "skip error checking for performance reasons"), and ArmPL
+"does not check that the input matrices are SPD; no error will be returned if any
+`A_i` are not SPD." This routine does the same -- it computes `d = sqrt(A(j,j))`
+unconditionally -- and every claim below that the SPD check is omitted refers back
+here.
 
-* **Padding is safe with no mask.** A partial final pack is filled with identity
-  matrices (section 6.4). The Cholesky factor of `I` is `I`: every pivot is
-  `sqrt(1) = 1`, every off-diagonal is `0`, so the padded lanes compute a clean
-  identity at full width -- no lane mask is required to neutralize them, unlike
-  the `larfg` mask that `geqrf` needs.
-* **A non-SPD real lane produces NaN/Inf, not a wrong "success".** If a genuine
-  input matrix is not positive definite, some pivot `A(j,j)` is `<= 0`; `sqrt`
-  then yields `NaN` (negative) or the subsequent `1/d` yields `Inf` (zero), and
-  the poison propagates through that lane's factor. The caller detects this by
-  inspecting the unpacked result (e.g. a `NaN` on the diagonal), exactly as with
-  MKL's compact `potrf`. Early-exit with `info = j` is intentionally *not*
-  provided -- it needs the per-lane branch that does not vectorize across a pack
-  (section 6.5).
+The consequence is graceful "garbage in, garbage out": a genuinely non-SPD lane
+has some pivot `A(j,j) <= 0`, so `sqrt` yields `NaN` (or the following `1/d`
+yields `Inf`), and the poison propagates through that lane's factor. The caller
+detects it by inspecting the unpacked diagonal, exactly as with MKL's compact
+`potrf`. Early-exit with `info = j` is intentionally not provided -- it is
+precisely the per-lane branch that does not vectorize across a pack.
 
 ### 6.3 Layouts and triangles: one tuned contiguous kernel, one strided
 
@@ -192,34 +185,23 @@ duality into two contiguous cases and two strided ones:
   (correctness-first; the strided inner sweep is not separately SIMD-tuned),
   reusing the existing `BatchView` addressing.
 
-<!-- TODO: review: the row-major-UPPER -> tuned-kernel folding via transposition
-     is the clean optimization, but the first implementation may route all three
-     non-(col,lower) combinations through the strided kernel for simplicity and
-     add the fold later. Decide before implementing whether to claim the fold
-     here or move it to a "future optimization" note, mirroring how geqrf's
-     row-major path is correctness-first. -->
-
 ### 6.4 Padding and SIMD semantics
 
 When `nm` is not a multiple of `V`, `mkl_?gepack_compact` fills the unused slots
 of the last pack with identity matrices. The Cholesky factor of the identity is
 the identity (`L = I`, all pivots `1`, no off-diagonal fill), so the padded lanes
-compute a mathematical no-op and the kernel runs unmasked across the whole final
-pack at full width without corrupting real data. As noted in 6.2, no lane mask is
-needed: the identity flows through the unchecked pivot path cleanly.
+compute a mathematical no-op and the kernel runs the whole final pack unmasked at
+full width without corrupting real data. Because the pivot path is unconditional
+(section 6.2), the identity flows through it with no lane mask -- unlike `geqrf`,
+whose `larfg` needs a mask to neutralize padded columns.
 
 ### 6.5 No argument checking (Compact convention)
 
 Like MKL's own compact routines -- which "skip error checking for performance
 reasons" and make "the user responsible for passing correct parameters" --
-`cqr_mkl_?potrf_compact` validates nothing and writes a single scalar
-`info = 0`. It also performs no per-matrix positive-definiteness test (section
-6.2). The only failure it can report is dispatch-level: an unrecognized `format`
-has no kernel to run and sets `info = -1` (section 5). Callers that want
-defensive parameter checking should use the portable
-`dpotrf_compact`/`spotrf_compact` C API, which performs LAPACK-style `info = -j`
-validation of the scalar arguments (it still does not test positive
-definiteness).
+`cqr_mkl_?potrf_compact` validates no arguments and writes a single scalar
+`info = 0`. The only failure it can report is dispatch-level: an unrecognized
+`format` has no kernel to run and sets `info = -1` (section 5).
 
 ### 6.6 Numerical scope
 
@@ -229,11 +211,10 @@ element (the SPD Cholesky factor with positive diagonal is unique, so agreement
 is expected far below the backward-error bound -- see 7.1). Three limits are the
 deliberate scope of this routine:
 
-* **Positive definiteness is assumed, not enforced.** A non-SPD or numerically
-  indefinite matrix produces `NaN`/`Inf` in its lane rather than an `info = j`
-  diagnostic (section 6.2). Borderline-semidefinite matrices, where rounding can
-  drive a true-zero pivot slightly negative, likewise poison the lane instead of
-  taking a safeguarded path.
+* **Positive definiteness is assumed, not enforced** (section 6.2). Non-SPD and
+  borderline-semidefinite inputs -- where rounding can drive a true-zero pivot
+  slightly negative -- poison their lane with `NaN`/`Inf` instead of taking a
+  safeguarded path or reporting `info = j`.
 * **Matrices scaled near underflow/overflow.** Following Intel's stated
   [numerical limitations for Compact BLAS and Compact LAPACK
   routines](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/numerical-limits-compact-blas-compact-lapack.html),
