@@ -252,7 +252,10 @@ to vectorize internally; the interleaved layout instead extracts parallelism
 small to fill a vector register on its own. The cost is a pack/unpack step at
 the batch boundary (MKL's \code{mkl\_?gepack\_compact}/\code{geunpack\_compact});
 in the target applications the same factored batch is reused enough --- across
-right-hand sides, time steps, or Newton iterations --- to amortize it.
+right-hand sides, time steps, or Newton iterations --- to amortize it. A third
+strategy keeps the per-matrix layout but draws its parallelism from the execution
+policy rather than the data layout, with the operation's properties fixed at
+compile time --- the route Kokkos Kernels takes (Section~\ref{sec:related}).
 
 % =============================================================================
 \section{Two vendor APIs, side by side}
@@ -620,15 +623,29 @@ route the applications use.
 \label{sec:related}
 
 The batched-BLAS effort defined the problem and a pointer-array interface
-standard~\cite{bblas2021,bblas-standard}. The interleaved/compact layout is the
-vendors' alternative for the small-matrix regime: Intel's Compact
-functions~\cite{mkl-compact} and Arm's interleave-batch
-functions~\cite{armpl-interleave}. Portable batched kernels also appear in
-Kokkos Kernels~\cite{kokkos-kernels}, and the \code{batmat} project~\cite{batmat}
-provides interleaved batched linear algebra aimed at convex optimization. \cqr{}'s
-contribution relative to these is narrow and specific: an \emph{open} drop-in for
-the MKL compact QR that is portable across ISAs from one source and that supplies
-the apply-$Q$ step MKL omits. \draftnote{if targeting a venue, add the closest
+standard~\cite{bblas2021,bblas-standard}. Two broad strategies then extract the
+cross-matrix parallelism. The \emph{interleaved/compact} layout --- the vendors'
+answer for the small-matrix regime (Intel Compact~\cite{mkl-compact}, Arm
+interleave-batch~\cite{armpl-interleave}) and this paper --- rewrites the data so
+one SIMD instruction advances $V$ matrices. \emph{Kokkos
+Kernels}~\cite{kokkos-kernels} takes the other route: each matrix keeps its
+ordinary layout (no interleaving), parallelism comes from the execution policy ---
+a \code{Serial}, \code{Team}, or \code{TeamVector} variant choosing whether one
+thread, a team, or a team-plus-vector-lane handles a matrix --- and the operation
+properties (transpose, upper/lower, side, and the blocking \code{Algo}) are
+\emph{compile-time template arguments}, so each kernel is a header-only
+\code{invoke()} that inlines into the user's \code{parallel\_for} and, through
+Kokkos, runs on GPUs as well as CPUs. The trade is instructive: interleaving
+guarantees cross-matrix SIMD on the CPU but needs a pack/unpack and a
+CPU-specific layout, whereas the Kokkos style fuses into user code and ports to
+accelerators but leans on the execution policy and the compiler for
+vectorization. \draftnote{Kokkos Kernels also ships a SIMD vector value type that
+can interleave matrices on-chip, much like the compact packs; confirm its current
+status in \code{develop} and whether to mention it.} \cqr{} sits in the
+interleaved camp, as does the \code{batmat} project~\cite{batmat} (aimed at convex
+optimization); its contribution relative to all of these is narrow and specific:
+an \emph{open} drop-in for the MKL compact QR, portable across ISAs from one
+source, that supplies the apply-$Q$ step MKL omits. \draftnote{if targeting a venue, add the closest
 compact-QR performance papers and any batched-QR-on-GPU comparison for context.}
 
 % =============================================================================
