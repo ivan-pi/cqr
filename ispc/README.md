@@ -79,6 +79,7 @@ ctest --test-dir build --output-on-failure     # per-kernel correctness tests
 | `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
 | `bench_cqr_ispc.cpp` | The benchmark; the `native` column is the configuring CXX compiler. |
 | `bench_potrf.cpp` | ISPC Cholesky vs `mkl_dpotrf_compact` (SPD batch, both uplo). |
+| `bench_solve.cpp` | Full solve pipeline: MKL-compact vs CQR-GNU (GCC) vs ISPC. |
 | `CMakeLists.txt` | Standalone build via CMake's ISPC language (>= 3.19). |
 
 ## Correctness
@@ -179,6 +180,35 @@ At `V=8` (the native width) GCC's hand-lowered vectors edge ISPC. At `V=16` — 
 scheduling a gang *wider* than the native SIMD width is exactly what it is built
 for. So the one width MKL doesn't offer is where ISPC's model earns its keep.
 (Absolute numbers are noisy here; the crossover direction is stable across runs.)
+
+### Full solve pipeline — MKL-compact vs CQR-GNU vs ISPC (`bench_solve`)
+
+`bench_solve` times the whole `geqrf → ormqr → trsm` solve of a batch (known
+`X == 1`) three ways on identical packed input — `n = 10..120`, `-O3 -march=native`,
+`V = 8`, sequential:
+
+- **MKL** — `mkl_dgeqrf_compact → cqr_mkl_dormqr_compact → mkl_dtrsm_compact`
+- **CQR-GNU** — the templated GNU `vector_size` kernels, compiled by GCC
+- **ISPC** — the three `cqr_ispc_*` kernels
+
+MKL ships no compact `ormqr`, so both the MKL and CQR-GNU pipelines borrow this
+project's `cqr_mkl_dormqr_compact` for that step; the MKL-vs-CQR gap is therefore
+purely `geqrf + trsm`. All three recover `X` to ~1e-15. Geomean over `n=10..120`,
+two runs bracketing each figure:
+
+| geomean, n=10..120 | MKL | CQR-GNU (GCC) | ISPC |
+|---|:--:|:--:|:--:|
+| GFLOP/s | ~8.8–9.2 | ~11.0–11.6 | ~9.9–10.5 |
+| speedup vs MKL | 1.00× | **1.25–1.30×** | **1.13–1.19×** |
+
+Both open pipelines beat MKL's compact solve for these small batched systems, and
+the ordering is stable across runs and sizes: **CQR-GNU (GCC) > ISPC > MKL**. The
+CQR-GNU lead is the per-kernel result compounded — GCC's `geqrf` and `trsm` each
+beat MKL's compact ones. ISPC lands between: its `geqrf` matches GCC and its `ormqr`
+is at parity, but its `trsm` runs ~0.9× MKL (the 256-bit `avx512skx-x8` gang vs
+GCC's 512-bit ZMM — see above), which is what pulls its full pipeline below GCC's.
+Same shared-node caveats — the ratios are steady, the absolute GFLOP/s drift ~5–10%
+run to run.
 
 ### Cholesky (`potrf`) vs MKL (`bench_potrf`)
 

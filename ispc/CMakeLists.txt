@@ -48,5 +48,11 @@ target_link_libraries(bench_potrf PRIVATE cqr_ispc_iface cqr_mkl)
 add_executable(bench_gang bench_gang.cpp)
 target_link_libraries(bench_gang PRIVATE cqr_ispc_iface)
 
+# Full 3-way solve pipeline. Pulls in ../src/cqr_mkl_ext.cpp for the MKL-style
+# compact ormqr (cqr_mkl_dormqr_compact) the MKL pipeline borrows.
+add_executable(bench_solve bench_solve.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/cqr_mkl_ext.cpp)
+target_link_libraries(bench_solve PRIVATE cqr_ispc_iface cqr_mkl)
+
 enable_testing()
 add_test(NAME test_cqr_ispc COMMAND test_cqr_ispc)
