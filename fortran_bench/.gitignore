@@ -1,3 +1,5 @@
-# built executable + reports (objects/mods already ignored at repo root)
+# built executables + reports (objects/mods already ignored at repo root)
 bench
+bench_mkl
+bench_cpp
 *.optrpt

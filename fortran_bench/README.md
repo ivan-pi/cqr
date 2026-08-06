@@ -40,7 +40,8 @@ unmasked with identical semantics to LAPACK `?geqr2` / `?orm2r`.
 | `bench.f90` | Driver: correctness vs the reference at every size, then adaptive-rep timing. |
 | `mkl_compact.f90` | iso_c_binding interface to MKL's compact API (`mkl_dgeqrf_compact`, pack/unpack). |
 | `bench_mkl.f90` | Head-to-head: fastest Fortran `dgeqrf` vs `mkl_dgeqrf_compact` on identical matrices. |
-| `Makefile` | `make` (gfortran) or `make FC=ifx`; `make run`; `make run-mkl`. |
+| `bench_cpp.f90` | Head-to-head: Fortran kernels vs this project's C++ GNU-vector-type kernels (`../src`) on the *same* buffer. |
+| `Makefile` | `make` (gfortran) or `make FC=ifx`; `make run`; `make run-mkl`; `make run-cpp`. |
 
 ## Build and run
 
@@ -49,6 +50,7 @@ cd fortran_bench
 make run          # gfortran -O3 -march=native -ffast-math -fopenmp-simd -flto
 make run FC=ifx   # ifx      -O3 -xHOST -qopenmp-simd -flto
 make run-mkl      # + the MKL comparison (needs libmkl-dev; FC=ifx works too)
+make run-cpp FC=ifx CXX=icpx   # + the C++ vector-type comparison (../src)
 ```
 
 Only `!$omp simd` is used (no threading); timing is via `SYSTEM_CLOCK`, so the
@@ -236,6 +238,49 @@ Two caveats worth stating plainly:
   gfortran, Fortran clearly > MKL on `ifx` -- is stable across runs; treat the
   per-cell GFLOP/s as indicative, not precise.
 
+## Versus the C++ vector-type kernels
+
+The other reference point is this project's own C++ kernels (`../src/cqr_*_compact`),
+the hand-tuned GNU-`vector_size` implementations the Fortran work set out to
+mirror. `bench_cpp.f90` races them directly: the C++ portable compact layout is
+**byte-identical** to the Fortran `A(VW,m,n,ng)` interleave, so the *same buffer*
+is handed to both -- Fortran built with **ifx**, C++ with **icpx**, one timing
+harness, both cross-checked against the reference (`~1e-14`). This also exercises
+`dormqr`, which (unlike MKL) the C++ side does provide.
+
+Representative GFLOP/s (ifx 2026.1 / icpx 2026.1, single core, AVX-512):
+
+| | dgeqrf | | | dormqr | | |
+|-----|--:|--:|--:|--:|--:|--:|
+| **m×n** | f-array | f-inner | **C++** | f-array | f-inner | **C++** |
+| 8×8   | 9.7  | 12.2 | 10.2 | 12.4 | 13.1 | 13.1 |
+| 16×16 | 12.4 | 13.7 | 14.5 | 10.5 | 11.7 | 15.5 |
+| 32×16 | 11.9 | 12.4 | 15.7 | 12.2 | 12.2 | 17.5 |
+| 32×32 | 7.7  | 13.1 | 15.8 | 8.6  | 10.3 | 10.7 |
+| 48×48 | 10.6 | 12.6 | 14.9 | 9.9  | 9.9  | 13.4 |
+| 64×64 | 12.9 | 13.4 | 13.4 | 10.1 | 9.9  | 13.4 |
+
+**The C++ kernels are generally faster, but not by much, and not everywhere.**
+
+* **dgeqrf:** the C++ kernel leads by ~15-40% across the mid sizes (16-48), where
+  its register-blocked trailing-column update (`JB = 4` reflectors reused per
+  load) pays off. At the extremes it is a **tie**: at 8×8 the Fortran `f-inner`
+  is actually a touch faster, and at 64×64 they match.
+* **dormqr:** the C++ kernel is ahead more consistently, ~1.3-1.6x, for the same
+  reason (it blocks the apply over right-hand-side columns; the Fortran `orm2r`
+  is a straight loop).
+* **`f-inner` is the Fortran to compare** -- the explicit innermost `do b = 1, 8`
+  is steadier than array syntax (which dips at 32×32) and lands within ~10-30% of
+  the hand-tuned C++ almost everywhere.
+
+So: a plain, unblocked Fortran Householder QR -- no intrinsics, just an 8-wide
+inner loop or array syntax -- gets to **within ~10-40% of the project's
+purpose-built C++ SIMD kernels**, and matches them at the smallest and largest
+sizes tested. The remaining gap is blocking/tuning (which the C++ kernels have
+and the Fortran ones deliberately do not), not the language or the compiler:
+both go through the same LLVM backend at the same vector width. Closing it would
+mean porting the same register-blocking into the Fortran `array`/`inner` kernels.
+
 ## Bottom line
 
 All four variants are correct to machine precision on both compilers; the rest is
@@ -253,9 +298,12 @@ throughput.
 4. Pinning the interleave width to a compile-time constant (8 = one AVX-512
    register) is worth ~2x over a runtime batch dimension (see git history),
    regardless of style.
-5. **The result is competitive with MKL.** The fastest plain-Fortran `dgeqrf`
-   matches `mkl_dgeqrf_compact` on gfortran and beats it ~1.4-2x on `ifx`, with
-   no intrinsics -- and covers `dormqr`, which MKL's compact API omits entirely.
+5. **The result is competitive with MKL and with the C++ kernels.** The fastest
+   plain-Fortran `dgeqrf` matches `mkl_dgeqrf_compact` on gfortran and beats it
+   ~1.4-2x on `ifx`; against this project's hand-tuned C++ GNU-vector-type kernels
+   (ifx vs icpx, same buffer) it lands within ~10-40% and ties at the size
+   extremes. The gap to the C++ kernels is register-blocking, not language --
+   both use the same LLVM backend at the same width.
 
-Environment: single core, Intel AVX-512 (Cascade Lake), gfortran 13.3, `ifx`
-2026.1, MKL (Debian `libmkl-dev`); all builds with `-flto`.
+Environment: single core, Intel AVX-512 (Cascade Lake), gfortran 13.3, `ifx` and
+`icpx` 2026.1, MKL (Debian `libmkl-dev`); all builds with `-flto`.

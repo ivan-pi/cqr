@@ -37,7 +37,7 @@ bench.o: batched_qr.o vec8_mod.o
 %.o: %.f90
 	$(FC) $(FFLAGS) -c $<
 
-.PHONY: run clean run-mkl
+.PHONY: run clean run-mkl run-cpp
 run: bench
 	./bench
 
@@ -57,5 +57,35 @@ bench_mkl.o: batched_qr.o vec8_mod.o mkl_compact.o
 run-mkl: bench_mkl
 	MKL_NUM_THREADS=1 ./bench_mkl
 
+# --- Fortran vs C++ vector-type kernels (optional) -----------------------
+# Times the Fortran kernels against this project's C++ GNU-vector-type kernels
+# (../src) on the SAME interleaved buffer. Fortran built with $(FC), C++ with
+# $(CXX). Intended pair: FC=ifx CXX=icpx.
+CXX ?= icpx
+SRCDIR ?= ../src
+ifeq ($(CXX),icpx)
+  CXXFLAGS ?= -std=c++17 -O3 -xHOST
+else
+  CXXFLAGS ?= -std=c++17 -O3 -march=native
+endif
+# C++ runtime for the mixed link (main is Fortran).
+ifeq ($(FC),ifx)
+  CXXRT ?= -cxxlib
+else
+  CXXRT ?= -lstdc++
+endif
+
+cqr_geqrf_cpp.o: $(SRCDIR)/cqr_geqrf_compact_dispatch.cpp
+	$(CXX) $(CXXFLAGS) -I$(SRCDIR) -c $< -o $@
+cqr_ormqr_cpp.o: $(SRCDIR)/cqr_compact_dispatch.cpp
+	$(CXX) $(CXXFLAGS) -I$(SRCDIR) -c $< -o $@
+
+bench_cpp: vec8_mod.o batched_qr.o bench_cpp.o cqr_geqrf_cpp.o cqr_ormqr_cpp.o
+	$(FC) $(FFLAGS) $(CXXRT) -o $@ $^
+bench_cpp.o: batched_qr.o vec8_mod.o
+
+run-cpp: bench_cpp
+	./bench_cpp
+
 clean:
-	rm -f *.o *.mod *.optrpt bench bench_mkl
+	rm -f *.o *.mod *.optrpt bench bench_mkl bench_cpp
