@@ -289,10 +289,6 @@ Operation & MKL Compact & ArmPL interleave-batch & \cqr{} \\
 \quad QR \code{geqrf}            & \cmark & \cmark\,\textsc{rr} & \cmark \\
 \quad form $Q$ \code{orgqr}      & ---    & \cmark & --- \\
 \quad apply $Q$ \code{ormqr}     & \textbf{---} & \cmark & \cmark \\
-\multicolumn{4}{@{}l}{\itshape Properties}\\
-\quad precisions                 & s, d, c, z & s, d, c, z & s, d \\
-\quad target ISA                 & x86 & AArch64 & any (one source) \\
-\quad source                     & closed & closed & open \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -345,6 +341,60 @@ re-implementing it --- and no LU, since the pivoting question (forgo it like MKL
 or threshold it like ArmPL) is a study in itself. What \cqr{} adds over both
 vendors is not breadth but openness and portability: one vector-typed source, no
 ISA lock (below).
+
+\begin{table}[t]
+\centering
+\caption{Design choices behind the four batched libraries --- the ``how'',
+complementing the ``what'' of Table~\ref{tab:apis}. (Kokkos Kernels is not a
+compact API, so it is absent from Table~\ref{tab:apis} but belongs here.)}
+\label{tab:design}
+\footnotesize
+\begin{tabularx}{\linewidth}{@{}l XXXX@{}}
+\toprule
+Design choice & MKL Compact & ArmPL interleave-batch & Kokkos Kernels & \cqr{} \\
+\midrule
+API / dispatch      & C ABI, runtime & C ABI, runtime & C++ templates, compile-time & C ABI + templated kernels \\
+Storage             & interleaved & interleaved & per-matrix (Views) & interleaved \\
+Cross-matrix work   & SIMD lanes & SIMD lanes & execution policy (Serial / Team / TeamVector) & SIMD lanes \\
+Callable from       & C, C++, Fortran, Python & C, C++, Fortran, Python & C++ & C, C++, Fortran, Python \\
+Precisions          & s, d, c, z & s, d, c, z & s, d, c, z & s, d \\
+Target hardware     & x86 & AArch64 & CPU + GPU & any CPU SIMD \\
+Source              & closed & closed & open & open \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Dispatch: a C ABI at runtime, or C++ templates at compile time.}
+Intel and Arm ship \emph{raw C functions}. That buys ABI stability and
+callability from C, C++, Fortran, and Python, at the price of resolving the
+storage format and vector width \emph{at runtime}, inside a precompiled binary.
+Kokkos makes the opposite choice: the properties and the algorithm are C++
+template parameters resolved at \emph{compile time}, maximizing inlining and
+fusion but restricting the caller to C++ and requiring a recompile per
+configuration. Neither is strictly better --- the runtime indirection is a fixed
+cost that matters most when the work per call is small, and whether a
+compile-time-specialized library wins in that regime is exactly the open question.
+\cqr{} takes a hybrid position (Table~\ref{tab:design}): it keeps the vendor's C
+ABI --- so it stays a drop-in and remains callable from Fortran and Python --- but
+resolves the pack format to a compile-time interleave width \emph{once per call}
+and dispatches to a kernel fully specialized on $(T,V)$, so the inner sweep
+carries no runtime branch. The runtime choice is paid once per batch, not once per
+element.
+
+\paragraph{Parallelism granularity.}
+The interleaved libraries put one \emph{matrix} in each SIMD lane, so a fixed
+group of $V$ matrices advances in lockstep. Kokkos instead exposes three interface
+levels that choose how many workers cooperate on a \emph{single} matrix, leaving
+the batch to the surrounding \code{parallel\_for}: \code{Serial} runs a whole
+matrix on one execution unit (one CPU thread, or one GPU thread), its inner loops
+left to the compiler; \code{Team} shares one matrix across a team of threads
+(\code{TeamThreadRange}); and \code{TeamVector} adds the innermost vector level
+(\code{ThreadVectorRange}) so a team's threads \emph{and} their vector lanes
+jointly work one matrix. \code{Serial} over a plain range --- one small matrix per
+thread --- is the natural fit for the many-tiny-matrices regime targeted here;
+\code{Team} and \code{TeamVector} pay off as matrices grow or thin out. It is a
+different lever from interleaving, where a lane always holds a \emph{distinct}
+matrix rather than a slice of a shared one.
 
 % =============================================================================
 \section{\cqr{}: an open, portable reference implementation}
