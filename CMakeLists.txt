@@ -33,7 +33,8 @@ add_library(cqr_compact
   src/cqr_ormqr_compact_dispatch.cpp
   src/cqr_geqrf_compact_dispatch.cpp
   src/cqr_potrf_compact_dispatch.cpp
-  src/cqr_trsm_compact_dispatch.cpp)
+  src/cqr_trsm_compact_dispatch.cpp
+  src/cqr_syrk_compact_dispatch.cpp)
 target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(cqr_compact PUBLIC cxx_std_17)
 add_library(cqr::compact ALIAS cqr_compact)
@@ -50,7 +51,8 @@ if(CQR_WITH_MKL)
     src/cqr_mkl_ormqr.cpp
     src/cqr_mkl_geqrf.cpp
     src/cqr_mkl_potrf.cpp
-    src/cqr_mkl_trsm.cpp)
+    src/cqr_mkl_trsm.cpp
+    src/cqr_mkl_syrk.cpp)
   target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
@@ -132,6 +134,13 @@ if(CQR_BUILD_TESTS)
   target_link_libraries(test_cqr_trsm_compact PRIVATE cqr_compact)
   add_test(NAME portable_trsm COMMAND test_cqr_trsm_compact)
 
+  # Portable self-contained symmetric rank-k update test (no BLAS): C API
+  # argument validation + the compact syrk kernel vs a scalar ?syrk reference,
+  # over the full uplo x trans x layout matrix.
+  add_executable(test_cqr_syrk_compact src/test_cqr_syrk_compact.cpp)
+  target_link_libraries(test_cqr_syrk_compact PRIVATE cqr_compact)
+  add_test(NAME portable_syrk COMMAND test_cqr_syrk_compact)
+
   # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)
     add_executable(test_cqr_ormqr_mkl src/test_cqr_ormqr_mkl.cpp)
@@ -164,6 +173,15 @@ if(CQR_BUILD_TESTS)
     target_link_libraries(test_cqr_trsm_mkl
       PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
     add_test(NAME mkl_trsm_suites COMMAND test_cqr_trsm_mkl)
+
+    # MKL cross-check of cqr_mkl_?syrk_compact: vs per-matrix cblas_?syrk and vs
+    # mkl_?gemm_compact over the full feature matrix, plus an end-to-end
+    # Cholesky-QR (syrk Gram matrix -> potrf -> trsm) driven entirely by cqr
+    # kernels (no MKL compute).
+    add_executable(test_cqr_syrk_mkl src/test_cqr_syrk_mkl.cpp)
+    target_link_libraries(test_cqr_syrk_mkl
+      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
+    add_test(NAME mkl_syrk_suites COMMAND test_cqr_syrk_mkl)
 
     # The compact QR-solve example self-validates, so register it too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)

@@ -10,6 +10,7 @@
  *   dormqr_compact / sormqr_compact  -- apply Q or Q^T from the left, B := op(Q) B
  *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T or A = U^T U
  *   dtrsm_compact  / strsm_compact   -- triangular solve  op(A) X = alpha B, etc.
+ *   dsyrk_compact  / ssyrk_compact   -- symmetric rank-k update  C := alpha A op(A) + beta C
  *
  * Compact layout; group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncol*V + (j*ldap + i)*V + v ]   (column-major)
@@ -129,6 +130,39 @@ int dtrsm_compact(char layout, char side, char uplo, char transa, char diag, int
 
 int strsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
                   float alpha, const float *ap, int ldap, float *bp, int ldbp, int V,
+                  int nm);
+
+/* Symmetric rank-k update -- the portable form of mkl_?syrk_compact, forming for
+ * every matrix in the batch, in place,
+ *   C := alpha op(A) op(A)^T + beta C,   op(A) = A ('N', A is n x k)
+ *                                              or A^T ('T'/'C', A is k x n),
+ * with C the symmetric n x n result whose uplo triangle is the only part
+ * referenced and updated. Its headline use is the Gram matrix A^T A of a Cholesky
+ * QR (trans='T'), which then feeds ?potrf_compact and ?trsm_compact.
+ *   layout   'C'/'c' column-major (tuned when trans='T') or 'R'/'r' row-major
+ *   uplo     'U' update the upper triangle of C or 'L' the lower
+ *   trans    'N' (A A^T) or 'T'/'C' (A^T A; 'C' == 'T' for the real types)
+ *   n        order of C (and the non-contracted dimension of A)
+ *   k        the contracted dimension (columns of A for 'N', rows for 'T')
+ *   alpha    scalar multiplying the rank-k product
+ *   ap       compact A (n x k for 'N', k x n for 'T')
+ *   ldap     compact leading dimension of A (>= max(1, rows(A)) col-major,
+ *            >= max(1, cols(A)) row-major)
+ *   beta     scalar multiplying C; beta = 0 overwrites C (its prior value, even
+ *            NaN, is not read)
+ *   cp       compact symmetric C (n x n); its uplo triangle is overwritten
+ *   ldcp     compact leading dimension of C (>= max(1, n))
+ *   V, nm    interleave width; total number of matrices (padded last group)
+ * Returns 0, or -j for an illegal j-th argument:
+ *   -1 layout   -2 uplo   -3 trans   -4 n (<0)   -5 k (<0)   -8 ldap
+ *   -11 ldcp    -12 V (not 2/4/8/16)   -13 nm (<0)
+ * (alpha, beta, ap and cp are never inspected, matching LAPACK/BLAS.) */
+int dsyrk_compact(char layout, char uplo, char trans, int n, int k, double alpha,
+                  const double *ap, int ldap, double beta, double *cp, int ldcp, int V,
+                  int nm);
+
+int ssyrk_compact(char layout, char uplo, char trans, int n, int k, float alpha,
+                  const float *ap, int ldap, float beta, float *cp, int ldcp, int V,
                   int nm);
 
 #ifdef __cplusplus
