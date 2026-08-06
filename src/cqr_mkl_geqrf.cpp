@@ -33,8 +33,6 @@
 
 namespace {
 
-using cqr::detail::vlen_for_format;
-
 /* Thin adapter shared by both precisions: workspace query, format -> V, and a
  * forward to the templated kernel. No argument validation (MKL Compact
  * convention); info is a single scalar status. */
@@ -58,24 +56,23 @@ void run(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap, MKL_INT ldap, T *taup, 
 
     const bool rowmajor = (layout == MKL_ROW_MAJOR);
 
+    /* Dispatch on the pack format: it names the SIMD register width, so the
+     * interleave width is that many bytes / sizeof(T) (SSE 16 B, AVX 32 B,
+     * AVX-512 64 B -> FP64 2/4/8, FP32 4/8/16), a compile-time constant per case.
+     * Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
     MKL_INT status = 0;
-    /* Instantiate on MKL_INT so 64-bit (ILP64) dimensions are not narrowed. */
-    switch (vlen_for_format<T>(format)) {
-    case 2:
-        cqr::detail::geqrf_compact_general<T, 2, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
-                                                          nm);
+    switch (format) {
+    case MKL_COMPACT_SSE:
+        cqr::detail::geqrf_compact_general<T, 16 / sizeof(T), MKL_INT>(rowmajor, m, n, ap,
+                                                                       ldap, taup, nm);
         break;
-    case 4:
-        cqr::detail::geqrf_compact_general<T, 4, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
-                                                          nm);
+    case MKL_COMPACT_AVX:
+        cqr::detail::geqrf_compact_general<T, 32 / sizeof(T), MKL_INT>(rowmajor, m, n, ap,
+                                                                       ldap, taup, nm);
         break;
-    case 8:
-        cqr::detail::geqrf_compact_general<T, 8, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
-                                                          nm);
-        break;
-    case 16:
-        cqr::detail::geqrf_compact_general<T, 16, MKL_INT>(rowmajor, m, n, ap, ldap, taup,
-                                                           nm);
+    case MKL_COMPACT_AVX512:
+        cqr::detail::geqrf_compact_general<T, 64 / sizeof(T), MKL_INT>(rowmajor, m, n, ap,
+                                                                       ldap, taup, nm);
         break;
     default: status = -1; /* unrecognised pack format: cannot select a kernel */
     }
