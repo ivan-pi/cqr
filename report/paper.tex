@@ -56,6 +56,7 @@
 
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\cqr}{\mbox{\texttt{cqr}}}
+\newcommand{\cmark}{\ensuremath{\checkmark}}
 
 \title{\textbf{Compact, Interleaved, Portable:\\ An Open Reference Implementation of the
 Batched Small-Matrix Linear-Algebra API}\\[0.3em]
@@ -164,11 +165,11 @@ Useful as they are, the vendor kernels share three limitations. They are
 \emph{closed}, so they cannot be studied, ported, or tuned for a new size regime.
 They are \emph{locked to one ISA family} --- MKL Compact to x86, ArmPL to
 AArch64 --- even though the interleaved idea is architecture-neutral. And MKL's
-compact LAPACK is \emph{incomplete} for the QR pipeline: it ships
-\code{mkl\_?geqrf\_compact} (factorization) and \code{mkl\_?trsm\_compact}
-(triangular solve) but no \code{?ormqr\_compact}, so there is no supported way to
-apply the orthogonal factor $Q$ (or $Q^{\mathsf T}$) to a batch --- the step that
-turns a factorization into a least-squares solve.
+compact LAPACK is \emph{incomplete} for the QR pipeline: it provides QR,
+Cholesky, and unpivoted-LU factorizations and a triangular solve, yet neither
+\code{?ormqr} nor \code{?orgqr} --- no supported way to apply or form the
+orthogonal factor $Q$, the step that turns a QR factorization into a
+least-squares solve.
 
 \subsection{Contributions}
 This paper presents \cqr{}, an open, portable reference implementation of the
@@ -259,54 +260,88 @@ right-hand sides, time steps, or Newton iterations --- to amortize it.
 
 \begin{table}[t]
 \centering
-\caption{The compact/interleaved APIs and \cqr{}. \cqr{} follows MKL's calling
-convention so it can substitute for, or interoperate with, MKL's own compact
-routines, while remaining ISA-portable.}
+\caption{Coverage of the compact / interleaved batched APIs. Routine stems are
+shown without the precision letter and the vendor's suffix (MKL
+\code{mkl\_?X\_compact}; ArmPL \code{armpl\_?X\_interleave\_batch}). \cmark{}~=
+provided, --- = absent. Variant tags: \textsc{np} no pivoting, \textsc{tp}
+threshold pivoting, \textsc{rr} rank-revealing. Packing is MKL
+\code{?gepack}/\code{?geunpack} (with \code{get\_format} / \code{get\_size})
+versus ArmPL \code{?ge\_interleave}/\code{?ge\_deinterleave} (strides passed
+explicitly).}
 \label{tab:apis}
-\small
-\begin{tabularx}{\linewidth}{@{}l l l X@{}}
+\footnotesize
+\begin{tabular}{@{}llll@{}}
 \toprule
- & \textbf{MKL Compact} & \textbf{ArmPL interleave-batch} & \textbf{\cqr{} (this work)} \\
+Operation & MKL Compact & ArmPL interleave-batch & \cqr{} \\
 \midrule
-Layout handle   & \code{MKL\_COMPACT\_PACK} (opaque $V$) & explicit inner/outer/batch strides & \code{MKL\_COMPACT\_PACK} \emph{or} explicit width $V$ \\
-QR factor       & \code{mkl\_?geqrf\_compact}            & \code{armpl\_?geqrf\_interleave\_batch} & \code{cqr\_mkl\_?geqrf\_compact} \\
-Apply $Q$       & \textbf{--- (absent)}                  & \code{armpl\_?ormqr\_interleave\_batch} & \code{cqr\_mkl\_?ormqr\_compact} \\
-Triangular solve& \code{mkl\_?trsm\_compact}             & \code{armpl\_?trsm\_interleave\_batch}  & (use the vendor's) \\
-Precisions      & s,d,c,z                                & s,d,c,z                                 & s,d (real only) \\
-Target ISA      & x86 (SSE/AVX/AVX-512)                  & AArch64 (NEON/SVE)                      & any (single vector-typed source) \\
-Source          & closed                                 & closed                                  & open (BSD-style)\\
+\multicolumn{4}{@{}l}{\itshape BLAS}\\
+\quad \code{dot}, \code{scal}, \code{ger}, \code{gemv} & --- & \cmark & --- \\
+\quad \code{gemm}                & \cmark & \cmark & --- \\
+\quad \code{trmm}, \code{trsv}   & ---    & \cmark & --- \\
+\quad \code{trsm}                & \cmark & \cmark & --- \\
+\multicolumn{4}{@{}l}{\itshape LAPACK}\\
+\quad Cholesky \code{potrf}      & \cmark & \cmark & design \\
+\quad LU \code{getrf}            & \cmark\,\textsc{np} & \cmark\,\textsc{tp} & --- \\
+\quad LU inverse \code{getri}    & \cmark\,\textsc{np} & --- & --- \\
+\quad QR \code{geqrf}            & \cmark & \cmark\,\textsc{rr} & \cmark \\
+\quad form $Q$ \code{orgqr}      & ---    & \cmark & --- \\
+\quad apply $Q$ \code{ormqr}     & \textbf{---} & \cmark & \cmark \\
+\multicolumn{4}{@{}l}{\itshape Properties}\\
+\quad precisions                 & s, d, c, z & s, d, c, z & s, d \\
+\quad target ISA                 & x86 & AArch64 & any (one source) \\
+\quad source                     & closed & closed & open \\
 \bottomrule
-\end{tabularx}
-\draftnote{verify exact ArmPL routine names/signatures against the current ArmPL reference.}
+\end{tabular}
 \end{table}
 
 \paragraph{Intel MKL Compact.}
 MKL hides the interleave width behind an opaque \code{MKL\_COMPACT\_PACK} token
-obtained from \code{mkl\_get\_format\_compact()}, and pairs pack/unpack helpers
-with a handful of compact BLAS/LAPACK kernels~\cite{mkl-compact}. For QR it
-provides the factorization and the triangular solve but, as
-Table~\ref{tab:apis} records, \emph{no} apply-$Q$: a caller can obtain the
-reflectors $(H,\tau)$ and can do a triangular solve, but cannot form
-$Q^{\mathsf T}B$ through a supported call. MKL's compact routines also skip
-argument checking ``for performance reasons'' and leave \code{info}
-reserved~\cite{mkl-compact}, and they document explicit numerical limitations ---
-notably no safe handling of values near underflow/overflow, and no
-pivoting~\cite{mkl-compact-limits}.
+from \code{mkl\_get\_format\_compact()}, with \code{?gepack\_compact} /
+\code{?geunpack\_compact} moving data in and out~\cite{mkl-compact}. Its kernels
+(Table~\ref{tab:apis}) are compact GEMM and TRSM, Cholesky, an \emph{unpivoted}
+LU and its inverse (\code{?getrfnp}, \code{?getrinp}), and QR (\code{?geqrf}). The
+LU is unpivoted by name and by design: partial pivoting's per-column search and
+row interchange do not vectorize cleanly across a pack, so MKL forgoes them. The
+conspicuous hole is in QR --- MKL ships neither \code{?ormqr} nor \code{?orgqr},
+so a caller can obtain the reflectors $(H,\tau)$ and triangular-solve, but has no
+supported way to \emph{apply} $Q^{\mathsf T}$ to a right-hand side, the step that
+turns the factorization into a least-squares solve. MKL's compact routines also
+skip argument checking ``for performance reasons'' and leave \code{info}
+reserved~\cite{mkl-compact}, with documented limits near underflow/overflow and
+no pivoting~\cite{mkl-compact-limits}.
 
 \paragraph{Arm Performance Libraries interleave-batch.}
 ArmPL exposes the same idea with a more explicit hand: the caller passes inner,
-outer, and batch strides describing the interleave directly~\cite{armpl-interleave},
-which is more flexible but couples client code to the layout. Crucially for the
-QR pipeline, ArmPL \emph{does} provide an interleaved apply-$Q$.
+outer, and batch strides describing the interleave directly, and
+\code{?ge\_interleave} / \code{?ge\_deinterleave} pack and unpack~\cite{armpl-interleave}.
+Its coverage is the broadest of the three (Table~\ref{tab:apis}): the BLAS-1/2/3
+building blocks (\code{dot}, \code{scal}, \code{ger}, \code{gemv}, \code{gemm},
+\code{trmm}, \code{trsv}, \code{trsm}) and a \emph{complete} QR pipeline ---
+rank-revealing factorization (\code{?geqrfrr}), \code{?orgqr} to form $Q$, and
+\code{?ormqr} to apply it --- besides Cholesky and LU. Alone among the three it
+pivots at all in the compact setting: its LU uses \emph{threshold} pivoting
+(\code{?getrftp}). In the usual sense of the term, the in-place (diagonal) pivot
+is accepted while it exceeds a fixed fraction of the largest candidate in its
+column, and a row interchange is taken only when it does not --- so most lanes
+stay on the cheap no-swap path and only the ill-conditioned ones diverge, trading
+a little stability for a batch pattern that stays mostly uniform.
+\draftnote{confirm ArmPL's exact \code{getrftp} pivoting semantics against their
+reference before publication.}
 
 \paragraph{\cqr{}.}
 \cqr{} adopts MKL's convention --- the opaque \code{MKL\_COMPACT\_PACK} token and
 the identical argument list --- so a call site can swap \code{mkl\_?geqrf\_compact}
-for \code{cqr\_mkl\_?geqrf\_compact} without change, and \cqr{}'s output feeds
-MKL's \code{trsm\_compact} unmodified. It also exposes a second, MKL-free C API
-taking the width $V$ explicitly, for use where MKL is not present. And it fills
-the apply-$Q$ hole with \code{cqr\_mkl\_?ormqr\_compact}. The one thing it does
-not inherit from either vendor is the ISA lock (below).
+for \code{cqr\_mkl\_?geqrf\_compact} unchanged, feed the result to MKL's
+\code{?trsm\_compact}, and use \code{cqr\_mkl\_?ormqr\_compact} for the apply-$Q$
+step MKL lacks; a second, MKL-free C API takes the width $V$ explicitly for use
+without MKL. Its scope is deliberately narrow (Table~\ref{tab:apis}): the QR
+factorization, the apply-$Q$ that completes the solve, and a designed-but-unbuilt
+Cholesky. It provides no batched GEMM --- the one kernel that already vectorizes
+well per matrix and that the vendors tune hard, so there is little to gain from
+re-implementing it --- and no LU, since the pivoting question (forgo it like MKL,
+or threshold it like ArmPL) is a study in itself. What \cqr{} adds over both
+vendors is not breadth but openness and portability: one vector-typed source, no
+ISA lock (below).
 
 % =============================================================================
 \section{\cqr{}: an open, portable reference implementation}
@@ -381,8 +416,8 @@ routines factor and solve a batched least-squares/linear system end to end ---
 \code{geqrf\_compact} $\to$ \code{ormqr\_compact}$(\,'L','T'\,)$ $\to$
 \code{trsm\_compact} --- the last borrowed from the vendor. Table~\ref{tab:coverage}
 summarizes coverage. By design \cqr{} is real-precision only, performs no
-argument checking on the MKL-style surface (like MKL), does not pivot (pivoting
-needs comparisons that do not vectorize across a pack), and does not implement
+argument checking on the MKL-style surface (like MKL), does not pivot (the row
+interchanges of pivoting diverge across a pack), and does not implement
 \code{larfg}'s underflow/overflow rescaling --- the same limitation MKL documents
 for its compact QR~\cite{mkl-compact-limits}.
 
@@ -401,6 +436,7 @@ Layouts           & column-major (tuned), row-major (stride-generalized) \\
 \code{ormqr}      & side $\in\{L,R\}$, trans $\in\{N,T\}$ ($C$ folds to $T$) \\
 \code{potrf}      & designed (batched Cholesky); not yet implemented \\
 Checking          & none on the MKL-style API; LAPACK-style \code{info}$=-j$ on the portable C API \\
+Not provided      & LU, GEMM, and BLAS-1/2 --- deferred to the vendor libraries \\
 Not supported     & complex (\code{c},\code{z}); column pivoting; underflow/overflow rescaling \\
 \bottomrule
 \end{tabularx}
@@ -568,9 +604,11 @@ ArmPL on Arm from one source, the format --- not the implementation --- is doing
 the work, and there is no reason for it to remain closed or ISA-locked.
 
 The scope limits are deliberate and mirror the vendors'. \cqr{} is real-only;
-complex Hermitian QR is future work. It does not pivot, so it is unsuited to
-rank-revealing factorizations --- but the target least-squares and interpolation
-problems are set up to be well conditioned. It omits \code{larfg}'s
+complex Hermitian QR is future work. Its QR is unpivoted --- unlike ArmPL's
+rank-revealing \code{?geqrfrr} --- so it does not reveal rank, and \cqr{} provides
+neither LU nor GEMM (both deferred to the vendor libraries,
+Section~\ref{sec:vendors}); the target least-squares and interpolation problems
+are, however, set up to be well conditioned. It omits \code{larfg}'s
 underflow/overflow rescaling, matching MKL's documented compact
 limitation~\cite{mkl-compact-limits}; inputs scaled to the exponent extremes are
 out of scope. And the row-major and right-apply paths are correctness-first, not
