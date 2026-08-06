@@ -80,7 +80,7 @@ void potrf_compact_group(Int n, T *a_, Int ldap)
     VT *A = reinterpret_cast<VT *>(a_);
 
     for (Int j = 0; j < n; ++j) {
-        VT *aj = A + static_cast<std::size_t>(j) * ldap; /* pivot column j */
+        VT *aj = A + j * ldap; /* pivot column j */
 
         /* pivot: d = sqrt(A(j,j)); scale the sub-diagonal column by 1/d */
         VT d;
@@ -95,10 +95,10 @@ void potrf_compact_group(Int n, T *a_, Int ldap)
          * entry aj[i] is loaded once and reused across the block. */
         Int jj = j + 1;
         for (; jj + 4 <= n; jj += 4) {
-            VT *c0 = A + static_cast<std::size_t>(jj + 0) * ldap;
-            VT *c1 = A + static_cast<std::size_t>(jj + 1) * ldap;
-            VT *c2 = A + static_cast<std::size_t>(jj + 2) * ldap;
-            VT *c3 = A + static_cast<std::size_t>(jj + 3) * ldap;
+            VT *c0 = A + (jj + 0) * ldap;
+            VT *c1 = A + (jj + 1) * ldap;
+            VT *c2 = A + (jj + 2) * ldap;
+            VT *c3 = A + (jj + 3) * ldap;
             const VT w0 = aj[jj + 0], w1 = aj[jj + 1], w2 = aj[jj + 2], w3 = aj[jj + 3];
 
             /* near-diagonal triangular corner: column jj+c touches only rows
@@ -129,7 +129,7 @@ void potrf_compact_group(Int n, T *a_, Int ldap)
 
         /* remainder columns (fewer than 4 left) */
         for (; jj < n; ++jj) {
-            VT *cj = A + static_cast<std::size_t>(jj) * ldap;
+            VT *cj = A + jj * ldap;
             const VT w = aj[jj];
             for (Int i = jj; i < n; ++i)
                 cj[i] -= aj[i] * w;
