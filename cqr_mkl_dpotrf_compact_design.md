@@ -314,3 +314,35 @@ A suggested split into new source files:
 
 The `cqr_mkl_?potrf_compact` prototypes are added to `cqr_mkl_ext.h` and the
 portable `?potrf_compact` prototypes to `cqr_compact.h`.
+
+## 9. Benchmark
+
+The compact batched Cholesky factorization is benchmarked against a
+one-matrix-at-a-time `LAPACKE_dpotrf` loop (the standard layout) and against
+MKL's own `mkl_dpotrf_compact`, over pools of small symmetric positive-definite
+matrices across the target size range. Every matrix is factored on the tuned
+path -- column-major, lower triangle (`A = L L^T`) -- and the benchmark reports
+per-size throughput (matrices/s and GFLOP/s, using the `n^3/3 + n^2/2 + n/6`
+LAPACK Cholesky flop count) and a geometric-mean speedup. Because the SPD
+Cholesky factor is unique (positive diagonal), it checks the compact factor
+*elementwise* against per-matrix LAPACK (`LAPACKE_dpotrf`) rather than only by
+reconstruction, so it doubles as an integration test. The pool is packed into
+compact form once, up front, and only the factorization is timed; the SPD input
+is the cheap diagonally dominant `A_ii = 2n` form (SPD without an `O(n^3)`
+`M^T M`). Unlike `geqrf`, `potrf` needs no workspace, so there is no `lwork`
+query and no per-thread work array. The outer batch loop is parallelized with
+OpenMP.
+
+This mirrors `bench_geqrf_compact` (`geqrf` design section 9): the default size
+list deliberately mixes sizes that are not multiples of the interleave width
+(30, 45, 60, 105, 168, from 2-D/3-D RBF-FD stencils) with the round powers, so
+the SIMD remainder handling is visible, and the same two optional flags extend
+the driver -- `--simdlen=2|4|8` forces a narrower interleave width than the host
+default (unsupported or wider-than-native widths are rejected), and
+`--size-sweep=nmin:nmax[:stride]` switches to a cqr-only throughput scan (raw
+best-pass time, GFLOP/s, and matrices/s per size, no cross-check) to resolve the
+staircase effect finely. As with `geqrf`, a fair cqr-vs-MKL comparison needs a
+host-tuned build (`-march=native`) so the open kernel emits the full vector
+width that MKL's runtime dispatch selects; on the target small-size range the
+compact path outruns per-matrix LAPACK and is competitive with `mkl_dpotrf_compact`,
+with per-matrix LAPACK's blocked algorithm crossing ahead only at larger orders.
