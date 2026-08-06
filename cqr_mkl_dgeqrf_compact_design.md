@@ -282,20 +282,5 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
   packs by `geqrf_compact_general<T,V>` (either layout; the entry point both C
   adapters call) and the col-major convenience driver `geqrf_compact<T,V>`.
 
-## 9. Benchmark
-
-The compact batched factorization is benchmarked against a one-matrix-at-a-time
-`LAPACKE_dgeqrf` loop (the standard layout) and against MKL's own
-`mkl_dgeqrf_compact`, over pools of small matrices across the target size range.
-It reports per-size throughput and a geometric-mean speedup, and checks the
-compact factors against per-matrix LAPACK so it doubles as an integration test.
-The outer batch loop is parallelized with OpenMP.
-
-The default size list deliberately mixes sizes that are not multiples of the
-interleave width (30, 45, 60, 105, 168, from 2-D/3-D RBF-FD stencils) with the
-round powers, so the SIMD remainder handling is visible. Two optional flags
-extend the driver: `--simdlen=2|4|8` forces a narrower interleave width than the
-host default (unsupported or wider-than-native widths are rejected), and
-`--size-sweep=nmin:nmax[:stride]` switches to a cqr-only throughput scan --
-raw best-pass time, GFLOP/s, and matrices/s per size, no cross-check -- to
-resolve the staircase effect finely.
+The throughput benchmark (`bench_geqrf_compact`) is documented in
+[`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).

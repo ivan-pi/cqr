@@ -86,7 +86,9 @@ Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 
 All are registered with CTest (`example_solve_qr_compact`,
 `bench_qr_compact_integration`, `bench_geqrf_compact_integration`,
-`bench_potrf_compact_integration`).
+`bench_potrf_compact_integration`). The three benchmarks -- what they measure,
+how to run them, the flags, and the `-march=native` caveat -- are documented in
+detail in [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).
 
 ## Layout
 

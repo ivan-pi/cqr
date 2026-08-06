@@ -83,7 +83,7 @@ if(CQR_WITH_MKL)
   endif()
 
   # Throughput benchmark of the QR factorization itself: cqr_mkl_dgeqrf_compact
-  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (design doc benchmark 1).
+  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (see examples/BENCHMARKS.md).
   add_executable(bench_geqrf_compact examples/bench_geqrf_compact.cpp)
   target_link_libraries(bench_geqrf_compact
     PRIVATE cqr_mkl_ext MKL::Compact)
@@ -93,7 +93,7 @@ if(CQR_WITH_MKL)
 
   # Throughput benchmark of the Cholesky factorization on SPD matrices:
   # cqr_mkl_dpotrf_compact vs mkl_dpotrf_compact vs per-matrix LAPACKE_dpotrf
-  # (the potrf analogue of bench_geqrf_compact; potrf design doc section 9).
+  # (the potrf analogue of bench_geqrf_compact; see examples/BENCHMARKS.md).
   add_executable(bench_potrf_compact examples/bench_potrf_compact.cpp)
   target_link_libraries(bench_potrf_compact
     PRIVATE cqr_mkl_ext MKL::Compact)

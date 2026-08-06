@@ -7,10 +7,11 @@
  *   mkl-compact  mkl_dgeqrf_compact       (Intel MKL's batched compact kernel)
  *   per-matrix   LAPACKE_dgeqrf           (conventional one-matrix-at-a-time)
  *
- * This is benchmark 1 of the design document (section 9): the compact batched
- * factorization against the standard per-matrix layout, with MKL's own compact
- * kernel as a second yardstick. To measure the factorization kernels rather than
- * data movement, the pool is packed into compact form once, up front; only the
+ * It pits the compact batched factorization against the standard per-matrix
+ * layout, with MKL's own compact kernel as a second yardstick (all three
+ * benchmarks are documented in examples/BENCHMARKS.md). To measure the
+ * factorization kernels rather than data movement, the pool is packed into
+ * compact form once, up front; only the
  * factorization is timed, and the destroyed input is restored (untimed) before
  * each pass. The two compact paths are driven from an OpenMP outer loop over the
  * groups of V interleaved matrices -- the intended "outer multi-threaded loop"

@@ -8,8 +8,9 @@
  *   mkl-compact  mkl_dpotrf_compact       (Intel MKL's batched compact kernel)
  *   per-matrix   LAPACKE_dpotrf           (conventional one-matrix-at-a-time)
  *
- * This is the potrf analogue of bench_geqrf_compact (design document section 9):
- * the compact batched factorization against the standard per-matrix layout, with
+ * This is the potrf analogue of bench_geqrf_compact (all three benchmarks are
+ * documented in examples/BENCHMARKS.md): the compact batched factorization
+ * against the standard per-matrix layout, with
  * MKL's own compact kernel as a second yardstick. Every matrix is factored on its
  * tuned path -- column-major, lower triangle (A = L L^T) -- which is the natural
  * Cholesky data flow. To measure the factorization kernels rather than data
