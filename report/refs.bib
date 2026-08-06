@@ -1,0 +1,115 @@
+% Bibliography for the compact-API report.
+% NOTE (draft): entries kept deliberately conservative. Vendor documentation is
+% cited as online references with URLs (as in the repo README); please verify
+% volumes/pages on the journal entries, and add references for the kinetics,
+% line-solver, and convex-optimisation applications before submission.
+% (BibTeX has no % comment syntax; a stray at-sign in these notes would be read
+% as the start of an entry, so avoid writing one in a comment here.)
+
+@article{bblas2021,
+  author  = {Abdelfattah, Ahmad and Costa, Timothy and Dongarra, Jack and
+             Gates, Mark and Haidar, Azzam and Hammarling, Sven and
+             Higham, Nicholas J. and Kurzak, Jakub and Luszczek, Piotr and
+             Tomov, Stanimire and Zounon, Mawussi},
+  title   = {A Set of Batched Basic Linear Algebra Subprograms and {LAPACK} Routines},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {47},
+  number  = {3},
+  year    = {2021},
+  doi     = {10.1145/3431921}
+}
+
+@misc{bblas-standard,
+  author       = {{Batched BLAS Working Group}},
+  title        = {Batched {BLAS} (BBLAS): a proposed standard interface for batched {BLAS} operations},
+  year         = {2026},
+  howpublished = {\url{https://icl.utk.edu/bblas/}},
+  note         = {Accessed 2026}
+}
+
+@misc{mkl-compact,
+  author       = {{Intel Corporation}},
+  title        = {{oneMKL} Developer Reference (C): Compact {BLAS} and {LAPACK} Functions},
+  year         = {2026},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/compact-blas-and-lapack-functions.html}},
+  note         = {Accessed 2026}
+}
+
+@misc{mkl-compact-limits,
+  author       = {{Intel Corporation}},
+  title        = {{oneMKL} Developer Reference (C): Numerical Limitations of Compact {BLAS} and Compact {LAPACK} Functions},
+  year         = {2026},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2025-2/numerical-limits-compact-blas-compact-lapack.html}},
+  note         = {Accessed 2026}
+}
+
+@misc{armpl-interleave,
+  author       = {{Arm Limited}},
+  title        = {Arm Performance Libraries: Interleave-batch functions},
+  year         = {2026},
+  howpublished = {\url{https://developer.arm.com/documentation/101004/latest/Interleave-batch-functions}},
+  note         = {Accessed 2026}
+}
+
+@misc{kokkos-kernels,
+  author       = {{Kokkos Kernels developers}},
+  title        = {Kokkos Kernels: Batched {API}},
+  year         = {2026},
+  howpublished = {\url{https://kokkos.org/kokkos-kernels/}},
+  note         = {Accessed 2026}
+}
+
+@misc{batmat,
+  author       = {Pieter Pas},
+  title        = {batmat: batched small-matrix linear algebra},
+  year         = {2026},
+  howpublished = {\url{https://github.com/tttapa/batmat}},
+  note         = {Accessed 2026}
+}
+
+@book{lapack-ug,
+  author    = {Anderson, E. and Bai, Z. and Bischof, C. and Blackford, S. and
+               Demmel, J. and Dongarra, J. and Du Croz, J. and Greenbaum, A. and
+               Hammarling, S. and McKenney, A. and Sorensen, D.},
+  title     = {{LAPACK} Users' Guide},
+  edition   = {Third},
+  publisher = {Society for Industrial and Applied Mathematics},
+  address   = {Philadelphia, PA},
+  year      = {1999}
+}
+
+@book{golub2013,
+  author    = {Golub, Gene H. and Van Loan, Charles F.},
+  title     = {Matrix Computations},
+  edition   = {Fourth},
+  publisher = {Johns Hopkins University Press},
+  address   = {Baltimore, MD},
+  year      = {2013}
+}
+
+@article{precice2016,
+  author  = {Bungartz, Hans-Joachim and Lindner, Florian and Gatzhammer, Bernhard and
+             Mehl, Miriam and Scheufele, Klaudius and Shukaev, Alexander and
+             Uekermann, Benjamin},
+  title   = {{preCICE} -- A fully parallel library for multi-physics surface coupling},
+  journal = {Computers \& Fluids},
+  volume  = {141},
+  pages   = {250--258},
+  year    = {2016},
+  doi     = {10.1016/j.compfluid.2016.04.003}
+}
+
+@book{fornberg2015,
+  author    = {Fornberg, Bengt and Flyer, Natasha},
+  title     = {A Primer on Radial Basis Functions with Applications to the Geosciences},
+  publisher = {Society for Industrial and Applied Mathematics},
+  address   = {Philadelphia, PA},
+  year      = {2015}
+}
+
+@book{wendland2004,
+  author    = {Wendland, Holger},
+  title     = {Scattered Data Approximation},
+  publisher = {Cambridge University Press},
+  year      = {2004}
+}

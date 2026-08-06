@@ -14,6 +14,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # ---------------------------------------------------------------------------
 option(CQR_WITH_MKL        "Build the Intel MKL compact extension + MKL tests" ON)
 option(CQR_BUILD_TESTS     "Build tests and register them with CTest"          ON)
+option(CQR_BUILD_REPORT_BENCH "Build report/bench Google Benchmark collector"  OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -83,6 +84,19 @@ if(CQR_WITH_MKL)
     PRIVATE cqr_mkl_ext MKL::Compact)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
+
+  # Publication-grade collection driver for the report (Google Benchmark). Off
+  # by default; enable with -DCQR_BUILD_REPORT_BENCH=ON. Emits JSON that
+  # report/bench/json_to_dat.py turns into the figures' .dat tables.
+  if(CQR_BUILD_REPORT_BENCH)
+    find_package(benchmark REQUIRED)
+    add_executable(bench_geqrf_collect report/bench/bench_geqrf_collect.cpp)
+    target_link_libraries(bench_geqrf_collect
+      PRIVATE cqr_mkl_ext MKL::Compact benchmark::benchmark)
+    if(OpenMP_CXX_FOUND)
+      target_link_libraries(bench_geqrf_collect PRIVATE OpenMP::OpenMP_CXX)
+    endif()
   endif()
 endif()
 

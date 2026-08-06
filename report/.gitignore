@@ -1,0 +1,17 @@
+# The top-level .gitignore excludes files named `Makefile` globally (they are
+# usually CMake-generated); this report's Makefile is hand-written, so keep it.
+!Makefile
+
+# LaTeX build artifacts. The sources, the figure PDFs, and the compiled
+# paper.pdf are tracked; these intermediates are not.
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.toc
+*.synctex.gz
+
+# Benchmark run outputs (raw JSON + provenance records).
+bench/results/
