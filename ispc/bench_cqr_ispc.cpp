@@ -4,7 +4,7 @@
  * the matching MKL compact routine:
  *
  *   native  = the templated GNU vector_size kernels (geqrf_compact_general /
- *             ormqr_compact_general / trsm_compact) called directly, so the
+ *             ormqr_compact_general / trsm_compact_general) called directly, so the
  *             DRIVER compiler generates their code -- build with g++ for the GCC
  *             column, clang++ for the clang column (`make shootout` runs both).
  *   ISPC    = cqr_ispc.o (always ISPC, whatever the host compiler).
@@ -21,7 +21,7 @@
 #include "cqr_ispc.h"
 #include "cqr_geqrf_compact.hpp" /* geqrf_compact_general<T,V> */
 #include "cqr_compact.hpp"       /* ormqr_compact_general<T,V> */
-#include "cqr_trsm_compact.hpp"  /* trsm_compact<T,V>          */
+#include "cqr_trsm_compact.hpp"  /* trsm_compact_general<T,V> (../src) */
 
 using namespace bench;
 #if defined(__clang__)
@@ -44,7 +44,9 @@ static void nat_ormqrT(int n, int r, double *a, double *t, double *b, int nm)
 }
 static void nat_trsm(int n, int r, double *a, double *b, int nm)
 {
-    cqr::detail::trsm_compact<double, 8>(n, r, 1.0, a, n, b, n, nm);
+    /* R X = Q^T B: left, upper, no-trans, non-unit, col-major (R is n x n). */
+    cqr::detail::trsm_compact_general<double, 8>(true, true, false, false, false, n, r,
+                                                 1.0, a, n, b, n, nm);
 }
 
 struct Row {

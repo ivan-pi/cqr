@@ -75,7 +75,6 @@ ctest --test-dir build --output-on-failure     # per-kernel correctness tests
 | `cqr_ispc.ispc` | The ISPC kernels (`geqrf`/`ormqr`/`trsm`/`potrf`) + `cqr_ispc_gang_width` (gang-generic). |
 | `cqr_ispc.h` | `extern "C"` declarations — drop-ins for `../src/cqr_compact.h`. |
 | `bench_gang.cpp` | Gang-size sweep (packs at `V` = gang width; ISPC-only, no MKL). |
-| `cqr_trsm_compact.hpp` | Templated GNU-vector `trsm` (a counterpart to `mkl_dtrsm_compact` for GCC/clang). |
 | `bench_common.hpp` | Shared harness: pool, timer, pack/unpack, GFLOP helpers. |
 | `test_cqr_ispc.cpp` | Per-kernel unit tests (vs LAPACK/MKL oracles) + end-to-end solve. |
 | `bench_cqr_ispc.cpp` | The benchmark; the `native` column is the configuring CXX compiler. |

@@ -23,7 +23,7 @@
 #include "cqr_ispc.h"
 #include "cqr_geqrf_compact.hpp" /* geqrf_compact_general<T,V>  (GNU vector_size) */
 #include "cqr_compact.hpp"       /* ormqr_compact_general<T,V>                    */
-#include "cqr_trsm_compact.hpp"  /* trsm_compact<T,V>                            */
+#include "cqr_trsm_compact.hpp"  /* trsm_compact_general<T,V>   (../src)          */
 
 #include <algorithm>
 #include <chrono>
@@ -58,7 +58,9 @@ static void gnu_pipe(int n, int nrhs, double *ap, double *tau, double *bp, int n
     cqr::detail::geqrf_compact_general<double, V>(false, n, n, ap, n, tau, nmat);
     cqr::detail::ormqr_compact_general<double, V>(true, false, 'T', n, nrhs, n, ap, n,
                                                   tau, bp, n, nmat);
-    cqr::detail::trsm_compact<double, V>(n, nrhs, 1.0, ap, n, bp, n, nmat);
+    /* R X = Q^T B: left, upper, no-trans, non-unit, col-major (R is n x n). */
+    cqr::detail::trsm_compact_general<double, V>(true, true, false, false, false, n, nrhs,
+                                                 1.0, ap, n, bp, n, nmat);
 }
 
 int main(int argc, char **argv)
