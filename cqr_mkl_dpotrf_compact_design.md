@@ -252,11 +252,12 @@ contract:
 ### 7.2 Suite 2 -- Cross-check vs `mkl_dpotrf_compact`
 
 The same packed batch is factored by both `cqr_mkl_dpotrf_compact` and the native
-`mkl_dpotrf_compact`; the two compact `ap` buffers are compared elementwise at a
-small fixed tolerance (`1e-9`; agreement on well-conditioned SPD inputs is
-expected at the `1e-14` level). This confirms the two implementations match far
-beyond the backward-error gate -- same factor, same unblocked math -- without
-requiring bit-identical arithmetic.
+`mkl_dpotrf_compact`, and the two compact `ap` buffers are compared elementwise at
+a small fixed tolerance (`1e-9`). The two implementations do not share an order of
+arithmetic operations -- MKL's is closed -- so exact agreement is neither expected
+nor required; the tolerance simply confirms they compute the *same* Cholesky
+factor. On well-conditioned SPD inputs the observed agreement is far tighter, at
+the `1e-14` level.
 
 ### 7.3 Suite 3 -- End-to-end solve `AX = B`
 
@@ -280,9 +281,8 @@ must be installed separately.
 ## 8. Implementation Strategy
 
 Modern C++ (C++17) templated on scalar type `T` and interleave width `V`, exposed
-through `extern "C"` for the FFI-stable surfaces, reusing the existing
-`cqr::detail::pack<T,V>` GNU-vector machinery and the `vsqrt<T,V>` helper already
-defined for `geqrf`.
+through `extern "C"` for the FFI-stable surfaces, built on the project's
+`cqr::detail::pack<T,V>` GNU-vector machinery and a lane-wise `vsqrt<T,V>` helper.
 
 ### 8.1 API boundary
 
@@ -302,7 +302,7 @@ defined for `geqrf`.
 
 ### 8.2 Suggested source layout
 
-Mirroring the `geqrf` files, so the split is familiar:
+A suggested split into new source files:
 
 | File | Role |
 |------|------|
@@ -313,21 +313,4 @@ Mirroring the `geqrf` files, so the split is familiar:
 | `src/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation (residual, uniqueness, cross-check, solve). |
 
 The `cqr_mkl_?potrf_compact` prototypes are added to `cqr_mkl_ext.h` and the
-portable `?potrf_compact` prototypes to `cqr_compact.h`, alongside the existing
-QR entry points.
-
-## 9. Benchmark
-
-The compact batched Cholesky is benchmarked against a one-matrix-at-a-time
-`LAPACKE_dpotrf` loop (the standard layout) and against MKL's own
-`mkl_dpotrf_compact`, over pools of small SPD matrices across the target size
-range. It reports per-size throughput (GFLOP/s, using the `~(1/3) n^3` real
-Cholesky flop count) and a geometric-mean speedup, and checks the compact factor
-against per-matrix LAPACK so it doubles as an integration test. The outer batch
-loop is parallelized with OpenMP.
-
-As in `bench_geqrf_compact`, the default size list mixes sizes that are not
-multiples of the interleave width (30, 45, 60, 105, 168 from 2-D/3-D RBF-FD
-stencils) with the round powers, so the SIMD remainder handling is visible, and
-the `--simdlen=2|4|8` and `--size-sweep=nmin:nmax[:stride]` flags carry over for
-forcing a narrower width and for a fine cqr-only throughput scan.
+portable `?potrf_compact` prototypes to `cqr_compact.h`.

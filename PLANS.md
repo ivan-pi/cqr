@@ -53,8 +53,8 @@ batches. **Status: design document only; no code yet.** The document specifies:
   bad lane instead of `info = j`, mirroring MKL's reserved `info`), no
   overflow/underflow-safe scaling, no pivoting, and complex (`c`/`z`) Hermitian
   variants -- consistent with the QR routines.
-- **Not yet done:** the kernel, dispatchers, tests, benchmark, and `CMakeLists`
-  wiring (suggested file layout in design section 8.2).
+- **Not yet done:** the kernel, dispatchers, tests, and `CMakeLists` wiring
+  (suggested file layout in design section 8.2).
 
 ## Known gaps
 
