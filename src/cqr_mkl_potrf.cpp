@@ -4,31 +4,21 @@
  * a thin C-linkage adapter that
  *   1. unwraps MKL_COMPACT_PACK + the scalar type to the interleave width V,
  *   2. unwraps MKL_LAYOUT / MKL_UPLO to the kernel's rowmajor/upper flags,
- *   3. forwards to the templated kernel cqr::detail::potrf_compact_general<T,V>,
- *      instantiated on MKL_INT so ILP64 dimensions are not narrowed.
+ *   3. forwards to cqr::detail::potrf_compact_general<T,V>, instantiated on
+ *      MKL_INT so ILP64 dimensions are not narrowed.
  *
  * Unlike ?geqrf, ?potrf needs no workspace, so -- like mkl_?potrf_compact --
  * there are no work/lwork arguments and no workspace query.
  *
- * Following the MKL Compact convention, the routine does NOT validate its
- * arguments: compact routines skip error checking for vectorization and make
- * the caller responsible for passing consistent parameters (see "Numerical
- * Limitations for Compact BLAS and Compact LAPACK Routines"). It also performs
- * no positive-definiteness test -- a non-SPD lane poisons itself with NaN/Inf
- * rather than reporting info = j (design section 6.2). MKL likewise leaves the
- * compact `info` reserved; we write it as a single scalar status (0 on success).
- * The one value it can set is dispatch-level: an unrecognized `format` selects
- * no kernel and sets info = -1.
+ * Following the MKL Compact convention, the routine validates no arguments and
+ * runs no positive-definiteness test: a non-SPD lane poisons itself with NaN/Inf
+ * rather than reporting info = j (design section 6.2). info is a single scalar
+ * status, 0 on success; the one value it can set is dispatch-level, info = -1 for
+ * an unrecognized format.
  *
- * On exit the named triangle of each matrix in ap holds its Cholesky factor
- * (L for MKL_LOWER, U for MKL_UPPER); the strictly-opposite triangle is left
- * untouched -- exactly the mkl_?potrf_compact / LAPACK ?potrf convention.
- *
- * Compact-format addressing (matches mkl_?gepack_compact); group g = idx/V,
- * slot v = idx%V. Column-major (the addressing the tuned kernel sweeps natively):
- *   A_v(i,j) = ap[ g*ldap*n*V + (j*ldap + i)*V + v ]
- * Row-major swaps the in-matrix index roles (i*ldap + j); the group stride
- * ldap*n*V is the same either way (A is n x n).
+ * On exit the named triangle of each matrix holds its Cholesky factor (L for
+ * MKL_LOWER, U for MKL_UPPER); the opposite triangle is left untouched. The
+ * compact addressing is documented in cqr_potrf_compact.hpp.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */

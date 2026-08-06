@@ -16,14 +16,15 @@
 // Assisted-by: Claude:claude-opus-4.8
 
 #include <cstdio>
-#include <cstdlib>
 #include <cmath>
-#include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
 
-#include "cqr_compact.h" // dpotrf_compact / spotrf_compact
+#include "cqr_compact.h"         // dpotrf_compact / spotrf_compact
+#include "test_compact_util.hpp" // frand, gen_spd, MatrixBatch, pack/unpack, max_abs_diff
+
+using namespace cqr::test;
 
 // ----------------------- reference kernel (scalar) ------------------
 // Unblocked right-looking potf2 on a dense column-major n x n matrix, in place.
@@ -62,103 +63,8 @@ template <class T> static void ref_potf2(char uplo, int n, T *A, int lda)
     }
 }
 
-// ------------------------- batch storage ----------------------------
-// A batch of `count` column-major n x n matrices in one contiguous buffer:
-// matrix idx starts at idx*n*n with leading dimension n.
-
-template <class T> class MatrixBatch {
-  public:
-    MatrixBatch(int count, int n) : count_(count), n_(n), a_((size_t)count * n * n) {}
-
-    // clang-format off
-    int count() const { return count_; }
-    int n()     const { return n_; }
-
-    T       *operator[](int idx)       { return a_.data() + (size_t)idx * n_ * n_; }
-    const T *operator[](int idx) const { return a_.data() + (size_t)idx * n_ * n_; }
-
-    T       &operator()(int idx, int i, int j)       { return (*this)[idx][i + (size_t)j * n_]; }
-    const T &operator()(int idx, int i, int j) const { return (*this)[idx][i + (size_t)j * n_]; }
-    // clang-format on
-
-  private:
-    int count_, n_;
-    std::vector<T> a_;
-};
-
-// ----------------------- compact pack / unpack ----------------------
-// n x n matrices with leading dimension ldp. group g = idx/V, slot v = idx%V:
-//   col-major: element (i,j) of matrix idx at p[g*ldp*n*V + (j*ldp+i)*V + v]
-//   row-major:                                p[g*ldp*n*V + (i*ldp+j)*V + v]
-// Padded slots (idx >= nm) carry the identity, whose Cholesky factor is itself.
-
-template <class T>
-static void pack_compact(const MatrixBatch<T> &Mk, T *p, int ldp, int V, bool rowmajor)
-{
-    const int n = Mk.n(), nm = Mk.count();
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    p[(size_t)g * ldp * n * V + off * V + v] =
-                        (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
-                }
-        }
-}
-
-template <class T>
-static void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V, bool rowmajor)
-{
-    const int n = Mk.n(), nm = Mk.count();
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    Mk(idx, i, j) = p[(size_t)g * ldp * n * V + off * V + v];
-                }
-        }
-}
-
-// ----------------------------- helpers ------------------------------
-
-static std::mt19937_64 rng(12345);
-
-template <class T> static T frand()
-{
-    static std::uniform_real_distribution<T> dist(T(-1), T(1));
-    return dist(rng);
-}
-
-template <class T> static double max_abs_diff(const T *a, const T *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, (double)std::abs(a[i] - b[i]));
-    return d;
-}
-
-// Build a symmetric positive-definite n x n matrix (column-major): A = M^T M +
-// n*I, which is SPD with a tame condition number. Stored full (both triangles).
-template <class T> static void gen_spd(T *A, int n)
-{
-    std::vector<T> M((size_t)n * n);
-    for (auto &x : M)
-        x = frand<T>();
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            T s = 0;
-            for (int l = 0; l < n; ++l)
-                s += M[l + (size_t)i * n] * M[l + (size_t)j * n]; // (M^T M)(i,j)
-            A[i + (size_t)j * n] = s + (i == j ? T(n) : T(0));
-        }
-}
+// MatrixBatch, pack_compact/unpack_compact, frand, max_abs_diff and gen_spd
+// live in test_compact_util.hpp (shared across the compact test suites).
 
 // precision-overloaded shim: pick d/s by the pointer type
 static int potrf_c(char lay, char up, int n, double *a, int ld, int V, int nm)
@@ -179,7 +85,7 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
     const bool upper = (uplo == 'U' || uplo == 'u');
 
     // random SPD batch + scalar reference factor for this uplo
-    MatrixBatch<T> A(nm, n), Aref(nm, n);
+    MatrixBatch<T> A(nm, n, n), Aref(nm, n, n);
     for (int idx = 0; idx < nm; ++idx) {
         gen_spd(A[idx], n);
         std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
@@ -191,7 +97,7 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
     std::vector<T> ap((size_t)ng * n * n * V);
     pack_compact(A, ap.data(), n, V, rowmajor);
     int info = potrf_c(layout, uplo, n, ap.data(), n, V, nm);
-    MatrixBatch<T> Aout(nm, n);
+    MatrixBatch<T> Aout(nm, n, n);
     unpack_compact(Aout, ap.data(), n, V, rowmajor);
 
     double e_fac = 0, e_rec = 0, e_untouched = 0;
@@ -257,7 +163,7 @@ template <class T, int V> static int run_nonspd(int n, char uplo, char layout)
     const int nm = V;      // one full pack, so all V lanes are exercised together
     const int badlane = 1; // this lane is non-SPD; the rest are SPD
 
-    MatrixBatch<T> A(nm, n), Aref(nm, n);
+    MatrixBatch<T> A(nm, n, n), Aref(nm, n, n);
     for (int idx = 0; idx < nm; ++idx) {
         if (idx == badlane) {
             // symmetric but indefinite: identity with a negative leading pivot,
@@ -278,7 +184,7 @@ template <class T, int V> static int run_nonspd(int n, char uplo, char layout)
     std::vector<T> ap((size_t)ng * n * n * V);
     pack_compact(A, ap.data(), n, V, rowmajor);
     int info = potrf_c(layout, uplo, n, ap.data(), n, V, nm);
-    MatrixBatch<T> Aout(nm, n);
+    MatrixBatch<T> Aout(nm, n, n);
     unpack_compact(Aout, ap.data(), n, V, rowmajor);
 
     double e_spd = 0; // worst error over the SPD sibling lanes

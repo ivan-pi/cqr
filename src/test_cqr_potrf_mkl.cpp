@@ -32,15 +32,16 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, gen_spd, max_abs_diff */
 
 #include <cstdio>
-#include <cstdlib>
 #include <cmath>
 #include <limits>
-#include <random>
 #include <vector>
 #include <algorithm>
+
+using namespace cqr::test;
 
 namespace {
 
@@ -51,71 +52,10 @@ int vlen(MKL_COMPACT_PACK fmt)
     return cqr::detail::vlen_for_format<double>(fmt);
 }
 
-std::mt19937_64 rng(7);
-
-double frand()
-{
-    static std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    return dist(rng);
-}
-
-/* L1 (max column sum) norm of a column-major m x n matrix */
-double norm1(const double *M, int m, int n)
-{
-    double mx = 0;
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        for (int i = 0; i < m; ++i)
-            s += std::abs(M[i + (size_t)j * m]);
-        mx = std::max(mx, s);
-    }
-    return mx;
-}
-
-double maxdiff(const double *a, const double *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, std::abs(a[i] - b[i]));
-    return d;
-}
-
-template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
-{
-    std::vector<T *> p(nm);
-    for (int v = 0; v < nm; ++v)
-        p[v] = base + (size_t)v * stride;
-    return p;
-}
-
 /* Logical element (i,j) of a dense n x n matrix stored in the given layout. */
 double &elem(double *a, int i, int j, int n, bool rowmajor)
 {
     return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
-}
-
-/* Build a symmetric positive-definite n x n matrix (column-major), A = M^T M +
- * n*I, optionally squeezed with a symmetric congruence D A D, D = diag(
- * 10^{-cond*i/(n-1)}), for dynamic range while staying SPD and symmetric. */
-void gen_spd(double *A, int n, double cond)
-{
-    std::vector<double> M((size_t)n * n);
-    for (auto &x : M)
-        x = frand();
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            double s = 0;
-            for (int l = 0; l < n; ++l)
-                s += M[l + (size_t)i * n] * M[l + (size_t)j * n];
-            A[i + (size_t)j * n] = s + (i == j ? (double)n : 0.0);
-        }
-    if (cond > 0.0)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                double si = std::pow(10.0, -cond * (n > 1 ? (double)i / (n - 1) : 0.0));
-                double sj = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
-                A[i + (size_t)j * n] *= si * sj;
-            }
 }
 
 /* ---------------- Suite 1: invariants vs dense LAPACK ------------------ */
@@ -238,7 +178,7 @@ int suite2(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
     /* compare the two compact buffers elementwise (same input, same convention).
      * The two implementations do not share an arithmetic order, so exact
      * agreement is not required; the tolerance confirms the same factor. */
-    double da = maxdiff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
+    double da = max_abs_diff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
     const double tol = 1e-9;
     bool ok = (da <= tol);
     std::printf("  [suite2] %s uplo=%c V=%-2d nm=%-2d n=%-3d | max|ap-mkl| %.2e "
@@ -309,7 +249,7 @@ int suite3(int nm, int n, int nrhs)
     for (int v = 0; v < nm; ++v) {
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, maxdiff(Xv, X.data(), sB) /
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
                                             std::max(norm1(X.data(), n, nrhs), 1e-300));
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i) {
@@ -318,7 +258,7 @@ int suite3(int nm, int n, int nrhs)
                     s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
                 AX[i + (size_t)j * n] = s;
             }
-        worst_res = std::max(worst_res, maxdiff(AX.data(), Bv, sB) /
+        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
                                             std::max(norm1(Bv, n, nrhs), 1e-300));
     }
     const double rtol = 100.0 * n * eps;

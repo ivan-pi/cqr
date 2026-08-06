@@ -98,17 +98,12 @@ void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
                             MKL_INT nm);
 
 /* Cholesky factorization of a batch of symmetric positive-definite n x n
- * matrices in Compact format: A = L L^T (uplo = MKL_LOWER) or A = U^T U
- * (uplo = MKL_UPPER). Drop-in for mkl_?potrf_compact (identical signature).
- * On exit the named triangle of each ap holds its Cholesky factor; the other
- * triangle is not referenced or modified. Unlike ?geqrf there is no workspace,
- * so -- as in mkl_?potrf_compact -- there are no work/lwork arguments.
- *
- * No argument checking and no positive-definiteness test (MKL Compact
- * convention): a non-SPD lane poisons itself with NaN/Inf rather than reporting
- * info = j. info is a single scalar status, 0 on success; the one value it can
- * set is dispatch-level, info = -1 for an unrecognized format (no kernel to
- * select). See cqr_mkl_dpotrf_compact_design.md. */
+ * matrices in Compact format: A = L L^T (MKL_LOWER) or A = U^T U (MKL_UPPER).
+ * Drop-in for mkl_?potrf_compact (identical signature). On exit the named
+ * triangle holds the factor; the other is untouched. No workspace (no
+ * work/lwork), no argument checking, and no SPD test -- a non-SPD lane poisons
+ * itself with NaN/Inf, not info = j. info is a scalar status (0 ok, -1 for an
+ * unrecognized format). See cqr_mkl_dpotrf_compact_design.md. */
 void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
                             MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
                             MKL_INT nm);

@@ -3,56 +3,46 @@
  * Compact (interleaved-batch) Cholesky factorization of symmetric
  * positive-definite matrices, templated on scalar type T and interleave width V:
  *
- *     A = L L^T,   L lower triangular   (uplo lower),
- *     A = U^T U,   U upper triangular   (uplo upper),
+ *     A = L L^T  (uplo lower),   A = U^T U  (uplo upper),
  *
  * with a positive diagonal, run V matrices at a time.
  *
  * potrf_compact()         -- tuned column-major, lower path.
  * potrf_compact_general() -- column- or row-major, lower or upper.
  *
- * A portable, vectorized mkl_?potrf_compact. It reuses the pack<T,V> / vsqrt /
- * BatchView machinery from cqr_compact.hpp (shared with geqrf/ormqr). Paired
- * with MKL's own mkl_?trsm_compact it factors and solves batched SPD systems in
- * the compact format.
+ * A portable, vectorized mkl_?potrf_compact, reusing the pack<T,V> / vsqrt /
+ * BatchView machinery from cqr_compact.hpp (shared with geqrf/ormqr). Paired with
+ * MKL's mkl_?trsm_compact it factors and solves batched SPD systems.
  *
- * Algorithm: the unblocked LAPACK potf2, right-looking, run V matrices at a
- * time. Compact format stores element (i,j) of all V matrices contiguously, so
- * the scalar algorithm lifts with double -> V-wide vector, one lane per matrix.
- * Cholesky has no data-dependent branch, so -- unlike geqrf's larfg -- no lane
- * mask is needed; the pivot is an unconditional vsqrt. Per pivot column j (lower):
+ * Algorithm: the unblocked LAPACK potf2, right-looking, V matrices at a time.
+ * Compact format stores element (i,j) of all V matrices contiguously, so the
+ * scalar code lifts with double -> V-wide vector, one lane per matrix. Cholesky
+ * has no data-dependent branch, so -- unlike geqrf's larfg -- no lane mask is
+ * needed; the pivot is an unconditional vsqrt. Per pivot column j (lower):
  *
- *     d       = sqrt(A(j,j));  A(j,j) = d;  invd = 1/d
- *     A(i,j) *= invd                      for i > j          (scale pivot column)
- *     A(i,jj)-= A(i,j)*A(jj,j)            for jj > j, i >= jj (rank-1 trailing update)
+ *     d = sqrt(A(j,j));  A(j,j) = d;  invd = 1/d
+ *     A(i,j) *= invd              for i > j             (scale pivot column)
+ *     A(i,jj)-= A(i,j)*A(jj,j)    for jj > j, i >= jj   (rank-1 trailing update)
  *
  * Only the lower trapezoid is touched, so the strictly-upper triangle passes
- * through untouched as ?potrf requires. The trailing update -- the O(n^3) bulk --
- * is register-blocked JB = 4 trailing columns at a time so each pivot-column
- * entry A(i,j) load is reused across four columns, exactly as geqrf's update.
+ * through as ?potrf requires. The O(n^3) trailing update is register-blocked
+ * JB = 4 columns at a time so each pivot entry A(i,j) is reused across four
+ * columns, as in geqrf.
  *
- * Layouts and triangles (design section 6.3). There are four (layout, uplo)
- * combinations, pairing up by transpose duality (A is symmetric, so A^T = A):
- *   - column-major + lower and row-major + upper are the *contiguous* cases: a
- *     factor column is one V-wide pack apart per row, so both route to the tuned
- *     potrf_compact_group (row-major upper is its transpose dual -- factoring the
- *     lower triangle of the reinterpreted column-major view yields U = L^T there).
- *   - column-major + upper and row-major + lower walk the factor across the
- *     non-contiguous axis; both route to the stride-generalized
- *     potrf_compact_group_strided over the same potf2 math (correctness-first).
- * Concretely the group access has row (special) stride 1 for the contiguous
- * cases and ldap for the strided ones; the column (panel) stride is the reverse.
+ * Layouts (design section 6.3): the four (layout, uplo) cases pair by transpose
+ * duality (A symmetric). Column-major lower and row-major upper are contiguous (a
+ * factor column is one pack apart per row) -> tuned potrf_compact_group; column-
+ * major upper and row-major lower are strided -> potrf_compact_group_strided over
+ * the same math. Row stride is 1 for the contiguous cases, ldap for the strided.
  *
- * Compact storage convention (matches MKL Compact / mkl_?gepack_compact);
- * group g = matrix index / V, slot v = matrix index % V:
+ * Compact storage (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V:
  *     A_v(i,j) = ap[ g*ldap*n*V + (j*ldap + i)*V + v ]   (column-major)
- * Row-major swaps the in-matrix index roles (i*ldap + j); the per-matrix extent,
- * and hence the group stride ldap*n*V, is the same either way (A is n x n).
+ * Row-major swaps the in-matrix roles (i*ldap + j); the group stride ldap*n*V is
+ * the same either way (A is n x n).
  *
- * Positive-definiteness is assumed, not enforced (design section 6.2): a non-SPD
- * lane hits A(j,j) <= 0, so sqrt yields NaN (or 1/d yields Inf) and the poison
- * propagates through that lane's factor. No info = j early-exit -- that per-lane
- * branch is exactly what does not vectorize across a pack.
+ * Positive-definiteness is assumed, not enforced (section 6.2): a non-SPD lane
+ * gets NaN/Inf in its factor; there is no info = j early-exit (that per-lane
+ * branch is what does not vectorize).
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
