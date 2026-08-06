@@ -63,6 +63,14 @@ endif()
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
+# Portable prototype benchmark: the blocked (Level-3, larft/larfb) compact QR
+# vs the unblocked geqr2 kernel it is built from, showing the cache roll-off
+# knee disappear (cqr_geqrf_compact_cache_blocking.md). Needs no MKL/BLAS -- it
+# also gates that the blocked factorization matches the unblocked one to
+# rounding, so it doubles as a correctness test of the blocked path.
+add_executable(bench_geqrf_blocked examples/bench_geqrf_blocked.cpp)
+target_link_libraries(bench_geqrf_blocked PRIVATE cqr_compact)
+
 # Worked example of the Compact-format batch QR solver
 # (mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact),
 # cross-checked against the naive per-matrix LAPACKE_dgels. Needs Intel MKL
@@ -108,6 +116,11 @@ if(CQR_BUILD_TESTS)
   add_executable(test_cqr_geqrf_compact src/test_cqr_geqrf_compact.cpp)
   target_link_libraries(test_cqr_geqrf_compact PRIVATE cqr_compact)
   add_test(NAME portable_geqrf COMMAND test_cqr_geqrf_compact)
+
+  # Portable gate for the blocked (Level-3) QR prototype: a small, quick run of
+  # bench_geqrf_blocked, which aborts non-zero if the blocked factorization
+  # diverges from the unblocked kernel (itself LAPACK-validated below).
+  add_test(NAME geqrf_blocked_prototype COMMAND bench_geqrf_blocked 16 1)
 
   # Portable self-contained Cholesky factorization test (no BLAS): the compact
   # potrf kernel vs a scalar potf2 reference over both uplo and all layouts,

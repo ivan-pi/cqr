@@ -160,6 +160,66 @@ width. It is a palliative, not a cure: it moves the knee but keeps the unblocked
 `O(N)` passes, so it still cannot beat blocked LAPACK (at n=256 the best compact
 width is ~3.8e2 mat/s vs LAPACK's 8.9e2).
 
+## Prototype: the blocked WY path, implemented and measured
+
+The blocked path is implemented in `cqr_geqrf_compact.hpp` and benchmarked by
+`examples/bench_geqrf_blocked.cpp` (portable, no MKL). Three internal functions,
+each running V matrices at a time:
+
+* `larft_forward_compact` -- builds the `jb x jb` block-reflector factor `T`,
+* `larfb_forward_left_compact` -- applies `C := (I - V T^T V^T) C` to the trailing
+  block, trailing-column-tiled by `NC` and register-blocked 4 columns at a time
+  (so each reflector load feeds 4 FMAs -- the same reuse the unblocked kernel's
+  `JB=4` trailing update already exploits),
+* `geqrf_blocked_compact` -- the driver: factor each `NB`-column panel with the
+  existing unblocked `geqr2`, then one Level-3 `larft`+`larfb` on the trailing
+  columns.
+
+### Correctness
+
+The blocked factor reproduces the unblocked one to rounding -- norm-scaled
+elementwise difference `<= 3.9e-16` across `n`, and **bit-identical** (`0.0`) for
+`n <= NB` (a single panel, no `larfb`). Checked directly against per-matrix
+`LAPACKE_dgeqrf` as well (elementwise, norm-scaled): `relerr` `2e-16 .. 3e-15`,
+under the `20 n eps` contract the MKL suite uses, including a padded batch
+(`nm` not a multiple of `V`) and off-width tile sizes. The CTest
+`geqrf_blocked_prototype` gates blocked-vs-unblocked on every run.
+
+### Throughput (V=8 AVX-512, 1 MiB L2, single-thread, nmat=128; GFLOP/s)
+
+| n   | unblocked | blocked NB=8 | blocked NB=16 | best / unblk |
+|----:|----------:|-------------:|--------------:|-------------:|
+|  80 |      14.9 |     **19.0** |          17.6 |       1.28x  |
+| 112 |      14.1 |     **17.0** |          16.7 |       1.20x  |
+| 128 |      11.7 |     **15.2** |          15.0 |       1.30x  |
+| 160 |      10.3 |         13.7 |          13.4 |       1.33x  |
+| 192 |       8.8 |         12.1 |      **12.3** |       1.40x  |
+| 256 |       7.8 |         10.9 |      **11.0** |       1.41x  |
+| 384 |       7.3 |         10.0 |      **10.3** |       1.42x  |
+
+**The roll-off knee is gone.** The unblocked kernel decays `14.9 -> 7.3` from
+n=80 to 384; the blocked kernel *peaks higher* (19.0 at n=80, vs the unblocked
+~14 ceiling) and holds `>= 10` GFLOP/s out to n=384 -- a **+30-42%** win over
+unblocked for every `n >= 128`, and a tie-or-better even below the knee. `NB=8`
+is best in the small/mid range, `NB=16` at `n >= 192`; `NB=32` trails (a wider
+panel spends more in the Level-2 panel factor). This confirms the diagnosis end
+to end: the wall was the algorithm's Level-2 memory traffic, and converting the
+trailing update to Level-3 removes it.
+
+### What remains
+
+The blocked tail plateaus at ~10-11 GFLOP/s, below the ~19 mid-range peak,
+because `larfb` is register-blocked but not yet a fully tiled GEMM microkernel --
+its `V^T C` / `V W` passes still re-stream the trailing tile ~`jb` times rather
+than once. Closing that (a compact GEMM microkernel: accumulate a small `jb x nr`
+register tile, stream `V` and `C` once) is the lever to approach the compact-GEMM
+ceiling and match optimized per-matrix LAPACK at large `n` -- where MKL's tuned
+`dgemm`-backed `dgeqrf` still leads, since at large `n` a single matrix already
+vectorizes well and the compact batch's edge is at *small* `n`. The blocking here
+pushes the compact kernel's break-even with per-matrix LAPACK out from `n ~ 128`
+to roughly `n ~ 150-160` and turns the large-`n` collapse (0.25x LAPACK at
+n=500) into a graceful, flat ~0.4-0.5x.
+
 ## Scope recommendation
 
 Below n ≈ 110 the current unblocked kernel is **1.7-10× faster than per-matrix
@@ -173,17 +233,27 @@ So the decision is workload-driven:
   design docs: 30, 45, 60, 105, 168), the current kernel already covers most of
   the range; document the >L2 regime as a known boundary and optionally add the
   narrow-V stopgap for the 168+ tail.
-* If sizes `N ≳ 128` matter, implement the blocked WY path (compact
-  `larft`/`larfb`). This is the only change that beats blocked LAPACK above the
-  knee, and it generalizes: the same Level-2→Level-3 argument applies to
-  `potrf` (`syrk`/`trsm`) once its group leaves L2.
+* If sizes `N ≳ 128` matter, use the blocked WY path (compact `larft`/`larfb`,
+  now prototyped -- see the section above). It removes the compact kernel's
+  roll-off and is 30-42% faster than unblocked past the knee; a tiled GEMM
+  microkernel in `larfb` is the further step to match per-matrix LAPACK at large
+  `n`. The same Level-2→Level-3 argument generalizes to `potrf`
+  (`syrk`/`trsm`) once its group leaves L2.
 
 ## Suggested next steps
 
-1. Prototype a compact `larfb` (block reflector apply) and a `larft`; wire a
-   blocked driver that falls back to the unblocked kernel for `N ≤ ~2*NB`.
-   Sweep `NB ∈ {8,16,32}` and confirm the knee disappears (GFLOP/s should stop
-   rolling off and approach the compact-GEMM ceiling).
-2. As a cheap first win, add the width-selection heuristic and re-run the sweep.
-3. Repeat the `--simdlen` knee-shift sweep on a 256 KiB-L2 machine to confirm the
-   crossover moves to N≈64 as the model predicts (portability of the diagnosis).
+1. **Done (this note):** compact `larft`/`larfb` + blocked driver in
+   `cqr_geqrf_compact.hpp`, benchmarked by `examples/bench_geqrf_blocked.cpp`.
+   The knee disappears and blocked beats unblocked by 30-42% for `n >= 128`.
+2. **Register-tiled compact GEMM microkernel** inside `larfb` (accumulate a
+   `jb x nr` register tile, stream `V` and `C` once) to lift the ~10-11 GFLOP/s
+   tail toward the mid-range ~19 peak and match per-matrix LAPACK at large `n`.
+3. **Productionize:** call the blocked path from `cqr_mkl_?geqrf_compact` above a
+   size threshold (`n` past the L2 knee, `~2*NB`), unblocked below. This changes
+   the workspace contract -- the blocked path needs `NB*NB + 2*NB*NC` packs of
+   scratch, so the `lwork = -1` query must report it instead of `1`. Auto-tune
+   `NB`/`NC` from the runtime cache sizes (`NB ~ 8-16` here).
+4. **Generalize:** the same Level-2 -> Level-3 argument applies to `potrf`
+   (`syrk`/`trsm`) once its group leaves L2.
+5. Repeat the `--simdlen` knee-shift sweep on a 256 KiB-L2 machine to confirm the
+   crossover moves to `n ~ 64` as the model predicts (portability of the diagnosis).

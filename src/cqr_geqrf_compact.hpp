@@ -43,6 +43,7 @@
 #include <cassert>
 #include <cmath>
 #include <type_traits>
+#include <vector>
 
 namespace cqr {
 namespace detail {
@@ -333,6 +334,222 @@ void geqrf_compact_general(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup
             geqrf_compact_group_strided<T, V, Int>(
                 m, n, make_view<T, V, Int>(a, a_special, a_panel), tg);
     }
+}
+
+/* ==================================================================
+ * Blocked (Level-3) compact QR: the WY-representation panel/trailing
+ * split, so the trailing matrix is streamed once per block of NB
+ * columns (Level-3) instead of once per column (Level-2 geqr2). This
+ * keeps throughput up once one interleaved group no longer fits in L2
+ * -- above that size the unblocked kernel goes memory-bound (see
+ * cqr_geqrf_compact_cache_blocking.md).
+ *
+ * Three pieces, each running V matrices at a time:
+ *   larft_forward_compact       -- build the jb x jb block factor T,
+ *   larfb_forward_left_compact  -- apply (I - V T^T V^T) to the trailing block,
+ *   geqrf_blocked_compact_group -- panel-factor (reuse geqr2) + larft + larfb.
+ *
+ * Math identity with the unblocked kernel: geqr2 applies the reflectors in
+ * ascending order, i.e. H(j+jb-1)...H(j) = (H(j)...H(j+jb-1))^T
+ * = (I - V T V^T)^T = I - V T^T V^T to the trailing columns. So larfb uses
+ * T^T (the LAPACK "Left, Transpose, Forward, Columnwise" case) and the blocked
+ * factor reproduces the unblocked one to rounding. tau = 0 columns (padding,
+ * already-triangular) give a zero T column and a no-op update, exactly as the
+ * unblocked larfg_pack mask does.
+ * ================================================================== */
+
+/* Build T (jb x jb, upper-triangular, column-major dense, ld = jb) for a panel of
+ * jb Householder columns at A (mm x jb, unit-lower-trapezoidal: implicit 1 on the
+ * diagonal, reflector body A(i,c) below, 0 above), scalars tau[0..jb-1]. LAPACK
+ * dlarft, forward/columnwise. */
+template <typename T, int V, typename Int = int>
+void larft_forward_compact(Int mm, Int jb, const typename pack<T, V>::type *A, Int ldap,
+                           const typename pack<T, V>::type *tau,
+                           typename pack<T, V>::type *Tf)
+{
+    using VT = typename pack<T, V>::type;
+    for (Int c = 0; c < jb; ++c) {
+        const VT tc = tau[c];
+        /* stash z(p) = A(c,p) + sum_{i>c} A(i,p) A(i,c) in column c of T, p < c */
+        for (Int p = 0; p < c; ++p) {
+            VT z = A[(std::size_t)p * ldap + c];
+            for (Int i = c + 1; i < mm; ++i)
+                z += A[(std::size_t)p * ldap + i] * A[(std::size_t)c * ldap + i];
+            Tf[(std::size_t)c * jb + p] = z;
+        }
+        /* T(0:c,c) = -tc * (Tupper(0:c,0:c) * z), in place: the write to z(p) only
+         * follows reads of z(q>=p), so no value is clobbered before use. */
+        for (Int p = 0; p < c; ++p) {
+            VT s = VT{};
+            for (Int q = p; q < c; ++q)
+                s += Tf[(std::size_t)q * jb + p] * Tf[(std::size_t)c * jb + q];
+            Tf[(std::size_t)c * jb + p] = -tc * s;
+        }
+        Tf[(std::size_t)c * jb + c] = tc;
+    }
+}
+
+/* Apply C := (I - V T^T V^T) C to the trailing block C (mm x nt) from the left, V
+ * the panel at A (mm x jb, unit-lower-trapezoidal), T at Tf (jb x jb upper-tri).
+ * Trailing-column-tiled by NC so the workspace stays cache-resident and V is
+ * reused across tiles; scratch W must hold 2*jb*NC packs (W and W2). Every inner
+ * reduction runs down the contiguous (row) axis of the compact layout. */
+template <typename T, int V, typename Int = int>
+void larfb_forward_left_compact(Int mm, Int nt, Int jb,
+                                const typename pack<T, V>::type *A, Int ldap,
+                                const typename pack<T, V>::type *Tf,
+                                typename pack<T, V>::type *C, Int ldc,
+                                typename pack<T, V>::type *W, Int NC)
+{
+    using VT = typename pack<T, V>::type;
+    VT *W2 = W + (std::size_t)jb * NC;
+    for (Int l0 = 0; l0 < nt; l0 += NC) {
+        const Int nb = (nt - l0 < NC) ? (nt - l0) : NC;
+        VT *Cb = C + (std::size_t)l0 * ldc; /* C(:, l0 : l0+nb) */
+
+        /* W = V^T Cb :  W(c,l) = Cb(c,l) + sum_{i>c} A(i,c) Cb(i,l).
+         * 4 trailing columns at a time so each reflector load A(i,c) feeds 4 FMAs. */
+        Int l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            VT *c0 = Cb + (std::size_t)(l + 0) * ldc,
+               *c1 = Cb + (std::size_t)(l + 1) * ldc,
+               *c2 = Cb + (std::size_t)(l + 2) * ldc,
+               *c3 = Cb + (std::size_t)(l + 3) * ldc;
+            for (Int c = 0; c < jb; ++c) {
+                VT w0 = c0[c], w1 = c1[c], w2 = c2[c], w3 = c3[c];
+                for (Int i = c + 1; i < mm; ++i) {
+                    const VT a = A[(std::size_t)c * ldap + i];
+                    w0 += a * c0[i];
+                    w1 += a * c1[i];
+                    w2 += a * c2[i];
+                    w3 += a * c3[i];
+                }
+                W[(std::size_t)(l + 0) * jb + c] = w0;
+                W[(std::size_t)(l + 1) * jb + c] = w1;
+                W[(std::size_t)(l + 2) * jb + c] = w2;
+                W[(std::size_t)(l + 3) * jb + c] = w3;
+            }
+        }
+        for (; l < nb; ++l) { /* remainder trailing columns */
+            VT *cl = Cb + (std::size_t)l * ldc;
+            for (Int c = 0; c < jb; ++c) {
+                VT w = cl[c];
+                for (Int i = c + 1; i < mm; ++i)
+                    w += A[(std::size_t)c * ldap + i] * cl[i];
+                W[(std::size_t)l * jb + c] = w;
+            }
+        }
+
+        /* W2 = T^T W :  W2(c,l) = sum_{p<=c} T(p,c) W(p,l)  (small, jb x nb) */
+        for (Int ll = 0; ll < nb; ++ll)
+            for (Int c = 0; c < jb; ++c) {
+                VT s = VT{};
+                for (Int p = 0; p <= c; ++p)
+                    s += Tf[(std::size_t)c * jb + p] * W[(std::size_t)ll * jb + p];
+                W2[(std::size_t)ll * jb + c] = s;
+            }
+
+        /* Cb -= V W2 :  column c hits rows c..mm-1 (unit at row c, A(i,c) below).
+         * 4 trailing columns at a time, same reflector-load reuse. */
+        l = 0;
+        for (; l + 4 <= nb; l += 4) {
+            VT *c0 = Cb + (std::size_t)(l + 0) * ldc,
+               *c1 = Cb + (std::size_t)(l + 1) * ldc,
+               *c2 = Cb + (std::size_t)(l + 2) * ldc,
+               *c3 = Cb + (std::size_t)(l + 3) * ldc;
+            for (Int c = 0; c < jb; ++c) {
+                const VT x0 = W2[(std::size_t)(l + 0) * jb + c];
+                const VT x1 = W2[(std::size_t)(l + 1) * jb + c];
+                const VT x2 = W2[(std::size_t)(l + 2) * jb + c];
+                const VT x3 = W2[(std::size_t)(l + 3) * jb + c];
+                c0[c] -= x0;
+                c1[c] -= x1;
+                c2[c] -= x2;
+                c3[c] -= x3;
+                for (Int i = c + 1; i < mm; ++i) {
+                    const VT a = A[(std::size_t)c * ldap + i];
+                    c0[i] -= a * x0;
+                    c1[i] -= a * x1;
+                    c2[i] -= a * x2;
+                    c3[i] -= a * x3;
+                }
+            }
+        }
+        for (; l < nb; ++l) { /* remainder trailing columns */
+            VT *cl = Cb + (std::size_t)l * ldc;
+            for (Int c = 0; c < jb; ++c) {
+                const VT w2 = W2[(std::size_t)l * jb + c];
+                cl[c] -= w2;
+                for (Int i = c + 1; i < mm; ++i)
+                    cl[i] -= A[(std::size_t)c * ldap + i] * w2;
+            }
+        }
+    }
+}
+
+/* One group of V interleaved matrices, column-major, blocked. NB = panel width,
+ * NC = trailing-column tile; scratch holds NB*NB + 2*NB*NC packs (T + larfb
+ * workspace). Each panel is factored by the unblocked geqr2 (cache-resident: only
+ * jb wide), then its block reflector is applied to the trailing columns in one
+ * Level-3 sweep. */
+template <typename T, int V, typename Int = int>
+void geqrf_blocked_compact_group(Int m, Int n, T *a_, Int ldap, T *tau_, Int NB, Int NC,
+                                 typename pack<T, V>::type *scratch)
+{
+    using VT = typename pack<T, V>::type;
+    VT *A = reinterpret_cast<VT *>(a_);
+    VT *Tf = scratch;
+    VT *W = scratch + (std::size_t)NB * NB;
+    const Int k = (m < n) ? m : n;
+
+    for (Int j = 0; j < k; j += NB) {
+        const Int jb = (k - j < NB) ? (k - j) : NB;
+        const Int mm = m - j;
+
+        /* panel factorization: unblocked geqr2 on A[j:m, j:j+jb] */
+        geqrf_compact_group<T, V, Int>(mm, jb, a_ + (std::size_t)(j * ldap + j) * V, ldap,
+                                       tau_ + (std::size_t)j * V);
+
+        /* apply the block reflector to the trailing columns j+jb .. n-1 */
+        const Int nt = n - (j + jb);
+        if (nt > 0) {
+            const VT *Vp = A + (std::size_t)j * ldap + j;    /* &A(j, j) */
+            const VT *tp = reinterpret_cast<VT *>(tau_) + j; /* &tau(j) */
+            larft_forward_compact<T, V, Int>(mm, jb, Vp, ldap, tp, Tf);
+            VT *Cp = A + (std::size_t)(j + jb) * ldap + j; /* &A(j, j+jb) */
+            larfb_forward_left_compact<T, V, Int>(mm, nt, jb, Vp, ldap, Tf, Cp, ldap, W,
+                                                  NC);
+        }
+    }
+}
+
+/* All groups, column-major, blocked. Allocates the per-thread scratch once and
+ * drives geqrf_blocked_compact_group over every pack (a padded partial last group
+ * factors identities to tau = 0, a harmless no-op). NB/NC are the tuning knobs;
+ * NB is clamped to k = min(m,n). */
+template <typename T, int V, typename Int = int>
+void geqrf_blocked_compact(Int m, Int n, T *ap, Int ldap, T *taup, Int nm, Int NB, Int NC)
+{
+    using VT = typename pack<T, V>::type;
+    assert(ldap >= m && nm >= 1);
+
+    const Int k = (m < n) ? m : n;
+    if (NB < 1) NB = 1;
+    if (NC < 1) NC = 1;
+    if (k > 0 && NB > k) NB = k;
+
+    const Int ngroups = (nm + V - 1) / V;
+    const std::size_t str_a = (std::size_t)ldap * n * V;
+    const std::size_t str_t = (std::size_t)k * V;
+    /* scratch: NB*NB (T) + 2*NB*NC (larfb W/W2) packs, held as a plain-T buffer
+     * (std::vector<VT> would warn -Wignored-attributes) and aliased as packs. */
+    const std::size_t npacks = (std::size_t)NB * NB + 2 * (std::size_t)NB * NC;
+    std::vector<T> scratch(npacks * V);
+    VT *sc = reinterpret_cast<VT *>(scratch.data());
+
+    for (Int g = 0; g < ngroups; ++g)
+        geqrf_blocked_compact_group<T, V, Int>(m, n, ap + g * str_a, ldap,
+                                               taup + g * str_t, NB, NC, sc);
 }
 
 } /* namespace detail */
