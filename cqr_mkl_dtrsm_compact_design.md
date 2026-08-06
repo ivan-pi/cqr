@@ -106,7 +106,8 @@ interface:
 
 ## 4. Input Parameters
 
-* **`layout`** (`MKL_LAYOUT`): `MKL_COL_MAJOR` (tuned path) or `MKL_ROW_MAJOR`.
+* **`layout`** (`MKL_LAYOUT`): the in-memory storage order of every matrix in the
+  batch, `MKL_COL_MAJOR` or `MKL_ROW_MAJOR`.
 * **`side`** (`MKL_SIDE`): `MKL_LEFT` solves `op(A) X = alpha B`; `MKL_RIGHT`
   solves `X op(A) = alpha B`.
 * **`uplo`** (`MKL_UPLO`): `MKL_UPPER` -- `A` is upper triangular; `MKL_LOWER` --
@@ -125,9 +126,7 @@ interface:
   referenced and `B` is set to `0`.
 * **`ap`** (`const double *`): the compact buffer of `nm` triangular matrices
   `A` (order `s`, with `s = m` for `MKL_LEFT` and `n` for `MKL_RIGHT`), packed
-  with `mkl_?gepack_compact`. Any alignment is correct; align the base to the
-  pack width (64 B covers every format) so the SIMD sweeps avoid cache-line
-  splits.
+  with `mkl_?gepack_compact`.
 * **`ldap`** (`MKL_INT`): leading dimension of each `A` within the compact
   buffer, `>= max(1, s)`.
 * **`bp`** (`double *`): the compact buffer of `nm` right-hand-side matrices `B`
@@ -144,8 +143,7 @@ interface:
 * **`bp`**: overwritten with the solution `X` (of `op(A) X = alpha B` or
   `X op(A) = alpha B`), in Compact format.
 
-An unrecognized `format` selects no kernel, so the call is a silent no-op -- there
-is no `info` to report (see section 6.5).
+An unrecognized `format` selects no kernel, so the call is a silent no-op.
 
 ## 6. Design Considerations & Compatibility
 
@@ -158,7 +156,7 @@ Because Compact format interleaves the `V` matrices so that element `(i,j)` of
 all `V` is contiguous, the scalar algorithm lifts almost verbatim with
 `double -> V`-wide vector: every `*`, `-`, and `/` becomes a lane-wise SIMD
 operation over `V` independent matrices. There is no data-dependent branch to
-mask (unlike `dlarfg` in the factorization), so the lift is direct.
+mask, so the lift is direct.
 
 The eight `side x uplo x transa` combinations collapse to a choice of sweep
 direction and which index of `A` is read:
@@ -217,6 +215,10 @@ without producing a NaN in the padding or corrupting real lanes. (This is the
 `?trsm` analogue of the `geqrf` observation that the identity factors to
 `tau = 0`.)
 
+Alignment is a free performance lever: any alignment is correct, but aligning
+each compact buffer's base to the pack width (64 B covers every format) keeps the
+`V`-wide loads and stores off cache-line splits.
+
 ### 6.5 No argument checking (Compact convention)
 
 Like MKL's own compact routines -- which "skip error checking for performance
@@ -243,9 +245,9 @@ are out of scope.
 
 Matching standard BLAS `?trsm` to working precision is the minimum bar. SIMD,
 blocking, and layout handling are internal strategies only: the returned `X`
-must satisfy the same numerical invariants as an unbatched `?trsm`. Residuals
-are measured in FP64, tolerances are purely relative to the working precision.
-All suites below are CTest-registered.
+must satisfy the same numerical invariants as an unbatched `?trsm`. Tolerances
+are purely relative to the working precision. All suites below are
+CTest-registered.
 
 ### 7.1 Suite 1 -- Portable, vs a scalar `?trsm` reference (no BLAS)
 
@@ -275,35 +277,32 @@ compared elementwise over the full feature matrix
 This is the direct analogue of the `geqrf` suite's cross-check against
 `mkl_dgeqrf_compact`.
 
-### 7.3 Suite 3 -- End-to-end `AX = B`, with no MKL compute kernel
+### 7.3 Suite 3 -- End-to-end solve `AX = B`
 
 The capstone: `B = A X` for a known `X`, solved by the fully open pipeline
 `cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T') ->
 cqr_mkl_dtrsm_compact('L','U','N','N')`, which must recover `X`. Gate the forward
 error `Xhat - X` and the residual `A Xhat - B` at `100 * n * eps` (relative to
-the matrix L1 norm). This demonstrates the batched QR solve running end to end
-without `mkl_?trsm_compact` (nor any other MKL compute kernel) -- the whole point
-of the routine.
+the matrix L1 norm). This exercises `cqr_mkl_?trsm_compact` closing a complete
+batched QR solve -- an open, independent implementation of the compact triangular
+solve.
 
 ## 8. Implementation Strategy
 
 Modern C++ (C++17) templated on scalar type `T` and interleave width `V`,
-exposed through `extern "C"` for an FFI-stable surface, reusing the existing
+exposed through `extern "C"` for FFI-stable surfaces, reusing the existing
 `cqr::detail::pack<T,V>` / `BatchView` GNU-vector machinery.
 
 ### 8.1 API boundary
 
-* **MKL-style API** (`cqr_mkl_ext.h`, the primary surface):
-  `cqr_mkl_dtrsm_compact` / `cqr_mkl_strsm_compact` (`src/cqr_mkl_trsm.cpp`),
-  unwrapping the MKL enums to plain flags and `MKL_COMPACT_PACK -> V`,
-  instantiated on `MKL_INT` so ILP64 dimensions are not narrowed.
-* **Templated kernel** (`cqr_trsm_compact.hpp`): the tuned column-major
-  `side='L'` path is templated on the RHS block width `JB` and on
-  `uplo/trans/diag`, built from `trsm_dot_block<JB,...>` (register-blocked row-dot
-  solve of a fixed `JB`-column block), `trsm_left_dot_tb<...>` (the 4/2/1 driver,
-  section 6.2), and `trsm_axpy_col<...>` (contiguous column-axpy for the single
-  `op(A)=A` leftover column); `trsm_left_dot<T,V>` dispatches the runtime config
-  to these. `trsm_compact_group_strided<T,V>` handles the other three side/layout
-  combinations via `BatchView`. All are driven over the packs by
-  `trsm_compact_general<T,V>`, the entry point the `cqr_mkl_?trsm_compact`
-  adapter calls.
+Two C-linkage interfaces wrap the same templated kernel:
+
+* **MKL-style API** (`cqr_mkl_ext.h`): `cqr_mkl_dtrsm_compact` /
+  `cqr_mkl_strsm_compact` -- a drop-in for `mkl_?trsm_compact`, taking the MKL
+  enums and `MKL_COMPACT_PACK`, with no argument checking (Compact convention).
+* **Portable C API** (`cqr_compact.h`): `dtrsm_compact` / `strsm_compact` -- an
+  MKL-independent surface taking an explicit interleave width `V` and `char`
+  selectors, with LAPACK/BLAS-style `info = -j` argument validation.
+
+Both instantiate the kernel on `MKL_INT` (or `int`) so ILP64 dimensions are not
+narrowed; the algorithm and its internal routines are described in section 6.
