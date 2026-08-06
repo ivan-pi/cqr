@@ -27,15 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No Intel MKL: -DCQR_WITH_MKL=OFF builds only the portable kernels and
-      # their self-contained tests, so a plain toolchain + Ninja is all we need.
-      # This is the quick smoke check that the BLAS-free build stays healthy.
-      - name: Install toolchain and Ninja
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build clang
-
+      # No install step: the ubuntu-latest image already ships CMake, Ninja,
+      # GCC, and Clang, and -DCQR_WITH_MKL=OFF needs nothing more than a C++17
+      # compiler. Skipping both the toolchain and the heavy libmkl-dev install
+      # is what keeps this the quick, BLAS-free smoke check.
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
