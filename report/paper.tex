@@ -252,10 +252,11 @@ to vectorize internally; the interleaved layout instead extracts parallelism
 small to fill a vector register on its own. The cost is a pack/unpack step at
 the batch boundary (MKL's \code{mkl\_?gepack\_compact}/\code{geunpack\_compact});
 in the target applications the same factored batch is reused enough --- across
-right-hand sides, time steps, or Newton iterations --- to amortize it. A third
-strategy keeps the per-matrix layout but draws its parallelism from the execution
-policy rather than the data layout, with the operation's properties fixed at
-compile time --- the route Kokkos Kernels takes (Section~\ref{sec:related}).
+right-hand sides, time steps, or Newton iterations --- to amortize it. Parallelism
+can also come from an execution policy --- one matrix per thread or team --- rather
+than the data layout, and the cross-matrix SIMD of the interleaved approach can be
+had through a vector \emph{element type} instead of a dedicated storage format;
+Kokkos Kernels offers both (Section~\ref{sec:related}).
 
 % =============================================================================
 \section{Two vendor APIs, side by side}
@@ -354,8 +355,8 @@ compact API, so it is absent from Table~\ref{tab:apis} but belongs here.)}
 Design choice & MKL Compact & ArmPL interleave-batch & Kokkos Kernels & \cqr{} \\
 \midrule
 API / dispatch      & C ABI, runtime & C ABI, runtime & C++ templates, compile-time & C ABI + templated kernels \\
-Storage             & interleaved & interleaved & per-matrix (Views) & interleaved \\
-Cross-matrix work   & SIMD lanes & SIMD lanes & execution policy (Serial / Team / TeamVector) & SIMD lanes \\
+Storage             & interleaved & interleaved & per-matrix or SIMD-packed Views & interleaved \\
+Cross-matrix work   & SIMD lanes & SIMD lanes & SIMD value type and/or threads (Serial/Team/TeamVector) & SIMD lanes \\
 Callable from       & C, C++, Fortran, Python & C, C++, Fortran, Python & C++ & C, C++, Fortran, Python \\
 Precisions          & s, d, c, z & s, d, c, z & s, d, c, z & s, d \\
 Target hardware     & x86 & AArch64 & CPU + GPU & any CPU SIMD \\
@@ -382,19 +383,20 @@ carries no runtime branch. The runtime choice is paid once per batch, not once p
 element.
 
 \paragraph{Parallelism granularity.}
-The interleaved libraries put one \emph{matrix} in each SIMD lane, so a fixed
-group of $V$ matrices advances in lockstep. Kokkos instead exposes three interface
-levels that choose how many workers cooperate on a \emph{single} matrix, leaving
-the batch to the surrounding \code{parallel\_for}: \code{Serial} runs a whole
-matrix on one execution unit (one CPU thread, or one GPU thread), its inner loops
-left to the compiler; \code{Team} shares one matrix across a team of threads
-(\code{TeamThreadRange}); and \code{TeamVector} adds the innermost vector level
-(\code{ThreadVectorRange}) so a team's threads \emph{and} their vector lanes
-jointly work one matrix. \code{Serial} over a plain range --- one small matrix per
-thread --- is the natural fit for the many-tiny-matrices regime targeted here;
-\code{Team} and \code{TeamVector} pay off as matrices grow or thin out. It is a
-different lever from interleaving, where a lane always holds a \emph{distinct}
-matrix rather than a slice of a shared one.
+Two orthogonal levers set how a batch maps to the hardware, and it helps to keep
+them apart. \emph{Across} matrices, a SIMD lane can carry a whole distinct matrix
+so $V$ advance in lockstep --- what the compact storage format delivers directly,
+and what Kokkos delivers through a SIMD value type
+(Section~\ref{sec:related}); either way the cross-matrix SIMD is there. \emph{Within}
+a matrix, the work can be done by one worker or shared among several --- the axis
+Kokkos exposes as \code{Serial} (one thread per matrix), \code{Team} (a team of
+threads per matrix), and \code{TeamVector} (team threads plus their vector lanes
+per matrix). The compact libraries fix the first lever (one matrix per lane) and
+leave the batch loop to the caller's threads; Kokkos exposes both, and --- being
+built on Kokkos --- maps the second onto GPU threads, where CPU-style SIMD lanes
+do not exist. For the many-tiny-matrices regime targeted here, one matrix per lane
+and one matrix per thread are the natural CPU mappings; the \code{Team} levels
+earn their keep as matrices grow or thin out.
 
 % =============================================================================
 \section{\cqr{}: an open, portable reference implementation}
@@ -678,24 +680,24 @@ cross-matrix parallelism. The \emph{interleaved/compact} layout --- the vendors'
 answer for the small-matrix regime (Intel Compact~\cite{mkl-compact}, Arm
 interleave-batch~\cite{armpl-interleave}) and this paper --- rewrites the data so
 one SIMD instruction advances $V$ matrices. \emph{Kokkos
-Kernels}~\cite{kokkos-kernels} takes the other route: each matrix keeps its
-ordinary layout (no interleaving), parallelism comes from the execution policy ---
-a \code{Serial}, \code{Team}, or \code{TeamVector} variant choosing whether one
-thread, a team, or a team-plus-vector-lane handles a matrix --- and the operation
-properties (transpose, upper/lower, side, and the blocking \code{Algo}) are
-\emph{compile-time template arguments}, so each kernel is a header-only
-\code{invoke()} that inlines into the user's \code{parallel\_for} and, through
-Kokkos, runs on GPUs as well as CPUs. The trade is instructive: interleaving
-guarantees cross-matrix SIMD on the CPU but needs a pack/unpack and a
-CPU-specific layout, whereas the Kokkos style fuses into user code and ports to
-accelerators but leans on the execution policy and the compiler for
-vectorization. \draftnote{Kokkos Kernels also ships a SIMD vector value type that
-can interleave matrices on-chip, much like the compact packs; confirm its current
-status in \code{develop} and whether to mention it.} \cqr{} sits in the
-interleaved camp, as does the \code{batmat} project~\cite{batmat} (aimed at convex
-optimization); its contribution relative to all of these is narrow and specific:
-an \emph{open} drop-in for the MKL compact QR, portable across ISAs from one
-source, that supplies the apply-$Q$ step MKL omits. \draftnote{if targeting a venue, add the closest
+Kernels}~\cite{kokkos-kernels,kokkos-kernels-paper} reaches the same batched
+parallelism by different means. Its kernels are C++ templates with the operation
+properties (transpose, upper/lower, side, and the blocking \code{Algo}) as
+compile-time arguments, so each is a header-only \code{invoke()} that inlines into
+the user's \code{parallel\_for} and, through Kokkos, runs on CPUs and GPUs alike.
+Crucially, it still vectorizes \emph{across} matrices when asked: making a
+\code{View}'s scalar a SIMD vector type (\code{Vector<SIMD<T>,\,L>}) packs $L$
+matrices into the lanes, and the same generic kernel advances all $L$ at once ---
+the compact idea expressed through the type system rather than a storage format.
+That composes with the \code{Serial}/\code{Team}/\code{TeamVector} execution levels
+(Section~\ref{sec:vendors}) and, on GPUs, gives way to them. So the contrast with
+the compact APIs is not \emph{whether} the batch reaches the SIMD units --- it
+does --- but \emph{how} the interleaving is expressed: a SIMD element type reused
+by generic kernels (Kokkos) versus a dedicated storage format and matching C
+routines (MKL, ArmPL, \cqr{}). \cqr{} sits in the latter, format-based camp, as
+does \code{batmat}~\cite{batmat} (aimed at convex optimization); its contribution
+there is narrow and specific: an \emph{open} drop-in for the MKL compact QR,
+portable across ISAs from one source, that supplies the apply-$Q$ step MKL omits. \draftnote{if targeting a venue, add the closest
 compact-QR performance papers and any batched-QR-on-GPU comparison for context.}
 
 % =============================================================================
