@@ -412,6 +412,27 @@ no per-ISA intrinsics. A thin dispatcher maps the runtime
 that selects the specialization. This is what lets one code base stand in for two
 vendors' closed kernels.
 
+\paragraph{Why explicit vector types, not \code{\#pragma omp simd}.}
+The tempting alternative is to keep the plain scalar \code{geqr2} and annotate the
+batch loop with \code{\#pragma omp simd simdlen(V)}, letting the compiler vectorize
+across matrices. We tried it --- as a literal drop-in behind the same C entry
+points --- and measured it against MKL on GCC, Clang, and icpx. The explicit vector
+types were the robust choice: they beat \code{mkl\_?geqrf\_compact} by
+$1.24$--$1.30\times$ (geometric mean) on \emph{every} compiler, with no flag
+sensitivity. The omp-simd kernels never won --- their ceiling was MKL parity ---
+and the clean outer-loop form (the single-matrix algorithm verbatim, pragma on the
+batch loop) vectorized on \emph{only} icpx's dedicated OpenMP-SIMD backend
+($1.13\times$); GCC's and Clang's auto-vectorizers drop the pragma on a loop that
+wraps a nested body and fall back to scalar ($0.1$--$0.2\times$). An inner-loop
+variant reaches parity portably ($0.97$--$1.00\times$) but only by splitting the
+loops and adding per-column temporaries. The lesson: \code{\#pragma omp simd} on
+the batch asserts iteration \emph{independence}, not the loop \emph{interchange}
+that outer-loop batch vectorization needs, so whether it happens turns on the
+lowering path, not the compiler brand. Explicit vector types make the SIMD
+unconditional, which is why \cqr{} uses them. \draftnote{name the CPU and exact
+compiler builds for these geomeans, and re-confirm against the omp-simd branch
+before publication.}
+
 \paragraph{Vectorized unblocked Householder QR.}
 The factorization is the unblocked LAPACK algorithm \code{geqr2}
 (\code{larfg} to build each reflector, \code{larf} to apply it to the trailing
@@ -656,7 +677,12 @@ The results (once measured) speak to a specific claim: that the interleaved
 format's advantage comes from the \emph{layout}, not from any vendor's closed
 microkernel, and can therefore be had portably. If \cqr{} tracks MKL on x86 and
 ArmPL on Arm from one source, the format --- not the implementation --- is doing
-the work, and there is no reason for it to remain closed or ISA-locked.
+the work, and there is no reason for it to remain closed or ISA-locked. A separate
+cross-language check points the same way: a batched compact QR written in
+idiomatic Fortran --- whole-array syntax or an explicit width-8 loop, no
+intrinsics --- lands within ${\sim}10$--$40\%$ of these C++ kernels and itself
+beats or ties MKL, evidence that the interleaved layout, not the language or the
+intrinsic set, carries the performance.
 
 The scope limits are deliberate and mirror the vendors'. \cqr{} is real-only;
 complex Hermitian QR is future work. Its QR is unpivoted --- unlike ArmPL's
