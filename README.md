@@ -14,13 +14,16 @@ an Intel MKL-style API:
   its [design document](cqr_mkl_dormqr_compact_design.md).
 * **`cqr_mkl_?potrf_compact`** - the batched **Cholesky factorization**
   (`A = L L^T` / `U^T U`) of symmetric-positive-definite matrices: a portable,
-  vectorized alternative to `mkl_?potrf_compact`. Paired with `mkl_?trsm_compact`
-  it factors and solves batched SPD systems. See its
+  vectorized alternative to `mkl_?potrf_compact`. Paired with
+  `cqr_mkl_?trsm_compact` it factors and solves batched SPD systems. See its
   [design document](cqr_mkl_dpotrf_compact_design.md).
+* **`cqr_mkl_?trsm_compact`** - an open drop-in for
+  `mkl_?trsm_compact` (the batched triangular solve), so the whole `AX = B`
+  pipeline runs with no MKL compute kernel. See its
+  [design document](cqr_mkl_dtrsm_compact_design.md).
 
-All routines come in single and double precision. Paired with MKL's own
-`mkl_?trsm_compact`, they factor and solve batched systems in the compact
-format.
+All routines come in single and double precision. Together they factor and
+solve batched systems entirely in the compact format, with no MKL compute kernel.
 
 The kernels are written with GNU vector types (`__attribute__((vector_size))`),
 which the compiler lowers to SSE, AVX, or AVX-512 -- one portable source for
@@ -62,7 +65,7 @@ Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
 
 * `solve_qr_compact` - a batch of square systems `A_v X_v = B_v` solved end to
   end with the compact pipeline (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact`
-  -> `mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
+  -> `cqr_mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
 * `bench_qr_compact [nmat] [reps]` - throughput of the batched *solve* pipeline
   vs. the one-matrix-at-a-time LAPACK path over pools of small matrices (order
   10-100), reporting a geometric-mean speedup. Both paths are checked against the
@@ -86,8 +89,8 @@ include:
 
 | File | Role |
 |------|------|
-| `src/cqr_mkl_ext.h` | The MKL-style public API: `cqr_mkl_?geqrf_compact` (QR factorization, drop-in for `mkl_?geqrf_compact`), `cqr_mkl_?ormqr_compact` (apply `Q`/`Q^T`, the missing `mkl_?ormqr_compact`), and `cqr_mkl_?potrf_compact` (Cholesky, drop-in for `mkl_?potrf_compact`). Takes `MKL_COMPACT_PACK` formats. |
-| `src/cqr_compact.h` | The portable C API: `dgeqrf_compact` / `sgeqrf_compact` (QR factorization), `dormqr_compact` / `sormqr_compact` (apply `Q` / `Q^T`), and `dpotrf_compact` / `spotrf_compact` (Cholesky), with an explicit interleave width `V` and no MKL dependency. |
+| `src/cqr_mkl_ext.h` | The MKL-style public API: `cqr_mkl_?geqrf_compact` (QR factorization, drop-in for `mkl_?geqrf_compact`), `cqr_mkl_?ormqr_compact` (apply `Q`/`Q^T`, the missing `mkl_?ormqr_compact`), `cqr_mkl_?potrf_compact` (Cholesky, drop-in for `mkl_?potrf_compact`), and `cqr_mkl_?trsm_compact` (triangular solve, drop-in for `mkl_?trsm_compact`). Takes `MKL_COMPACT_PACK` formats. |
+| `src/cqr_compact.h` | The portable C API, all eight exported functions: `dgeqrf_compact` / `sgeqrf_compact` (QR factorization), `dormqr_compact` / `sormqr_compact` (apply `Q` / `Q^T`), `dpotrf_compact` / `spotrf_compact` (Cholesky), and `dtrsm_compact` / `strsm_compact` (triangular solve), with an explicit interleave width `V` and no MKL dependency. |
 
 Everything else under `src/` is internal - implementation details and tests,
 not part of the supported interface:
@@ -96,13 +99,16 @@ not part of the supported interface:
 |------|------|
 | `src/cqr_geqrf_compact.hpp` | Templated SIMD QR-factorization kernel (vectorized `geqr2`; scalar `T`, interleave width `V`). |
 | `src/cqr_potrf_compact.hpp` | Templated SIMD Cholesky-factorization kernel (vectorized `potf2`; scalar `T`, interleave width `V`). |
-| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`); also hosts the shared `pack<T,V>` / `BatchView` / `vsqrt` machinery. |
+| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`); also hosts the shared `pack<T,V>` / `BatchView` / `vsqrt` / `broadcast` machinery. |
+| `src/cqr_trsm_compact.hpp` | Templated compact triangular-solve kernels (tuned column-major/left + general strided) and group driver (scalar `T`, interleave width `V`). |
 | `src/cqr_geqrf_compact_dispatch.cpp` | Portable geqrf C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_potrf_compact_dispatch.cpp` | Portable potrf C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
+| `src/cqr_trsm_compact_dispatch.cpp` | Portable trsm C entry points with LAPACK/BLAS-style `info = -j` validation (runtime `V` -> compile-time dispatch). |
 | `src/cqr_mkl_geqrf.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the geqrf kernel. |
 | `src/cqr_mkl_potrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_UPLO`/`MKL_LAYOUT`, then calls the potrf kernel. |
 | `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the ormqr kernel. |
+| `src/cqr_mkl_trsm.cpp` | Unwraps the MKL enums + `MKL_COMPACT_PACK` -> `V` and calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
 | `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 | `src/test_compact_util.hpp` | Shared test helpers (seeded RNG, error metrics, SPD generation, Compact pack/unpack); header-only, no MKL. |
 | `src/test_cqr_geqrf_compact.cpp` | Self-contained geqrf correctness test vs a scalar `geqr2` reference (no BLAS). |
@@ -111,6 +117,8 @@ not part of the supported interface:
 | `src/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation of `cqr_mkl_dpotrf_compact` (residual, untouched triangle, uniqueness, cross-check, solve). |
 | `src/test_cqr_compact.cpp` | Self-contained ormqr correctness/bench test (no BLAS). |
 | `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
+| `src/test_cqr_trsm_compact.cpp` | Self-contained trsm test (no BLAS): C API validation + numerical vs a scalar `?trsm` reference. |
+| `src/test_cqr_trsm_mkl.cpp` | MKL-backed cross-check of `cqr_mkl_?trsm_compact` vs `mkl_?trsm_compact` + an end-to-end MKL-compute-free solve. |
 
 ### Examples
 

@@ -1,32 +1,36 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- batched QR and Cholesky for matrices in Intel MKL's Compact
- * format.
+/* cqr_mkl_ext.h -- batched QR, Cholesky, and triangular solve for matrices in
+ * Intel MKL's Compact format.
  *
  *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
  *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *   cqr_mkl_?potrf_compact -- Cholesky factorization of an SPD Compact-format batch
+ *   cqr_mkl_?trsm_compact  -- triangular solve op(A) X = alpha B (and variants)
  *
  * All use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
  * MKL compact ecosystem, but are backed by this project's own portable SIMD
- * kernels rather than MKL's.
+ * kernels rather than MKL's. Together they factor and solve batched systems
+ * entirely in the compact format, with no MKL compute kernel.
  *
  * cqr_mkl_?ormqr_compact is the missing mkl_?ormqr_compact: it multiplies a
  * Compact-format batch of general matrices C by the orthogonal factor Q (or
  * Q^T), filling the gap between MKL's compact QR factorization and the
- * application of its reflectors. cqr_mkl_?geqrf_compact is a portable, open
- * alternative to mkl_?geqrf_compact producing those reflectors -- signature- and
- * storage-compatible, so the two can be mixed freely with MKL's native compact
- * routines. With MKL's own mkl_?trsm_compact they factor and solve batched
- * systems in the compact format. The API mirrors MKL's native compact ecosystem
- * (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference in
- * cqr_mkl_dormqr_compact_design.md and cqr_mkl_dgeqrf_compact_design.md.
+ * application of its reflectors. cqr_mkl_?geqrf_compact and cqr_mkl_?potrf_compact
+ * are portable, open alternatives to mkl_?geqrf_compact / mkl_?potrf_compact
+ * producing the QR and Cholesky factors -- signature- and storage-compatible, so
+ * they mix freely with MKL's native compact routines. cqr_mkl_?trsm_compact is a
+ * portable, open alternative to mkl_?trsm_compact (identical signature), the step
+ * that closes a batched solve, so it runs end to end with no MKL compute kernel.
+ * The API mirrors MKL's native compact ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK);
+ * see the full parameter reference in the per-routine design docs
+ * (cqr_mkl_d{geqrf,ormqr,potrf,trsm}_compact_design.md).
  *
- * Typical use -- the batched AX = B solver:
+ * Typical use -- the batched AX = B solver (now MKL-compute-free):
  *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
  *     cqr_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
- *     mkl_dtrsm_compact  (..., U, R, B);              // B := R^{-1} Q^T B = X
+ *     cqr_mkl_dtrsm_compact  (..., U, R, B);           // B := R^{-1} Q^T B = X
  *
  * The matrices are passed in the same Compact buffers used elsewhere in the
  * MKL compact API: pack with mkl_?gepack_compact, query/obtain the opaque
@@ -111,6 +115,34 @@ void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double 
 void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
                             MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
                             MKL_INT nm);
+
+/* Triangular solve with multiple right-hand sides. For every matrix in the
+ * batch, solves in place
+ *
+ *     op(A) X = alpha B    (side = MKL_LEFT)   or
+ *     X op(A) = alpha B    (side = MKL_RIGHT),
+ *
+ * where:
+ *   - A is the order-s (s = m for LEFT, n for RIGHT) unit/non-unit, upper/lower
+ *     triangular factor,
+ *   - op(A) = A (MKL_NOTRANS) or A^T (MKL_TRANS / MKL_CONJTRANS, folded to A^T
+ *     for the real types),
+ *   - B (m x n) is overwritten by the solution X.
+ *
+ * Drop-in for mkl_?trsm_compact (identical signature): like the BLAS ?trsm it
+ * batches, it takes no workspace and reports no info. It does no argument
+ * checking (Compact convention) -- use dtrsm_compact / strsm_compact
+ * (cqr_compact.h) for LAPACK/BLAS-style validation. See
+ * cqr_mkl_dtrsm_compact_design.md. */
+void cqr_mkl_dtrsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
+                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
+                           double alpha, const double *ap, MKL_INT ldap, double *bp,
+                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_strsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
+                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
+                           float alpha, const float *ap, MKL_INT ldap, float *bp,
+                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm);
 
 #ifdef __cplusplus
 }

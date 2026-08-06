@@ -1,13 +1,15 @@
 #ifndef CQR_COMPACT_H
 #define CQR_COMPACT_H
 
-/* Portable, FFI-stable C API for this project's batched QR and Cholesky
- * kernels: dense factorizations of many small matrices stored in the compact
+/* Portable, FFI-stable C API for this project's batched QR, Cholesky, and
+ * triangular-solve kernels: dense factorizations (and the triangular solve that
+ * closes a linear solve) of many small matrices stored in the compact
  * (interleaved) format, with an explicit interleave width V.
  *
  *   dgeqrf_compact / sgeqrf_compact  -- QR factorization  A = Q R
  *   dormqr_compact / sormqr_compact  -- apply Q or Q^T from the left, B := op(Q) B
  *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T or A = U^T U
+ *   dtrsm_compact  / strsm_compact   -- triangular solve  op(A) X = alpha B, etc.
  *
  * Compact layout; group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncol*V + (j*ldap + i)*V + v ]   (column-major)
@@ -98,6 +100,36 @@ int sormqr_compact(char trans, int m, int nrhs, int k, const float *ap, int ldap
 int dpotrf_compact(char layout, char uplo, int n, double *ap, int ldap, int V, int nm);
 
 int spotrf_compact(char layout, char uplo, int n, float *ap, int ldap, int V, int nm);
+
+/* Triangular solve with multiple right-hand sides -- the portable form of
+ * mkl_?trsm_compact, the step that closes the batched QR solve. Solves in place
+ *   op(A) X = alpha B   (side='L')   or   X op(A) = alpha B   (side='R'),
+ * with A the order-s (s = m for side='L', n for side='R') unit/non-unit,
+ * upper/lower triangular factor and op(A) = A ('N') or A^T ('T'/'C'). B (m x n)
+ * is overwritten by X.
+ *   layout   'C'/'c' column-major (tuned) or 'R'/'r' row-major
+ *   side     'L' (op(A) X = alpha B) or 'R' (X op(A) = alpha B)
+ *   uplo     'U' A upper triangular or 'L' A lower triangular
+ *   transa   'N' (A) or 'T'/'C' (A^T; 'C' == 'T' for the real types)
+ *   diag     'U' A has a unit diagonal (not read) or 'N' non-unit
+ *   m, n     rows, columns of B (A is s x s, s = m for 'L', n for 'R')
+ *   alpha    scalar multiplying B; alpha = 0 sets B := 0 (A not referenced)
+ *   ap       compact triangular A (s x s per matrix)
+ *   ldap     compact leading dimension of A (>= max(1, s))
+ *   bp       compact B (m x n), overwritten with X
+ *   ldbp     compact leading dimension of B (>= m col-major, >= n row-major)
+ *   V, nm    interleave width; total number of matrices (padded last group)
+ * Returns 0, or -j for an illegal j-th argument:
+ *   -1 layout  -2 side   -3 uplo   -4 transa   -5 diag   -6 m (<0)   -7 n (<0)
+ *   -10 ldap   -12 ldbp  -13 V (not 2/4/8/16)  -14 nm (<0)
+ * (alpha, ap and bp are never inspected, matching LAPACK/BLAS.) */
+int dtrsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
+                  double alpha, const double *ap, int ldap, double *bp, int ldbp, int V,
+                  int nm);
+
+int strsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
+                  float alpha, const float *ap, int ldap, float *bp, int ldbp, int V,
+                  int nm);
 
 #ifdef __cplusplus
 }

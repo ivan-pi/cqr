@@ -43,8 +43,10 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     return d;
 }
 
-// L1 (max column sum) norm of a column-major m x n matrix.
-inline double norm1(const double *M, int m, int n)
+// L1 (max column sum) norm of a column-major m x n matrix. Templated so the
+// portable FP32/FP64 suites can reuse it; existing double callers deduce
+// T = double and are unaffected.
+template <class T> double norm1(const T *M, int m, int n)
 {
     double mx = 0;
     for (int j = 0; j < n; ++j) {

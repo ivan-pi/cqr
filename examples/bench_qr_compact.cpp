@@ -1,28 +1,34 @@
 /* bench_qr_compact.cpp
  *
  * Throughput benchmark: solving many small square systems A_v X_v = B_v with
- * the QR pipeline, comparing the Intel MKL Compact (interleaved, batched) path
- * against the conventional per-matrix LAPACK path. Same math (X = R^-1 Q^T B),
- * different data layout:
+ * the QR pipeline (X = R^-1 Q^T B), comparing three ways to run the same math:
  *
- *   batched      mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
- *   non-batched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
+ *   MKL batched  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
+ *   cqr batched  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> cqr_mkl_dtrsm_compact
+ *   unbatched    LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
+ *
+ * The two batched paths run the identical compact pipeline and differ only in
+ * the closing triangular solve -- MKL's `mkl_?trsm_compact` versus this repo's
+ * open `cqr_mkl_?trsm_compact` -- so their ratio isolates the trsm this library
+ * adds. (MKL has no compact `ormqr`, so `cqr_mkl_dormqr_compact` is shared by
+ * both.) The unbatched path is the conventional per-matrix LAPACK baseline.
  *
  * For each size, a pool of `nmat` well-conditioned matrices with known solution
- * X == 1 is built once, and both paths solve it -- the batched path packing
+ * X == 1 is built once, and each path solves it -- the batched paths packing
  * each group of `V` (the compact SIMD width) on the fly, the per-matrix path
  * factoring in place. The outer loop over the pool runs under OpenMP (MKL's own
  * threading pinned to 1); each size is timed `reps` times keeping the best, and
- * a geometric-mean speedup across sizes is printed at the end. (Details on the
+ * geometric-mean speedups across sizes are printed at the end. (Details on the
  * timing harness and the in-place working copy are at best_time() and
- * run_unbatched().) A single right-hand side per system (nrhs = 1); both paths
- * are checked against the known solution X == 1, so the reported error is a
+ * run_unbatched().) A single right-hand side per system (nrhs = 1); every path
+ * is checked against the known solution X == 1, so the reported error is a
  * forward error, not a comparison to LAPACK.
  *
  * Usage:  bench_qr_compact [nmat] [reps]      (defaults: 1000 matrices, 3 reps)
  *
- * Build: needs Intel MKL plus this repo's cqr_mkl_ormqr_compact; wired up by
- * CMakeLists.txt as the `bench_qr_compact` target. OpenMP is used when available.
+ * Build: needs Intel MKL plus this repo's cqr_mkl_ormqr_compact and
+ * cqr_mkl_trsm_compact; wired up by CMakeLists.txt as the `bench_qr_compact`
+ * target. OpenMP is used when available.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
@@ -116,10 +122,16 @@ double sol_error(const double *x, int n)
     return e;
 }
 
+/* Which triangular solve closes the batched pipeline: MKL's compact routine or
+ * this repo's open one. Everything else in the pipeline is identical. */
+enum class TrsmImpl { Mkl, Cqr };
+
 /* ===== batched path: compact group-of-V pipeline ======================= *
  * Process the pool in groups of V, packing/factoring/solving/unpacking each
- * group inside the timed region. Returns the max solution error. */
-double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
+ * group inside the timed region. `impl` picks the trsm backend (mkl_?trsm_compact
+ * or cqr_mkl_?trsm_compact); the pack/geqrf/ormqr/unpack around it is the same
+ * for both. Returns the max solution error. */
+double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, TrsmImpl impl)
 {
     const int n = P.n, nmat = P.nmat, nrhs = 1;
     const int ngroups = (nmat + V - 1) / V;
@@ -166,8 +178,12 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V)
             double dummy;
             cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n, ap, n, taup, bp,
                                    n, &dummy, 1, info, fmt, cnt);
-            mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
-                              MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
+            if (impl == TrsmImpl::Cqr)
+                cqr_mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
+                                      MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
+            else
+                mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
+                                  MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
 
             mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xptr.data(), n, bp, n, fmt,
                                   cnt);
@@ -262,10 +278,13 @@ int main(int argc, char **argv)
     const int nrhs = 1; /* single RHS per system (see Pool / run_batched) */
     const double eps = std::numeric_limits<double>::epsilon();
 
-    std::printf("QR solve throughput: compact batched (mkl_dgeqrf_compact -> "
-                "cqr_mkl_dormqr_compact -> mkl_dtrsm_compact)\n");
+    std::printf("QR solve throughput (matrices/second), three paths:\n");
+    std::printf("  MKL-batch  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
+                "mkl_dtrsm_compact\n");
+    std::printf("  cqr-batch  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
+                "cqr_mkl_dtrsm_compact\n");
     std::printf(
-        "            vs per-matrix (LAPACKE_dgeqrf -> LAPACKE_dormqr -> cblas_dtrsm)\n");
+        "  unbatched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm\n");
 #ifdef _OPENMP
     std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
                 nmat, reps, nrhs, V, compact_format_name(fmt), nthreads);
@@ -273,29 +292,34 @@ int main(int argc, char **argv)
     std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  Sequential\n\n", nmat,
                 reps, nrhs, V, compact_format_name(fmt));
 #endif
-    /* Throughput as matrices/second (scientific) alongside the raw seconds. The
-     * error is the forward error vs the known solution X == 1, not vs LAPACK. */
-    std::printf(
-        "   n |  batched (s)    mat/s | unbatched (s)   mat/s | speedup | max fwd err "
-        "(vs X=1)\n");
-    std::printf(
-        "-----+-----------------------+-----------------------+---------+--------------"
-        "------\n");
+    /* Throughput as matrices/second (scientific) for each path, then two speedups:
+     * cqr-batch over the per-matrix baseline (the headline batched win), and
+     * cqr-batch over MKL-batch (the two batched paths differ only in the trsm, so
+     * this is the end-to-end effect of swapping in the open solve). The error is
+     * the forward error vs the known solution X == 1, not vs LAPACK. */
+    std::printf("   n | MKL-batch   cqr-batch   unbatched  | cqr/unbat | cqr/MKL | max "
+                "fwd err (vs X=1)\n");
+    std::printf("     |  (mat/s)     (mat/s)     (mat/s)    |           |         |\n");
+    std::printf("-----+-------------------------------------+-----------+---------+------"
+                "-------------\n");
 
-    double log_speedup_sum = 0.0;
+    double log_cqr_vs_unbat = 0.0, log_cqr_vs_mkl = 0.0;
     for (int si = 0; si < nsizes; ++si) {
         const int n = sizes[si];
         Pool P(n, nmat);
 
-        /* The batched path reads the pool read-only (pack copies into the
-         * interleaved buffers), so it needs no reset. The non-batched path
+        /* The batched paths read the pool read-only (pack copies into the
+         * interleaved buffers), so they need no reset. The non-batched path
          * factors in place, so refresh a destroyable working copy of the pool
          * before each pass -- untimed, mirroring an application that consumes
          * the matrix rather than copying it inside the solve. */
         std::vector<double> wa, wb; /* filled by the reset step below */
 
-        double err_b = 0.0, err_u = 0.0;
-        const double tb = best_time(reps, [] {}, [&] { err_b = run_batched(P, fmt, V); });
+        double err_m = 0.0, err_c = 0.0, err_u = 0.0;
+        const double tb_mkl =
+            best_time(reps, [] {}, [&] { err_m = run_batched(P, fmt, V, TrsmImpl::Mkl); });
+        const double tb_cqr =
+            best_time(reps, [] {}, [&] { err_c = run_batched(P, fmt, V, TrsmImpl::Cqr); });
         const double tu = best_time(
             reps,
             [&] {
@@ -305,20 +329,22 @@ int main(int argc, char **argv)
             [&] { err_u = run_unbatched(n, nmat, wa.data(), wb.data()); });
 
         const double rtol = 100.0 * n * eps;
-        const double maxerr = std::max(err_b, err_u);
+        const double maxerr = std::max({err_m, err_c, err_u});
         check(maxerr <= rtol, "solve accuracy within rtol");
 
-        const double speedup = tu / tb;
-        log_speedup_sum += std::log(speedup);
-        std::printf("%4d | %12.4f  %8.2e | %12.4f  %8.2e | %6.2fx | %.2e (rtol %.1e)\n",
-                    n, tb, nmat / tb, tu, nmat / tu, speedup, maxerr, rtol);
+        const double cqr_vs_unbat = tu / tb_cqr;
+        const double cqr_vs_mkl = tb_mkl / tb_cqr;
+        log_cqr_vs_unbat += std::log(cqr_vs_unbat);
+        log_cqr_vs_mkl += std::log(cqr_vs_mkl);
+        std::printf("%4d | %10.2e  %10.2e  %10.2e | %8.2fx | %6.2fx | %.2e (rtol %.1e)\n",
+                    n, nmat / tb_mkl, nmat / tb_cqr, nmat / tu, cqr_vs_unbat, cqr_vs_mkl,
+                    maxerr, rtol);
     }
 
-    const double geomean = std::exp(log_speedup_sum / nsizes);
-    std::printf(
-        "-----+-----------------------+-----------------------+---------+--------------"
-        "------\n");
-    std::printf("geometric-mean speedup (batched vs unbatched) across sizes: %.2fx\n",
-                geomean);
+    std::printf("-----+-------------------------------------+-----------+---------+------"
+                "-------------\n");
+    std::printf("geometric-mean speedup across sizes:  cqr-batch vs unbatched %.2fx"
+                "   |   cqr-batch vs MKL-batch %.2fx\n",
+                std::exp(log_cqr_vs_unbat / nsizes), std::exp(log_cqr_vs_mkl / nsizes));
     return 0;
 }
