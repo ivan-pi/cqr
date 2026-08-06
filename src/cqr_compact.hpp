@@ -145,6 +145,16 @@ inline void vsqrt(typename pack<T, V>::type &r,
         r[v] = std::sqrt(x[v]);
 }
 
+/* v := x broadcast to all V lanes. GNU vector types broadcast a scalar in
+ * arithmetic but not in assignment (`v = x;` is a compile error); `x - VT{}`
+ * subtracts an all-zero vector, leaving x in every lane (and, unlike `VT{} + x`,
+ * it preserves the sign of a zero x). Used by trsm to scale B by alpha. */
+template <typename T, int V>
+inline void broadcast(typename pack<T, V>::type &v, T x) noexcept
+{
+    v = x - typename pack<T, V>::type{};
+}
+
 /* ------------------------------------------------------------------ */
 /* Reflector sweep direction (internal control flag).                  */
 /*                                                                     */

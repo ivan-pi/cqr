@@ -11,7 +11,8 @@
  *     cqr_mkl_dormqr_compact  B <- Q^T B                 (apply Q^T -- the
  *                                                         routine this repo
  *                                                         adds to MKL)
- *     mkl_dtrsm_compact       R X = (Q^T B)              (triangular solve)
+ *     cqr_mkl_dtrsm_compact   R X = (Q^T B)              (triangular solve --
+ *                                                         also from this repo)
  *
  * For a square, full-rank A this recovers X = R^{-1} Q^T B. The naive baseline
  * runs LAPACKE_dgels('N') on each matrix separately (which reduces to the same
@@ -192,9 +193,9 @@ void batch_solve(int nm, int n, int nrhs)
                            &dummy, 1, info, fmt, nm);
     check_info(info[0], "cqr_mkl_dormqr_compact");
 
-    /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat */
-    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT, n,
-                      nrhs, 1.0, ap, n, bp, n, fmt, nm);
+    /* 3. triangular solve: bp <- R^{-1} (Q^T B) = Xhat   (this repo's extension) */
+    cqr_mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT, n,
+                          nrhs, 1.0, ap, n, bp, n, fmt, nm);
 
     std::vector<Matrix> Xc(nm, Matrix(n, nrhs));
     {
@@ -237,7 +238,7 @@ void batch_solve(int nm, int n, int nrhs)
 int main()
 {
     std::printf("Compact batch QR solve: mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact "
-                "-> mkl_dtrsm_compact  vs  per-matrix LAPACKE_dgels\n");
+                "-> cqr_mkl_dtrsm_compact  vs  per-matrix LAPACKE_dgels\n");
     std::printf("(compact format = %d)\n", (int)mkl_get_format_compact());
 
     batch_solve(8, 32, 5);

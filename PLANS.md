@@ -63,6 +63,54 @@ batches. Status vs. its design document:
   `mkl_?potrf_compact` vs. per-matrix `LAPACKE_?potrf`), mirroring
   `bench_geqrf_compact`, is left for a future change.
 
+## trsm (`cqr_mkl_dtrsm_compact`)
+
+The compact batched triangular solve (`cqr_mkl_dtrsm_compact_design.md`): a
+portable, vectorized `mkl_?trsm_compact`, the step that closes the batched
+`AX = B` solve so it needs no MKL compute kernel. Status vs. its design document:
+
+- **Implemented (design sections 2-6, 8.1):** both API surfaces -- the MKL-style
+  `cqr_mkl_?trsm_compact` (drop-in, no `work`/`info`) and the portable
+  `dtrsm_compact`/`strsm_compact` (LAPACK-style `info = -j` validation) -- over
+  the vectorized substitution. Column-major `side='L'` is the tuned path: a 4/2/1
+  register-blocked row-dot, with a contiguous column-axpy for the single
+  `op(A)=A` leftover column; the other side/layout combinations route through a
+  stride-generalized kernel. Full `side x uplo x transa x diag` in FP64/FP32,
+  `alpha = 0` handled as the BLAS `B := 0` fast path.
+- **Validated (design section 7):** a BLAS-free test vs. a scalar `?trsm`
+  reference over the full feature matrix, gating both the forward error and the
+  solve's own residual `||op(A) X - alpha B||` (from an independent triangular
+  multiply, so a bug shared by the reference and the kernel cannot pass); plus an
+  MKL test cross-checking vs. `mkl_?trsm_compact` over the full
+  `layout x side x uplo x transa x diag` matrix and closing the end-to-end
+  `AX = B` solve (`cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact ->
+  cqr_mkl_dtrsm_compact`). Both are CTest-registered.
+- **Wired into the pipeline:** `examples/solve_qr_compact.cpp` and the
+  `bench_qr_compact` benchmark call `cqr_mkl_dtrsm_compact`, so the batched solve
+  path uses no MKL compute kernel (MKL only packs/unpacks).
+- **Known gaps / scoped out (design section 6.6):** no singularity check (a zero
+  diagonal of a non-unit factor divides to Inf/NaN, as in BLAS `?trsm`), no
+  overflow/underflow-safe scaling, and the strided (right-side / row-major) inner
+  sweep is correctness-first, not separately SIMD-tuned (mirroring `ormqr`).
+  Complex precisions are out of scope.
+
+### trsm performance vs `mkl_?trsm_compact`
+
+Isolated single-thread micro-benchmark (`L/U/N/N`, AVX-512, matrix orders 10-148,
+on both GCC and Clang); speedup = MKL time / cqr time:
+
+- **Single RHS** (`nrhs = 1`, the QR solve `R x = Q^T b`): ~`1.0x` -- the
+  column-axpy tail streams `A` down columns, matching MKL bit-for-bit.
+- **`nrhs` a multiple of 4:** ~`1.3-1.5x` -- the `JB = 4` row-dot block reuses
+  each strided `A` load four times.
+- **Mixed counts** (`nrhs = 2, 3, 5, 6, ...`): the 4/2/1 tail blocking lifts them
+  to parity-or-better (~`1.0-1.3x`).
+
+The strided row-load is specific to `trsm` (`geqrf`/`ormqr` already sweep down
+columns). Remaining performance-only opportunities: the small-`n` (`~10`)
+per-group overhead (~`0.6-0.9x`), reciprocal-multiplying the diagonal in the
+blocked paths, and SIMD-tuning the strided kernel.
+
 ## Known gaps
 
 Gaps between the `ormqr` implementation and its design document

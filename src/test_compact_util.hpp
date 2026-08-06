@@ -1,10 +1,9 @@
 // test_compact_util.hpp
 //
 // Shared helpers for the compact-format test suites: a seeded RNG, error
-// metrics, SPD input generation, and Compact pack/unpack. Header-only and
-// MKL-free, so the BLAS-free portable tests use it too. (The geqrf/ormqr tests
-// still carry their own copies; their MatrixBatch/pack_compact/frand signatures
-// match these, so they can migrate onto this header unchanged.)
+// metrics, SPD input generation, a triangular-operator apply, and Compact
+// pack/unpack. Header-only and MKL-free, so the BLAS-free portable tests use it
+// too.
 //
 // Assisted-by: Claude:claude-opus-4.8
 
@@ -43,8 +42,10 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     return d;
 }
 
-// L1 (max column sum) norm of a column-major m x n matrix.
-inline double norm1(const double *M, int m, int n)
+// L1 (max column sum) norm of a column-major m x n matrix. Templated so the
+// portable FP32/FP64 suites can reuse it; existing double callers deduce
+// T = double and are unaffected.
+template <class T> double norm1(const T *M, int m, int n)
 {
     double mx = 0;
     for (int j = 0; j < n; ++j) {
@@ -54,6 +55,41 @@ inline double norm1(const double *M, int m, int n)
         mx = std::max(mx, s);
     }
     return mx;
+}
+
+// Apply a triangular operator to a general matrix -- the "forward" direction of
+// a ?trsm, for checking a solve's defining residual ||op(A) X - alpha B||.
+// R (m x n, column-major, ld m) := op(A) X (side 'L') or X op(A) (side 'R'),
+// with A the order-s (s = m for 'L', n for 'R') triangular factor: uplo 'U'/'L',
+// op(A) = A ('N') or A^T ('T'/'C'), unit ('U') or non-unit ('N') diagonal.
+template <class T>
+void tri_apply(char side, char uplo, char transa, char diag, int m, int n, const T *A,
+               int lda, const T *X, int ldx, T *R)
+{
+    const bool left = (side == 'L' || side == 'l');
+    const bool upper = (uplo == 'U' || uplo == 'u');
+    const bool tran = (transa == 'T' || transa == 't' || transa == 'C' || transa == 'c');
+    const bool unit = (diag == 'U' || diag == 'u');
+    const int s = left ? m : n;
+    // op(A)(i,k): unit or A(i,i) on the diagonal; off-diagonal is the referenced
+    // entry of A (op = A) or of its transpose (op = A^T), else zero.
+    auto Mop = [&](int i, int k) -> T {
+        if (i == k) return unit ? T(1) : A[i + (size_t)i * lda];
+        const bool ref = tran ? (upper ? i > k : i < k) : (upper ? k > i : k < i);
+        if (!ref) return T(0);
+        return tran ? A[k + (size_t)i * lda] : A[i + (size_t)k * lda];
+    };
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i) {
+            T acc = 0;
+            if (left)
+                for (int k = 0; k < s; ++k)
+                    acc += Mop(i, k) * X[k + (size_t)j * ldx];
+            else
+                for (int k = 0; k < s; ++k)
+                    acc += X[i + (size_t)k * ldx] * Mop(k, j);
+            R[i + (size_t)j * m] = acc;
+        }
 }
 
 // nm pointers into base, `stride` apart -- one per matrix, for the MKL pack API.
@@ -87,6 +123,24 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
                 double sj = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
                 A[i + (size_t)j * n] *= (T)(si * sj);
             }
+}
+
+// Fill one order-s triangular matrix (leading dim s) in the given layout:
+// random in the referenced triangle, the diagonal boosted away from zero for
+// conditioning, the other (never-referenced) triangle zeroed. Shared by the
+// ?trsm suites; A is square, so lda = s for both layouts.
+template <class T> void gen_tri(T *A, int s, bool upper, bool rowmajor = false)
+{
+    auto at = [&](int i, int j) -> T & {
+        return A[rowmajor ? (size_t)i * s + j : i + (size_t)j * s];
+    };
+    for (int i = 0; i < s; ++i)
+        for (int j = 0; j < s; ++j) {
+            bool ref = upper ? (i <= j) : (i >= j);
+            at(i, j) = ref ? frand<T>() : T(0);
+        }
+    for (int d = 0; d < s; ++d)
+        at(d, d) = (at(d, d) >= 0 ? T(1) : T(-1)) * (T(2) + std::abs(frand<T>()));
 }
 
 // A batch of `count` column-major rows x cols matrices in one contiguous buffer;
