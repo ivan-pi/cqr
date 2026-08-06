@@ -38,7 +38,9 @@ report/
 │   ├── throughput_x86.gp         # matrices/s vs n, x86 (cqr / MKL / LAPACK)
 │   ├── throughput_arm.gp         # matrices/s vs n, Arm (cqr / ArmPL / LAPACK)
 │   ├── speedup_x86.gp            # speedup ratios vs n, x86
-│   └── gflops.gp                 # GFLOP/s vs n, both ISAs (the staircase)
+│   ├── gflops_x86.gp             # GFLOP/s vs n, x86 (cqr / MKL / LAPACK) + roofline
+│   ├── gflops_arm.gp             # GFLOP/s vs n, Arm (cqr / ArmPL / LAPACK) + roofline
+│   └── roofline.gp               # LIKWID-measured DP peak levels (edit these)
 └── data/
     ├── make_placeholder_data.py  # generates the synthetic .dat files
     ├── geqrf_x86.dat             # PLACEHOLDER (MKL Compact, x86)
@@ -51,3 +53,9 @@ report/
 Replace `data/*.dat` with measured benchmark output (same columns — see
 `data/README.md`) and re-run `make`. No figure or paper edits are needed; the
 plots and tables re-render from the data.
+
+For the GFLOP/s figures, also set the two roofline ceilings in
+`figures/roofline.gp` from a LIKWID measurement on the same node and core count
+as the runs (the file documents the exact `likwid-bench` / `likwid-perfctr`
+commands). The per-driver GFLOP/s curves are derived from the `mats_s` columns
+already in the data, so they need no extra input.

@@ -372,7 +372,7 @@ Because work is organized around the width $V$ and a small register-blocking
 factor, orders $n$ that are not multiples of those quantities leave a partial
 tile whose cleanup is proportionally more expensive at small $n$. The sustained
 rate therefore climbs in a gentle staircase rather than a smooth curve
-(Figure~\ref{fig:gflops}); the effect is most visible at the smallest orders and
+(Figure~\ref{fig:gflops-x86}); the effect is most visible at the smallest orders and
 is exactly why the benchmark includes non-power sizes drawn from real stencils.
 
 \paragraph{Completing the pipeline and its scope.}
@@ -441,6 +441,15 @@ Every timed configuration is checked (untimed) against per-matrix
 tolerance, so each benchmark row doubles as an integration test. Reported
 \code{relerr} is this quantity.
 
+\paragraph{Roofline.}
+The GFLOP/s figures overlay the node's attainable double-precision compute
+peak, measured with LIKWID~\cite{likwid2010} on the same node and core count as
+the runs (the \code{likwid-bench} peak-flops kernels; the kernel's achieved rate
+can also be read back with \code{likwid-perfctr -g FLOPS\_DP}). Reading the
+achieved rate against that ceiling is a roofline view~\cite{roofline2009} of the
+factorization. \draftnote{record the LIKWID kernel used and the measured peak for
+each machine, at the benchmark's core count.}
+
 \paragraph{Reproducibility.}
 The \cqr{} x86 numbers come from the repository's \code{bench\_geqrf\_compact}
 driver; the ArmPL numbers require the AArch64 harness described in
@@ -502,20 +511,38 @@ interleave-batch vs a per-matrix LAPACK loop. \emph{Placeholder data.}}
 \label{fig:tput-arm}
 \end{figure}
 
-\paragraph{Sustained rate and the staircase.}
-Figure~\ref{fig:gflops} plots \cqr{}'s sustained GFLOP/s on both machines. Two
-features matter: the rate climbs and saturates as $n$ grows (better vector-unit
-utilization), and it does so in a gentle staircase, dipping at orders that are
-not multiples of the interleave width --- the remainder effect of
+\paragraph{Absolute rate against the roofline.}
+Throughput ratios say who wins; they do not say how much performance is left on
+the table. Figures~\ref{fig:gflops-x86} and~\ref{fig:gflops-arm} therefore plot
+the achieved rate (GFLOP/s) of all three drivers --- \cqr{}, the vendor compact
+kernel, and the per-matrix LAPACK loop --- against the machine's
+double-precision compute ceiling measured with LIKWID~\cite{likwid2010}. Three
+things to read off them. First, how far every driver sits below the ceiling:
+these are small, unblocked, latency- and memory-bound factorizations, so a large
+gap to the FMA peak is expected and is shared by all three --- the interesting
+question is relative standing, not absolute peak fraction. Second, the compact
+paths' advantage over the per-matrix loop at equal $n$, now in absolute units.
+Third, the gentle staircase on the \cqr{} curve, dipping at orders that are not
+multiples of the interleave width --- the remainder effect of
 Section~\ref{sec:cqr}, and the reason the size list includes the odd stencil
-sizes.
+sizes. The rate also climbs and saturates as $n$ grows, as the vector units fill.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\linewidth]{figures/gflops.pdf}
-\caption{\cqr{} sustained rate (GFLOP/s) vs order on x86 and Arm. The wiggle at
-non-multiple-of-$V$ orders is the SIMD-remainder staircase. \emph{Placeholder data.}}
-\label{fig:gflops}
+\includegraphics[width=0.72\linewidth]{figures/gflops_x86.pdf}
+\caption{Achieved rate (GFLOP/s) of \cqr{}, MKL Compact, and per-matrix LAPACK
+on x86 (AVX-512), against the LIKWID-measured double-precision peak.
+\emph{Placeholder data; placeholder roofline.}}
+\label{fig:gflops-x86}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{figures/gflops_arm.pdf}
+\caption{Achieved rate (GFLOP/s) of \cqr{}, ArmPL interleave-batch, and
+per-matrix LAPACK on Arm (SVE), against the LIKWID-measured double-precision
+peak. \emph{Placeholder data; placeholder roofline.}}
+\label{fig:gflops-arm}
 \end{figure}
 
 % =============================================================================

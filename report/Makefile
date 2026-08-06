@@ -12,7 +12,7 @@ GP      := gnuplot
 LATEXMK := latexmk -pdf -halt-on-error -interaction=nonstopmode
 
 FIGS := figures/throughput_x86.pdf figures/speedup_x86.pdf \
-        figures/throughput_arm.pdf figures/gflops.pdf
+        figures/throughput_arm.pdf figures/gflops_x86.pdf figures/gflops_arm.pdf
 DATA := data/geqrf_x86.dat data/geqrf_arm.dat
 
 .PHONY: all figures data clean veryclean
@@ -27,6 +27,9 @@ figures: $(FIGS)
 # to this directory, so gnuplot must be invoked from here (as Make does).
 figures/%.pdf: figures/%.gp figures/common.gp $(DATA)
 	$(GP) $<
+
+# the GFLOP/s figures also read the roofline levels
+figures/gflops_x86.pdf figures/gflops_arm.pdf: figures/roofline.gp
 
 # Regenerate the placeholder data. DELETE THIS ONCE REAL DATA LANDS: replace the
 # .dat files with measured benchmark output and drop the dependency on the script.
