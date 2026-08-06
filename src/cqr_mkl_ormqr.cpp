@@ -1,4 +1,4 @@
-/* cqr_mkl_ext.cpp
+/* cqr_mkl_ormqr.cpp
  *
  * Implementation of cqr_mkl_?ormqr_compact (design document section 8.1):
  * a thin C-linkage adapter that
@@ -30,7 +30,7 @@
  */
 
 #include "cqr_mkl_ext.h"
-#include "cqr_compact.hpp"
+#include "cqr_ormqr_compact.hpp"
 
 namespace {
 

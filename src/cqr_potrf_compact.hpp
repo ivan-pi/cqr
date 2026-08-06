@@ -11,7 +11,7 @@
  * potrf_compact_general() -- column- or row-major, lower or upper.
  *
  * A portable, vectorized mkl_?potrf_compact, reusing the pack<T,V> / vsqrt /
- * BatchView machinery from cqr_compact.hpp (shared with geqrf/ormqr). Paired with
+ * BatchView machinery from cqr_compact_common.hpp (shared with geqrf/ormqr). Paired with
  * MKL's mkl_?trsm_compact it factors and solves batched SPD systems.
  *
  * Algorithm: the unblocked LAPACK potf2, right-looking, V matrices at a time.
@@ -50,7 +50,7 @@
 #ifndef CQR_POTRF_COMPACT_HPP
 #define CQR_POTRF_COMPACT_HPP
 
-#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, vsqrt<T,V> */
+#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, vsqrt<T,V> */
 
 #include <cstddef>
 #include <cassert>

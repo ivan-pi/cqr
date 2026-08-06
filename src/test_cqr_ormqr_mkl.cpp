@@ -1,4 +1,4 @@
-/* test_cqr_mkl_ext.cpp
+/* test_cqr_ormqr_mkl.cpp
  *
  * Validation of cqr_mkl_dormqr_compact against real Intel MKL, implementing
  * the two test suites of cqr_mkl_dormqr_compact_design.md section 7 through

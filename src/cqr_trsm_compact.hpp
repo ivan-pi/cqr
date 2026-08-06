@@ -33,7 +33,7 @@
 #ifndef CQR_TRSM_COMPACT_HPP
 #define CQR_TRSM_COMPACT_HPP
 
-#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
+#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
 
 #include <cstddef>
 #include <cassert>

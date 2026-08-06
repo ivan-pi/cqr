@@ -30,7 +30,7 @@ endif()
 # Core kernel library (portable; no BLAS dependency)
 # ---------------------------------------------------------------------------
 add_library(cqr_compact
-  src/cqr_compact_dispatch.cpp
+  src/cqr_ormqr_compact_dispatch.cpp
   src/cqr_geqrf_compact_dispatch.cpp
   src/cqr_potrf_compact_dispatch.cpp
   src/cqr_trsm_compact_dispatch.cpp)
@@ -47,7 +47,7 @@ if(CQR_WITH_MKL)
   find_package(MKLCompact REQUIRED)
 
   add_library(cqr_mkl_ext
-    src/cqr_mkl_ext.cpp
+    src/cqr_mkl_ormqr.cpp
     src/cqr_mkl_geqrf.cpp
     src/cqr_mkl_potrf.cpp
     src/cqr_mkl_trsm.cpp)
@@ -98,10 +98,10 @@ endif()
 if(CQR_BUILD_TESTS)
   enable_testing()
 
-  # Portable self-contained kernel test (no BLAS).
-  add_executable(test_cqr_compact src/test_cqr_compact.cpp)
-  target_link_libraries(test_cqr_compact PRIVATE cqr_compact)
-  add_test(NAME portable_kernel COMMAND test_cqr_compact)
+  # Portable self-contained ormqr (apply-Q) test (no BLAS).
+  add_executable(test_cqr_ormqr_compact src/test_cqr_ormqr_compact.cpp)
+  target_link_libraries(test_cqr_ormqr_compact PRIVATE cqr_compact)
+  add_test(NAME portable_ormqr COMMAND test_cqr_ormqr_compact)
 
   # Portable self-contained QR factorization test (no BLAS): the compact geqrf
   # kernel vs a scalar geqr2/larfg reference, plus C API validation.
@@ -124,10 +124,10 @@ if(CQR_BUILD_TESTS)
 
   # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)
-    add_executable(test_cqr_mkl_ext src/test_cqr_mkl_ext.cpp)
-    target_link_libraries(test_cqr_mkl_ext
+    add_executable(test_cqr_ormqr_mkl src/test_cqr_ormqr_mkl.cpp)
+    target_link_libraries(test_cqr_ormqr_mkl
       PRIVATE cqr_mkl_ext MKL::Compact)
-    add_test(NAME mkl_compact_suites COMMAND test_cqr_mkl_ext)
+    add_test(NAME mkl_ormqr_suites COMMAND test_cqr_ormqr_mkl)
 
     # MKL + dense LAPACK validation of cqr_mkl_dgeqrf_compact (design doc
     # section 7): factorization invariants, cross-check vs mkl_dgeqrf_compact,

@@ -10,7 +10,7 @@
  * geqrf_compact_general() -- column- or row-major.
  *
  * A portable, vectorized mkl_?geqrf_compact. It is the factorization companion
- * to cqr_compact.hpp's ormqr_compact (which applies the reflectors produced
+ * to cqr_ormqr_compact.hpp's ormqr_compact (which applies the reflectors produced
  * here), and reuses the same pack<T,V> / BatchView machinery.
  *
  * Algorithm: the unblocked LAPACK geqr2 (dlarfg to build each reflector, dlarf
@@ -36,7 +36,7 @@
 #ifndef CQR_GEQRF_COMPACT_HPP
 #define CQR_GEQRF_COMPACT_HPP
 
-#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, make_const_view, vsqrt */
+#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view, vsqrt */
 
 #include <cstddef>
 #include <cstdint>

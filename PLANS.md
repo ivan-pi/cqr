@@ -42,7 +42,7 @@ batches. Status vs. its design document:
   Column-major lower is the tuned contiguous path; row-major upper folds onto it
   by transpose duality, and the other two `(layout, uplo)` combinations route
   through the stride-generalized kernel. The shared `vsqrt<T,V>` helper now lives
-  in `cqr_compact.hpp` alongside `pack`/`BatchView`.
+  in `cqr_compact_common.hpp` alongside `pack`/`BatchView`.
 - **Validated (design section 7):** a BLAS-free test vs. a scalar `potf2`
   reference (both `uplo`, all layouts, padded final packs, and a non-SPD
   lane-isolation case gating that a poisoned lane never contaminates its
@@ -118,7 +118,7 @@ Gaps between the `ormqr` implementation and its design document
 
 - **Complex precisions (`cunmqr`/`zunmqr`).** Only real precisions exist; the
   family is real-only and `trans='C'` is folded to `'T'`
-  (in `src/cqr_mkl_ext.cpp`). Document the real-only scope, or
+  (in `src/cqr_mkl_ormqr.cpp`). Document the real-only scope, or
   add genuine complex specializations.
 - **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
   well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
@@ -141,7 +141,7 @@ What the implementation provides, mapped to the design document:
 - **Dispatcher (section 8.1):** unwraps the format to the interleave width `V`
   (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32) and forwards to the
   templated kernel.
-- **Validation (section 7):** `test_cqr_mkl_ext` runs Suite 1 (isolated
+- **Validation (section 7):** `test_cqr_ormqr_mkl` runs Suite 1 (isolated
   `op(Q)*C` vs dense LAPACK, gate `20*s*eps`) over the full feature matrix --
   `side in {L,R} x layout in {col,row} x trans in {N,T}` -- and Suite 2
   (end-to-end `AX=B`: `mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact ->
