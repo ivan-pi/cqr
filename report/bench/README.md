@@ -14,27 +14,29 @@ run_x86.sh                build + run (repetitions) + provenance + convert, for 
 results/                  raw JSON + provenance records (created on first run)
 ```
 
-## Build
+## Build (separate CMake project)
 
-Google Benchmark and (for the x86 driver) Intel MKL are required. Enable the
-CMake option from the repo root:
+These executables build from their **own** CMake project in this directory
+(`report/bench/CMakeLists.txt`) — intentionally **not** part of the main `cqr`
+build. Google Benchmark and Intel MKL are required.
 
 ```sh
-cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
-      -DCQR_BUILD_REPORT_BENCH=ON -DCMAKE_CXX_FLAGS="-O3 -march=native"
-cmake --build build -j --target bench_geqrf_collect
+cmake -S report/bench -B report/bench/build \
+      -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_FLAGS="-O3 -march=native"
+cmake --build report/bench/build -j
 ```
 
-`-march=native` matters: it lets the portable SIMD kernels use the host's widest
-vectors, the same width MKL selects at runtime. Standalone compile line, if you
-prefer not to touch the build:
+`-march=native` matters: it lets the portable SIMD kernel use the host's widest
+vectors, the same width MKL selects at runtime. The project reuses the repo's
+`FindMKLCompact` module and the single kernel source the collector needs
+(`src/cqr_mkl_geqrf.cpp`, which instantiates the header-only kernel directly).
+Straight compiler invocation, if you prefer no CMake:
 
 ```sh
 g++ -std=c++17 -O3 -march=native -fopenmp -I src -I /usr/include/mkl \
-    report/bench/bench_geqrf_collect.cpp \
-    src/cqr_mkl_ext.cpp src/cqr_mkl_geqrf.cpp \
-    src/cqr_compact_dispatch.cpp src/cqr_geqrf_compact_dispatch.cpp \
-    -lbenchmark -lmkl_rt -lpthread -o build/bench_geqrf_collect
+    report/bench/bench_geqrf_collect.cpp src/cqr_mkl_geqrf.cpp \
+    -lbenchmark -lmkl_rt -lpthread -o bench_geqrf_collect
 ```
 
 ## Run
@@ -53,7 +55,7 @@ It writes `results/geqrf_x86_<stamp>.json` (+ a `.provenance.txt`) and updates
 Running the collector by hand instead:
 
 ```sh
-CQR_NMAT=512 ./build/bench_geqrf_collect \
+CQR_NMAT=512 ./report/bench/build/bench_geqrf_collect \
   --benchmark_repetitions=15 --benchmark_report_aggregates_only=true \
   --benchmark_format=json --benchmark_out=results.json
 python3 report/bench/json_to_dat.py results.json --vendor mkl -o report/data/geqrf_x86.dat
