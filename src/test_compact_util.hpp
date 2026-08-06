@@ -42,6 +42,15 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     return d;
 }
 
+// max |a| over n elements (BLAS i?amax magnitude, without the index).
+template <class T> double maxabs(const T *a, size_t n)
+{
+    double d = 0;
+    for (size_t i = 0; i < n; ++i)
+        d = std::max(d, (double)std::abs(a[i]));
+    return d;
+}
+
 // L1 (max column sum) norm of a column-major m x n matrix. Templated so the
 // portable FP32/FP64 suites can reuse it; existing double callers deduce
 // T = double and are unaffected.

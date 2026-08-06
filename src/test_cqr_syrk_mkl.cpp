@@ -42,18 +42,8 @@ using namespace cqr::test;
 
 namespace {
 
-int vlen(MKL_COMPACT_PACK fmt)
-{
-    return cqr::detail::vlen_for_format<double>(fmt);
-}
-
-template <class T> double maxabs(const T *a, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, (double)std::abs(a[i]));
-    return d;
-}
+/* max_abs_diff, norm1, maxabs, batch_ptrs and frand come from
+ * test_compact_util.hpp (shared across the compact test suites). */
 
 /* ------------------------------------------------------------------ */
 /* Precision-dispatched MKL / CBLAS wrappers: overload on the scalar    */
@@ -300,7 +290,7 @@ int suiteB(bool rowmajor, bool lower, bool trans, int nm, int n, int k, T alpha,
 int suiteC(int nm, int m, int n)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int V = cqr::detail::vlen_for_format<double>(fmt);
     const double eps = std::numeric_limits<double>::epsilon();
 
     const size_t sA = (size_t)m * n, sG = (size_t)n * n;

@@ -240,21 +240,17 @@ void syrk_compact_general(bool upper, bool trans, bool rowmajor, Int n, Int k, T
     const std::size_t str_a = static_cast<std::size_t>(ldap) * a_lines * V;
     const std::size_t str_c = static_cast<std::size_t>(ldcp) * n * V;
 
-    const bool tuned = (trans && !rowmajor); /* A^T A, column-major: contiguous */
-
-    /* Hoist the tuned-vs-strided choice out of the group loop: it is invariant
-     * across groups, so each branch gets its own loop rather than a per-group
-     * test. Costs one duplicated loop header; leaves the compiler no chance to
-     * keep the dispatch in the hot path. */
+    /* trans='T', column-major (A^T A) routes to the tuned contiguous kernel; the
+     * other three trans/layout combinations use the strided kernel. The choice is
+     * loop-invariant across groups. */
+    const bool tuned = (trans && !rowmajor);
     const Int ngroups = (nm + V - 1) / V;
-    if (tuned) {
-        for (Int g = 0; g < ngroups; ++g)
+    for (Int g = 0; g < ngroups; ++g) {
+        if (tuned)
             syrk_compact_group<T, V, Int>(upper, n, k, alpha, beta,
                                           ap + (std::size_t)g * str_a, ldap,
                                           cp + (std::size_t)g * str_c, ldcp);
-    }
-    else {
-        for (Int g = 0; g < ngroups; ++g)
+        else
             syrk_compact_group_strided<T, V, Int>(
                 upper, n, k, alpha, beta,
                 make_const_view<T, V, Int>(ap + (std::size_t)g * str_a, a_nidx, a_kidx),

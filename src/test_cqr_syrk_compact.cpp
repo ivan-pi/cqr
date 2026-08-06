@@ -61,8 +61,9 @@ static void ref_syrk(char uplo, char trans, int n, int k, T alpha, const T *A, i
     for (int p = 0; p < k; ++p)
         for (int j = 0; j < n; ++j) {
             const int ilo = upper ? 0 : j, ihi = upper ? j + 1 : n;
+            const T ajp = alpha * Aop(j, p); /* loop-invariant across the i sweep */
             for (int i = ilo; i < ihi; ++i)
-                Ce(i, j) += alpha * Aop(i, p) * Aop(j, p);
+                Ce(i, j) += ajp * Aop(i, p);
         }
 }
 
