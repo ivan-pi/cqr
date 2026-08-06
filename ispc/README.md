@@ -4,7 +4,9 @@ A prototype of the **cqr** batched QR solve (`DGEQRF` → `DORMQR` → `DTRSM` o
 Intel MKL's Compact/interleaved format) reimplemented in
 [Intel ISPC](https://ispc.github.io/), to measure ISPC against the hand-written
 GNU `vector_size` kernels in `../src` — and, since ISPC uses the LLVM backend,
-against GCC and clang compiling those same kernels — all normalized to MKL.
+against GCC and clang compiling those same kernels — all normalized to MKL. A
+batched Cholesky (`DPOTRF`, the SPD counterpart to the QR path) rounds out the
+kernel set.
 
 ## The idea: SPMD across the SIMD lanes
 
@@ -25,7 +27,7 @@ varying double * uniform A = (varying double * uniform)(ap + group_offset);
 varying double aij = A[j*ldap + i];   // one aligned vector load: (i,j) of V matrices
 ```
 
-Each kernel is then the ordinary **scalar** `geqr2` / `dorm2r` /
+Each kernel is then the ordinary **scalar** `geqr2` / `dorm2r` / `potf2` /
 back-substitution, which ISPC vectorizes across the `V` matrices — no hand-rolled
 vector types or masks, no gather/scatter (zero ISPC perf warnings). Column-major,
 double. The gang width is set by the `--target`'s `-xN` suffix; the kernels work
@@ -70,7 +72,7 @@ ctest --test-dir build --output-on-failure     # per-kernel correctness tests
 
 | File | Role |
 |------|------|
-| `cqr_ispc.ispc` | The three ISPC kernels + `cqr_ispc_gang_width` (gang-generic). |
+| `cqr_ispc.ispc` | The ISPC kernels (`geqrf`/`ormqr`/`trsm`/`potrf`) + `cqr_ispc_gang_width` (gang-generic). |
 | `cqr_ispc.h` | `extern "C"` declarations — drop-ins for `../src/cqr_compact.h`. |
 | `bench_gang.cpp` | Gang-size sweep (packs at `V` = gang width; ISPC-only, no MKL). |
 | `cqr_trsm_compact.hpp` | Templated GNU-vector `trsm` (a counterpart to `mkl_dtrsm_compact` for GCC/clang). |
@@ -91,6 +93,10 @@ at machine precision; square, tall, padded groups):
   (independent of the ISPC geqrf), plus a `Q(Q^T B)=B` round-trip — ~1e-15.
 - **trsm** — `R X = alpha B` vs `mkl_dtrsm_compact` and a known `X`, with
   `alpha != 1` and `nrhs = 1` and `6` — ~1e-16.
+- **potrf** — `A = L L^T` (lower, the contiguous path) and `A = U^T U` (upper, the
+  strided path) vs `mkl_dpotrf_compact` (observed bit-exact) and `LAPACKE_dpotrf`,
+  with reconstruction, the untouched opposite triangle, a non-SPD lane that poisons
+  only itself (NaN, siblings intact), and an SPD solve (`potrf` + two MKL `trsm`).
 - **solve** — the full pipeline recovers a known `X`; the ISPC factor also matches
   the GNU kernel to a few ULP (often bit-identical, but that is input/compiler-
   dependent, not guaranteed).

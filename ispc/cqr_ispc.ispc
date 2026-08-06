@@ -15,10 +15,11 @@
 // compact format (V = 8, e.g. --target=avx512skx-x8) and check the gang width at
 // runtime; the gang sweep (bench_gang) packs at V = gang width for any target.
 // Column-major, double. Exported extern "C" as drop-in siblings of
-// ../src/cqr_compact.h, plus a compact trsm and a gang-width query:
+// ../src/cqr_compact.h, plus a compact trsm/potrf and a gang-width query:
 //   cqr_ispc_dgeqrf_compact  A = Q R
 //   cqr_ispc_dormqr_compact  B := op(Q) B          (side 'L', trans 0=Q / 1=Q^T)
 //   cqr_ispc_dtrsm_compact   B := alpha op(A)^-1 B  (left, upper, no-trans, non-unit)
+//   cqr_ispc_dpotrf_compact  A = L L^T / U^T U      (Cholesky, lower or upper)
 //   cqr_ispc_gang_width      returns the gang width (= the V the data must use)
 //
 // Assisted-by: Claude:claude-opus-4.8
@@ -235,6 +236,91 @@ export void cqr_ispc_dtrsm_compact(uniform int n, uniform int nrhs, uniform doub
                 for (uniform int l = i + 1; l < n; ++l)
                     s -= A[l * ldap + i] * B[bj + l];
                 B[bj + i] = s / A[i * ldap + i];
+            }
+        }
+    }
+}
+
+// Cholesky factorization (unblocked potf2), one group of programCount matrices at
+// a time; mirrors cqr::detail::potrf_compact_group{,_strided}. A = L L^T for the
+// lower triangle (upper=0), A = U^T U for the upper (upper=1); only the named
+// triangle is read or written. Element (i,j) is the varying at linear pack index
+// i*rs + j*cs: the factor column is contiguous (rs=1, cs=ldap) for column-major
+// lower and its transpose dual row-major upper, and strided (rs=ldap, cs=1) for
+// column-major upper / row-major lower -- one kernel over the same math, as in the
+// GNU reference. Compact analogue of mkl_dpotrf_compact; ap (n x n col-major) is
+// overwritten with its factor. A padded final group factors the identity (safe).
+export void cqr_ispc_dpotrf_compact(uniform int rowmajor, uniform int upper,
+                                    uniform int n, uniform double ap[], uniform int ldap,
+                                    uniform int nm)
+{
+    uniform int V = programCount;
+    uniform int ngroups = (nm + V - 1) / V;
+    uniform int64 stra = (uniform int64)ldap * n * V; // doubles per group in ap
+
+    // A factor column is contiguous (row step = one pack) for column-major lower
+    // and its transpose dual row-major upper; the other two are strided (ldap).
+    uniform bool contiguous =
+        (rowmajor == 0 && upper == 0) || (rowmajor != 0 && upper != 0);
+    uniform int rs = contiguous ? 1 : ldap; // element (i,j) at pack index i*rs + j*cs
+    uniform int cs = contiguous ? ldap : 1;
+
+    for (uniform int g = 0; g < ngroups; ++g) {
+        // A compact pack == one `varying double`: lane v is matrix v of the group.
+        varying double * uniform A = (varying double * uniform)(ap + g * stra);
+
+        for (uniform int j = 0; j < n; ++j) {
+            uniform int cj = j * cs; // pivot column j base
+
+            // pivot: d = sqrt(A(j,j)); scale the sub-diagonal column by 1/d.
+            // Unconditional sqrt (Cholesky has no data-dependent branch, unlike
+            // larfg): a non-SPD lane gets NaN/Inf but its siblings stay correct.
+            varying double d = sqrt(A[j * rs + cj]);
+            A[j * rs + cj] = d;
+            varying double invd = 1.0d / d;
+            for (uniform int i = j + 1; i < n; ++i)
+                A[i * rs + cj] = A[i * rs + cj] * invd;
+
+            // symmetric rank-1 trailing update A(i,jj) -= A(i,j)*A(jj,j), lower
+            // trapezoid (jj > j, i >= jj), 4 columns at a time so each pivot entry
+            // A(i,j) is loaded once and reused across the block.
+            uniform int jj = j + 1;
+            for (; jj + 4 <= n; jj += 4) {
+                uniform int d0 = (jj + 0) * cs, d1 = (jj + 1) * cs;
+                uniform int d2 = (jj + 2) * cs, d3 = (jj + 3) * cs;
+                varying double w0 = A[(jj + 0) * rs + cj], w1 = A[(jj + 1) * rs + cj];
+                varying double w2 = A[(jj + 2) * rs + cj], w3 = A[(jj + 3) * rs + cj];
+
+                // near-diagonal triangular corner (rows jj..jj+3), lower part only
+                A[(jj + 0) * rs + d0] -= w0 * w0;
+
+                A[(jj + 1) * rs + d0] -= w1 * w0;
+                A[(jj + 1) * rs + d1] -= w1 * w1;
+
+                A[(jj + 2) * rs + d0] -= w2 * w0;
+                A[(jj + 2) * rs + d1] -= w2 * w1;
+                A[(jj + 2) * rs + d2] -= w2 * w2;
+
+                A[(jj + 3) * rs + d0] -= w3 * w0;
+                A[(jj + 3) * rs + d1] -= w3 * w1;
+                A[(jj + 3) * rs + d2] -= w3 * w2;
+                A[(jj + 3) * rs + d3] -= w3 * w3;
+
+                // rectangular tail below the corner: all 4 columns, A(i,j) reused
+                for (uniform int i = jj + 4; i < n; ++i) {
+                    varying double av = A[i * rs + cj];
+                    A[i * rs + d0] -= av * w0;
+                    A[i * rs + d1] -= av * w1;
+                    A[i * rs + d2] -= av * w2;
+                    A[i * rs + d3] -= av * w3;
+                }
+            }
+            // remainder columns (fewer than 4 left)
+            for (; jj < n; ++jj) {
+                uniform int dj = jj * cs;
+                varying double w = A[jj * rs + cj];
+                for (uniform int i = jj; i < n; ++i)
+                    A[i * rs + dj] -= A[i * rs + cj] * w;
             }
         }
     }

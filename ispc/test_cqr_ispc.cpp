@@ -10,6 +10,9 @@
  *          Q(Q^T B)=B round-trip -- square and tall.
  *   trsm   R X = alpha B vs mkl_dtrsm_compact and vs a known X, for alpha != 1 and
  *          nrhs = 1 and 6 (exercises the remainder and the 4-blocked paths).
+ *   potrf  A = L L^T / U^T U vs mkl_dpotrf_compact and LAPACKE_dpotrf, both uplo
+ *          (lower = contiguous path, upper = strided), reconstruction + untouched
+ *          triangle, plus non-SPD lane isolation and an SPD solve (+ mkl trsm).
  *   solve  full ISPC pipeline vs known X, and the factor vs the GNU kernel (a few
  *          ULP; often bit-identical, but that is input/compiler-dependent).
  *
@@ -270,6 +273,144 @@ void integration_solve(MKL_COMPACT_PACK fmt, int nm, int n, int nrhs, bool equiv
     for (double *p : {ap0, bp0, api, tpi, bpi})
         std::free(p);
 }
+
+/* SPD batch A = M^T M + n I (symmetric positive-definite), dense column-major. */
+Batch spdbatch(int n, int nm)
+{
+    Batch A(nm, Mat((std::size_t)n * n));
+    for (int v = 0; v < nm; ++v) {
+        Mat M = randbatch(n, n, 1)[0];
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                double s = 0;
+                for (int l = 0; l < n; ++l)
+                    s += M[l + (std::size_t)i * n] * M[l + (std::size_t)j * n];
+                A[v][i + (std::size_t)j * n] = s + (i == j ? (double)n : 0.0);
+            }
+    }
+    return A;
+}
+
+/* -------- unit: potrf -- Cholesky vs mkl_dpotrf_compact and LAPACKE_dpotrf ----- */
+void unit_potrf(MKL_COMPACT_PACK fmt, int nm, int n, bool upper)
+{
+    const char ul = upper ? 'U' : 'L';
+    Batch A = spdbatch(n, nm);
+    double *apc = packc(fmt, n, n, A, nm); /* factored by the ISPC kernel */
+    double *amc = packc(fmt, n, n, A, nm); /* factored by MKL (the oracle) */
+    cqr_ispc_dpotrf_compact(0 /*col-major*/, upper ? 1 : 0, n, apc, n, nm);
+    MKL_INT info = 0;
+    mkl_dpotrf_compact(MKL_COL_MAJOR, upper ? MKL_UPPER : MKL_LOWER, n, amc, n, &info,
+                       fmt, nm);
+    Batch Fi = unpackc(fmt, n, n, apc, nm), Fm = unpackc(fmt, n, n, amc, nm);
+
+    double res = 0, untouched = 0, elap = 0;
+    for (int v = 0; v < nm; ++v) {
+        /* reconstruction: the named triangle's factor times its transpose == A */
+        Mat Rec((std::size_t)n * n, 0.0);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                double s = 0;
+                const int lmax = std::min(i, j);
+                for (int l = 0; l <= lmax; ++l)
+                    s += upper ? Fi[v][l + (std::size_t)i * n] *
+                                     Fi[v][l + (std::size_t)j * n]
+                               : Fi[v][i + (std::size_t)l * n] *
+                                     Fi[v][j + (std::size_t)l * n];
+                Rec[i + (std::size_t)j * n] = s - A[v][i + (std::size_t)j * n];
+            }
+        res = std::max(res, froben(n, n, Rec.data()) /
+                                std::max(froben(n, n, A[v].data()), 1e-300));
+        /* the opposite triangle must pass through bit-for-bit; elementwise vs the
+         * unique LAPACK SPD factor is a sharp per-element signal. */
+        Mat L = A[v];
+        LAPACKE_dpotrf(LAPACK_COL_MAJOR, ul, n, L.data(), n);
+        double el = 0;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const bool named = upper ? (i <= j) : (i >= j);
+                const std::size_t e = i + (std::size_t)j * n;
+                if (named)
+                    el = std::max(el, std::fabs(Fi[v][e] - L[e]));
+                else
+                    untouched = std::max(untouched, std::fabs(Fi[v][e] - A[v][e]));
+            }
+        elap = std::max(elap, el / std::max(froben(n, n, L.data()), 1e-300));
+    }
+    const double dmkl = maxabs_diff(Fi, Fm, n * n, nm);
+    const double gate = 50.0 * n * EPS;
+    expect(res <= gate, "potrf: reconstruction A = R^T R");
+    expect(untouched == 0.0, "potrf: opposite triangle untouched");
+    expect(elap <= gate, "potrf: vs LAPACKE_dpotrf");
+    expect(dmkl <= 1e-9, "potrf: vs mkl_dpotrf_compact");
+    std::printf("  [potrf] n=%-3d nm=%-3d %s | recon %.2e  lapack %.2e  mkl %.2e  "
+                "untouched %.0e (gate %.1e)\n",
+                n, nm, upper ? "U" : "L", res, elap, dmkl, untouched, gate);
+    std::free(apc);
+    std::free(amc);
+}
+
+/* -------- unit: potrf -- a non-SPD lane poisons only itself, not its siblings -- */
+void unit_potrf_nonspd(MKL_COMPACT_PACK fmt, int nm, int n)
+{
+    const int bad = nm / 2;
+    Batch A = spdbatch(n, nm);
+    A[bad][0] = -1.0; /* A(0,0) < 0: the very first pivot sqrt is NaN for this lane */
+    double *apc = packc(fmt, n, n, A, nm);
+    cqr_ispc_dpotrf_compact(0, 0, n, apc, n, nm); /* lower */
+    Batch F = unpackc(fmt, n, n, apc, nm);
+
+    double sib = 0;
+    bool bad_nan = !std::isfinite(F[bad][0]);
+    for (int v = 0; v < nm; ++v) {
+        if (v == bad) continue;
+        Mat L = A[v];
+        LAPACKE_dpotrf(LAPACK_COL_MAJOR, 'L', n, L.data(), n);
+        double d = 0;
+        for (int j = 0; j < n; ++j)
+            for (int i = j; i < n; ++i)
+                d = std::max(d, std::fabs(F[v][i + (std::size_t)j * n] -
+                                          L[i + (std::size_t)j * n]));
+        sib = std::max(sib, d / std::max(froben(n, n, L.data()), 1e-300));
+    }
+    expect(bad_nan, "potrf: non-SPD lane yields NaN/Inf");
+    expect(sib <= 50.0 * n * EPS, "potrf: sibling lanes unaffected by non-SPD lane");
+    std::printf("  [potrf] non-SPD lane %d of %d | sibling %.2e (bad lane non-finite: "
+                "%s)\n",
+                bad, nm, sib, bad_nan ? "yes" : "no");
+    std::free(apc);
+}
+
+/* -------- integration: SPD solve A X = B via ISPC potrf + two MKL trsm --------- */
+void integration_spd_solve(MKL_COMPACT_PACK fmt, int nm, int n, int nrhs)
+{
+    Mat X((std::size_t)n * nrhs); /* known X(i,j) = (j+1) + 0.5 i */
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = 0; i < n; ++i)
+            X[i + (std::size_t)j * n] = (j + 1) + 0.5 * i;
+    Batch A = spdbatch(n, nm), B(nm, Mat((std::size_t)n * nrhs));
+    for (int v = 0; v < nm; ++v)
+        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0,
+                    A[v].data(), n, X.data(), n, 0.0, B[v].data(), n);
+    double *apc = packc(fmt, n, n, A, nm), *bpc = packc(fmt, n, nrhs, B, nm);
+    cqr_ispc_dpotrf_compact(0, 0, n, apc, n, nm); /* A = L L^T (lower) */
+    /* L Y = B (no-trans), then L^T X = Y (trans) -- MKL trsm (ISPC's is upper-only) */
+    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_NOTRANS, MKL_NONUNIT, n,
+                      nrhs, 1.0, apc, n, bpc, n, fmt, nm);
+    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_TRANS, MKL_NONUNIT, n, nrhs,
+                      1.0, apc, n, bpc, n, fmt, nm);
+    Batch Xi = unpackc(fmt, n, nrhs, bpc, nm);
+    double fwd = 0;
+    for (int v = 0; v < nm; ++v)
+        for (int e = 0; e < n * nrhs; ++e)
+            fwd = std::max(fwd, std::fabs(Xi[v][e] - X[e]));
+    const double rtol = 100.0 * n * EPS * (1.0 + 0.5 * n);
+    expect(fwd <= rtol, "potrf+trsm: SPD solve recovers known X");
+    std::printf("  [spd  ] n=%-3d nm=%-3d nrhs=%d | fwd %.2e (rtol %.1e)\n", n, nm, nrhs,
+                fwd, rtol);
+    std::free(apc);
+    std::free(bpc);
+}
 } /* namespace */
 
 int main()
@@ -309,6 +450,17 @@ int main()
     integration_solve(fmt, 8, 30, 4, true);
     integration_solve(fmt, 16, 100, 8, true);
     integration_solve(fmt, 13, 64, 2, false); /* padded */
+
+    /* potrf: lower (contiguous) and upper (strided) paths, square and padded. */
+    unit_potrf(fmt, 8, 24, false);
+    unit_potrf(fmt, 8, 24, true);
+    unit_potrf(fmt, 16, 50, false);
+    unit_potrf(fmt, 16, 50, true);
+    unit_potrf(fmt, 7, 20, false); /* padded */
+    unit_potrf(fmt, 7, 20, true);  /* padded, strided */
+    unit_potrf_nonspd(fmt, 8, 24);
+    integration_spd_solve(fmt, 8, 30, 4);
+    integration_spd_solve(fmt, 16, 100, 6);
 
     if (failures) {
         std::printf("\n%d CHECK(S) FAILED\n", failures);
