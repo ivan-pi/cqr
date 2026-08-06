@@ -1,0 +1,49 @@
+name: CI (portable, no MKL)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Limit concurrent runs: a newer commit on the same ref cancels the in-progress
+# run instead of piling workflows up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.cxx }} / ubuntu-latest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: gcc,   cxx: g++ }
+          - { cc: clang, cxx: clang++ }
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # No Intel MKL: -DCQR_WITH_MKL=OFF builds only the portable kernels and
+      # their self-contained tests, so a plain toolchain + Ninja is all we need.
+      # This is the quick smoke check that the BLAS-free build stays healthy.
+      - name: Install toolchain and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCQR_WITH_MKL=OFF
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test (portable suites)
+        run: ctest --test-dir build --output-on-failure
