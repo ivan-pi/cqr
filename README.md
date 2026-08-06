@@ -107,10 +107,10 @@ not part of the supported interface:
 | `src/cqr_potrf_compact_dispatch.cpp` | Portable potrf C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_ormqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_trsm_compact_dispatch.cpp` | Portable trsm C entry points with LAPACK/BLAS-style `info = -j` validation (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_geqrf.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the geqrf kernel. |
+| `src/cqr_mkl_geqrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_LAYOUT`, then calls the geqrf kernel. |
 | `src/cqr_mkl_potrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_UPLO`/`MKL_LAYOUT`, then calls the potrf kernel. |
 | `src/cqr_mkl_ormqr.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `side`/`trans`/`MKL_LAYOUT`, then calls the ormqr kernel. |
-| `src/cqr_mkl_trsm.cpp` | Unwraps the MKL enums + `MKL_COMPACT_PACK` -> `V` and calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
+| `src/cqr_mkl_trsm.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps the MKL enums (`MKL_SIDE`/`MKL_UPLO`/`MKL_TRANSPOSE`/`MKL_DIAG`/`MKL_LAYOUT`), then calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
 | `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 | `src/test_compact_util.hpp` | Shared test helpers (seeded RNG, error metrics, SPD generation, Compact pack/unpack); header-only, no MKL. |
 | `src/test_cqr_geqrf_compact.cpp` | Self-contained geqrf correctness test vs a scalar `geqr2` reference (no BLAS). |
