@@ -125,6 +125,24 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
             }
 }
 
+// Fill one order-s triangular matrix (leading dim s) in the given layout:
+// random in the referenced triangle, the diagonal boosted away from zero for
+// conditioning, the other (never-referenced) triangle zeroed. Shared by the
+// ?trsm suites; A is square, so lda = s for both layouts.
+template <class T> void gen_tri(T *A, int s, bool upper, bool rowmajor = false)
+{
+    auto at = [&](int i, int j) -> T & {
+        return A[rowmajor ? (size_t)i * s + j : i + (size_t)j * s];
+    };
+    for (int i = 0; i < s; ++i)
+        for (int j = 0; j < s; ++j) {
+            bool ref = upper ? (i <= j) : (i >= j);
+            at(i, j) = ref ? frand<T>() : T(0);
+        }
+    for (int d = 0; d < s; ++d)
+        at(d, d) = (at(d, d) >= 0 ? T(1) : T(-1)) * (T(2) + std::abs(frand<T>()));
+}
+
 // A batch of `count` column-major rows x cols matrices in one contiguous buffer;
 // matrix idx starts at idx*rows*cols with leading dimension rows.
 template <class T> class MatrixBatch {

@@ -22,7 +22,7 @@
 
 #include "cqr_mkl_ext.h"
 #include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
-#include "test_compact_util.hpp" /* rng/frand, max_abs_diff, norm1, batch_ptrs */
+#include "test_compact_util.hpp" /* rng/frand, max_abs_diff, norm1, batch_ptrs, gen_tri */
 
 #include <cstdio>
 #include <cstdlib>
@@ -48,23 +48,6 @@ double maxabs(const double *a, size_t n)
     for (size_t i = 0; i < n; ++i)
         d = std::max(d, std::abs(a[i]));
     return d;
-}
-
-/* Fill a single order-s triangular matrix in the given layout: random in the
- * referenced triangle, diagonal boosted away from zero for conditioning, the
- * other triangle zeroed. lda = s for both layouts (A is square). */
-void gen_tri(double *A, int s, bool upper, bool rowmajor)
-{
-    auto at = [&](int i, int j) -> double & {
-        return A[rowmajor ? (size_t)i * s + j : i + (size_t)j * s];
-    };
-    for (int i = 0; i < s; ++i)
-        for (int j = 0; j < s; ++j) {
-            bool ref = upper ? (i <= j) : (i >= j);
-            at(i, j) = ref ? frand<double>() : 0.0;
-        }
-    for (int d = 0; d < s; ++d)
-        at(d, d) = (at(d, d) >= 0 ? 1.0 : -1.0) * (2.0 + std::abs(frand<double>()));
 }
 
 /* ---------------- Suite 1: cross-check vs mkl_?trsm_compact ------------ */
@@ -197,11 +180,11 @@ int suite2(int nm, int n, int nrhs)
 
     double worst_fwd = 0, worst_res = 0;
     std::vector<double> AX(sB);
+    const double nX = std::max(norm1(X.data(), n, nrhs), 1e-300); /* X is loop-invariant */
     for (int v = 0; v < nm; ++v) {
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
-                                            std::max(norm1(X.data(), n, nrhs), 1e-300));
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) / nX);
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i) {
                 double s = 0;

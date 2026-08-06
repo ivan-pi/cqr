@@ -53,7 +53,7 @@ static void ref_trsm(char side, char uplo, char transa, char diag, int m, int n,
 
     if (left) {
         // solve op(A) X = B column by column; A is m x m
-        const bool back = (upper && !tran) || (!upper && tran);
+        const bool back = (upper != tran);
         for (int j = 0; j < n; ++j)
             for (int t = 0; t < m; ++t) {
                 int i = back ? m - 1 - t : t;
@@ -69,7 +69,7 @@ static void ref_trsm(char side, char uplo, char transa, char diag, int m, int n,
     }
     else {
         // solve X op(A) = B column of X at a time; A is n x n
-        const bool fwd = (upper && !tran) || (!upper && tran);
+        const bool fwd = (upper != tran);
         for (int t = 0; t < n; ++t) {
             int j = fwd ? t : n - 1 - t;
             if (fwd)
@@ -121,18 +121,12 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     const T eps = std::numeric_limits<T>::epsilon();
     const T alpha = T(0.5) + frand<T>(); // a non-trivial, non-zero scalar
 
-    // triangular A (s x s): random in the referenced triangle, diagonal boosted
-    // for conditioning, the other triangle zeroed (never referenced).
+    // triangular A (s x s), column-major: random in the referenced triangle,
+    // diagonal boosted for conditioning, the other triangle zeroed.
     MatrixBatch<T> A(nm, s, s);
     const bool up = (uplo == 'U');
-    for (int idx = 0; idx < nm; ++idx) {
-        for (int j = 0; j < s; ++j)
-            for (int i = 0; i < s; ++i)
-                A(idx, i, j) = (up ? (i <= j) : (i >= j)) ? frand<T>() : T(0);
-        for (int d = 0; d < s; ++d)
-            A(idx, d, d) =
-                (A(idx, d, d) >= 0 ? T(1) : T(-1)) * (T(2) + std::abs(frand<T>()));
-    }
+    for (int idx = 0; idx < nm; ++idx)
+        gen_tri<T>(A[idx], s, up);
 
     // random B (m x n) and its reference solution
     MatrixBatch<T> B(nm, m, n), Xref(nm, m, n);

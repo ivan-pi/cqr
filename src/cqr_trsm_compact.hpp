@@ -75,7 +75,9 @@ inline void trsm_dot_block(Int m, const typename pack<T, V>::type *A, Int ldap,
                            const typename pack<T, V>::type &va)
 {
     using VT = typename pack<T, V>::type;
-    constexpr bool back = (UPPER && !TRAN) || (!UPPER && TRAN);
+    /* back-substitute (sweep rows high -> low) when op(A) is upper-triangular:
+     * A upper & no-trans, or A lower & trans (its transpose is upper). */
+    constexpr bool back = (UPPER != TRAN);
     for (Int t = 0; t < m; ++t) {
         const Int i = back ? m - 1 - t : t;
         VT w[JB];
@@ -103,7 +105,7 @@ inline void trsm_dot_block(Int m, const typename pack<T, V>::type *A, Int ldap,
 /* One group, side='L', column-major, fully specialized on uplo/trans/diag:
  * the RHS columns are swept in 4/2/1 blocks so the 1-3 leftover columns still
  * reuse each A load (2- and 1-wide tails), instead of a one-column-at-a-time
- * remainder. alpha = 0 is the B := 0 fast path with A untouched. */
+ * remainder. The driver handles alpha = 0 (B := 0); alpha is nonzero here. */
 template <bool UPPER, bool TRAN, bool UNIT, typename T, int V, typename Int>
 void trsm_left_dot_tb(Int m, Int n, T alpha, const T *a_, Int ldap, T *b_, Int ldbp)
 {
@@ -114,15 +116,6 @@ void trsm_left_dot_tb(Int m, Int n, T alpha, const T *a_, Int ldap, T *b_, Int l
 
     const VT *A = reinterpret_cast<const VT *>(a_);
     VT *B = reinterpret_cast<VT *>(b_);
-
-    if (alpha == T(0)) {
-        for (Int j = 0; j < n; ++j) {
-            VT *bj = B + j * ldbp;
-            for (Int i = 0; i < m; ++i)
-                bj[i] = VT{};
-        }
-        return;
-    }
 
     VT va;
     broadcast<T, V>(va, alpha);
@@ -193,20 +186,12 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
      * elements -- an invariant the driver upholds for every side/layout. */
     assert(A.special && A.panel && B.special && B.panel);
 
-    /* alpha == 0: B := 0, A not referenced (BLAS ?trsm). */
-    if (alpha == T(0)) {
-        for (Int j = 0; j < n; ++j)
-            for (Int i = 0; i < m; ++i)
-                B(i, j) = VT{};
-        return;
-    }
-
     VT va;
     broadcast<T, V>(va, alpha);
 
     if (left) {
         /* solve op(A) X = alpha B column by column; A is m x m */
-        const bool back = (upper && !tran) || (!upper && tran);
+        const bool back = (upper != tran);
         for (Int j = 0; j < n; ++j)
             for (Int t = 0; t < m; ++t) {
                 const Int i = back ? m - 1 - t : t;
@@ -220,7 +205,7 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
     }
     else {
         /* solve X op(A) = alpha B, one column of X at a time; A is n x n */
-        const bool fwd = (upper && !tran) || (!upper && tran);
+        const bool fwd = (upper != tran);
         for (Int t = 0; t < n; ++t) {
             const Int j = fwd ? t : n - 1 - t;
             for (Int i = 0; i < m; ++i)
@@ -271,6 +256,21 @@ void trsm_compact_general(bool left, bool upper, bool rowmajor, bool tran, bool 
         (rowmajor ? (std::size_t)ldbp * m : (std::size_t)ldbp * n) * V;
 
     const Int ngroups = (nm + V - 1) / V;
+
+    /* alpha == 0 is the BLAS ?trsm fast path: B := 0 with A untouched. Handle it
+     * once here -- both group kernels then assume alpha != 0 -- zeroing each
+     * group's m x n block through the same strided B view the solve uses. */
+    if (alpha == T(0)) {
+        using VT = typename pack<T, V>::type;
+        for (Int g = 0; g < ngroups; ++g) {
+            auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, b_row, b_col);
+            for (Int j = 0; j < n; ++j)
+                for (Int i = 0; i < m; ++i)
+                    B(i, j) = VT{};
+        }
+        return;
+    }
+
     for (Int g = 0; g < ngroups; ++g) {
         const T *a = ap + (std::size_t)g * str_a;
         T *b = bp + (std::size_t)g * str_b;
