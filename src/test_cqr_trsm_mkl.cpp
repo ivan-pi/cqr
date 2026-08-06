@@ -3,12 +3,14 @@
  * Validation of cqr_mkl_?trsm_compact against real Intel MKL, through the genuine
  * MKL Compact pipeline (mkl_dgepack_compact / mkl_dgeunpack_compact).
  *
- * Suite 1 -- cross-check vs mkl_?trsm_compact over the full feature matrix
- *   (layout x side x uplo x transa x diag): both solve the same packed batch and
- *   the compact results are compared elementwise (relative, working precision).
- * Suite 2 -- end-to-end AX = B with no MKL compute kernel: the open pipeline
- *   mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T') -> cqr_mkl_dtrsm_compact
- *   must recover a known X (gates forward error and residual).
+ * Suite 1 (design doc section 7.2) -- cross-check vs mkl_?trsm_compact over the
+ *   full feature matrix (layout x side x uplo x transa x diag): both solve the
+ *   same packed batch and the compact results are compared elementwise (relative,
+ *   working precision).
+ * Suite 2 (design doc section 7.3) -- end-to-end AX = B with no MKL compute
+ *   kernel: the open pipeline mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact('L','T')
+ *   -> cqr_mkl_dtrsm_compact must recover a known X (gates forward error and
+ *   residual). See cqr_mkl_dtrsm_compact_design.md.
  *
  * Build: needs Intel MKL; wired up by CMakeLists.txt.
  *

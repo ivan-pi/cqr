@@ -186,14 +186,14 @@ rather than streaming it per column as a 4-only block with a one-column remainde
 would. `JB` and the `uplo/trans/diag` config are compile-time, so the
 accumulators land in registers, the loops unroll, and the config branches vanish.
 This lifts the awkward counts (`n = 2, 3, 5, 6, 7, ...`) to parity-or-better with
-the clean multiples of 4 -- all ~1.0-1.5x MKL's `mkl_?trsm_compact` on the target
-sizes (see PLANS.md).
+the clean multiples of 4 (measured speedups vs `mkl_?trsm_compact` are in
+PLANS.md).
 
 The exception is a single **`op(A) = A` leftover column** (`n = 1` -- a single-RHS
 solve such as QR's `R x = Q^T b` -- and the 1-tail of odd `n`): with one column
-there is no reuse to
-amortize the strided read, so it is instead solved by a **column-oriented (gaxpy)
-sweep** (`trsm_axpy_col`) reading *column* `k` of `A` contiguously. `op(A) = A^T`
+there is no reuse to amortize the strided read, so it is instead solved by a
+**column-oriented (gaxpy) sweep** (`trsm_axpy_col`) reading *column* `k` of `A`
+contiguously. `op(A) = A^T`
 reads `A(r, i)` = a column already, so it always uses the row-dot. Every path
 computes the same result -- this is a throughput choice only.
 
@@ -245,7 +245,7 @@ Matching standard BLAS `?trsm` to working precision is the minimum bar. SIMD,
 blocking, and layout handling are internal strategies only: the returned `X`
 must satisfy the same numerical invariants as an unbatched `?trsm`. Residuals
 are measured in FP64, tolerances are purely relative to the working precision.
-All suites below are CTest-registered and pass against the implemented kernel.
+All suites below are CTest-registered.
 
 ### 7.1 Suite 1 -- Portable, vs a scalar `?trsm` reference (no BLAS)
 
@@ -258,8 +258,12 @@ oracle. The row-dot kernels run the identical operation sequence one lane per
 matrix and so match the reference to the last bit (relative error `0`); the
 column-axpy no-transpose kernel accumulates in a different (but equally
 backward-stable) order and agrees to working precision (~`1e-16`).
-Gate: relative forward error of `X` at a generous multiple of `eps` on the
-diagonal-boosted (well conditioned) factors.
+Two gates, both at a generous multiple of `eps` on the diagonal-boosted (well
+conditioned) factors: the relative forward error of `X` against the reference
+solve, and the solve's own residual `||op(A) X - alpha B||` formed with an
+independent triangular multiply -- so a bug shared by the scalar reference and
+the kernel cannot pass unseen (the `?trsm` analogue of the reconstruction check
+the `geqrf`/`potrf` self-tests apply).
 
 ### 7.2 Suite 2 -- MKL cross-check, vs `mkl_?trsm_compact`
 

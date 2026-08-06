@@ -9,8 +9,11 @@
 // Two parts:
 //   1. C API argument validation -- exercises the LAPACK/BLAS-style info = -j
 //      contract of the portable entry points.
-//   2. Numerical correctness vs the scalar reference, over side / uplo / transa
-//      / diag, precisions and interleave widths (column-major, the tuned path).
+//   2. Numerical correctness over side / uplo / transa / diag, precisions and
+//      interleave widths (column-major, the tuned path): forward error vs a
+//      scalar reference solve, plus the solve's own residual ||op(A) X - alpha B||
+//      formed with an independent triangular multiply (so a bug shared by the
+//      reference and the kernel cannot pass unseen).
 //
 // Assisted-by: Claude:claude-opus-4.8
 
@@ -152,21 +155,33 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     MatrixBatch<T> Bout(nm, m, n);
     unpack_compact(Bout, bp.data(), m, V);
 
-    double worst = 0;
+    // Two gates: (1) forward error vs the scalar reference solve, and (2) the
+    // solve's own defining residual ||op(A) X - alpha B||, formed with an
+    // independent triangular multiply -- so a bug shared by ref_trsm and the
+    // kernel cannot slip through (the ?trsm analogue of the reconstruction /
+    // round-trip identities the geqrf/potrf/ormqr self-tests check).
+    double worst_fwd = 0, worst_res = 0;
+    std::vector<T> R((size_t)m * n), aB((size_t)m * n);
     for (int idx = 0; idx < nm; ++idx) {
-        double rel = max_abs_diff(Bout[idx], Xref[idx], (size_t)m * n) /
-                     std::max(norm1(Xref[idx], m, n), 1e-300);
-        worst = std::max(worst, rel);
+        worst_fwd =
+            std::max(worst_fwd, max_abs_diff(Bout[idx], Xref[idx], (size_t)m * n) /
+                                    std::max(norm1(Xref[idx], m, n), 1e-300));
+        tri_apply<T>(side, uplo, transa, diag, m, n, A[idx], s, Bout[idx], m, R.data());
+        for (size_t e = 0; e < (size_t)m * n; ++e)
+            aB[e] = alpha * B[idx][e];
+        worst_res = std::max(worst_res, max_abs_diff(R.data(), aB.data(), (size_t)m * n) /
+                                            std::max(norm1(aB.data(), m, n), 1e-300));
     }
+    const double worst = std::max(worst_fwd, worst_res);
 
-    // Backward-stable triangular solve on a diagonal-boosted A: forward error
-    // stays near working precision.
+    // Backward-stable triangular solve on a diagonal-boosted A: both the forward
+    // error and the residual stay near working precision.
     const double rtol = 1e3 * s * (double)eps;
-    bool ok = (info == 0) && (worst <= rtol);
+    const bool ok = (worst <= rtol);
     std::printf("  T=%-6s V=%-2d side=%c uplo=%c tr=%c diag=%c nm=%-2d m=%-3d n=%-3d | "
-                "rel %.2e (rtol %.1e) info=%d %s\n",
+                "fwd %.1e res %.1e (rtol %.1e) info=%d %s\n",
                 sizeof(T) == 8 ? "double" : "float", V, side, uplo, transa, diag, nm, m,
-                n, worst, rtol, info, ok ? "OK" : "FAIL");
+                n, worst_fwd, worst_res, rtol, info, (ok && info == 0) ? "OK" : "FAIL");
 
     return (info != 0) + !ok;
 }

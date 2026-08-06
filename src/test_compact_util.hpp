@@ -1,10 +1,9 @@
 // test_compact_util.hpp
 //
 // Shared helpers for the compact-format test suites: a seeded RNG, error
-// metrics, SPD input generation, and Compact pack/unpack. Header-only and
-// MKL-free, so the BLAS-free portable tests use it too. (The geqrf/ormqr tests
-// still carry their own copies; their MatrixBatch/pack_compact/frand signatures
-// match these, so they can migrate onto this header unchanged.)
+// metrics, SPD input generation, a triangular-operator apply, and Compact
+// pack/unpack. Header-only and MKL-free, so the BLAS-free portable tests use it
+// too.
 //
 // Assisted-by: Claude:claude-opus-4.8
 
@@ -56,6 +55,41 @@ template <class T> double norm1(const T *M, int m, int n)
         mx = std::max(mx, s);
     }
     return mx;
+}
+
+// Apply a triangular operator to a general matrix -- the "forward" direction of
+// a ?trsm, for checking a solve's defining residual ||op(A) X - alpha B||.
+// R (m x n, column-major, ld m) := op(A) X (side 'L') or X op(A) (side 'R'),
+// with A the order-s (s = m for 'L', n for 'R') triangular factor: uplo 'U'/'L',
+// op(A) = A ('N') or A^T ('T'/'C'), unit ('U') or non-unit ('N') diagonal.
+template <class T>
+void tri_apply(char side, char uplo, char transa, char diag, int m, int n, const T *A,
+               int lda, const T *X, int ldx, T *R)
+{
+    const bool left = (side == 'L' || side == 'l');
+    const bool upper = (uplo == 'U' || uplo == 'u');
+    const bool tran = (transa == 'T' || transa == 't' || transa == 'C' || transa == 'c');
+    const bool unit = (diag == 'U' || diag == 'u');
+    const int s = left ? m : n;
+    // op(A)(i,k): unit or A(i,i) on the diagonal; off-diagonal is the referenced
+    // entry of A (op = A) or of its transpose (op = A^T), else zero.
+    auto Mop = [&](int i, int k) -> T {
+        if (i == k) return unit ? T(1) : A[i + (size_t)i * lda];
+        const bool ref = tran ? (upper ? i > k : i < k) : (upper ? k > i : k < i);
+        if (!ref) return T(0);
+        return tran ? A[k + (size_t)i * lda] : A[i + (size_t)k * lda];
+    };
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i) {
+            T acc = 0;
+            if (left)
+                for (int k = 0; k < s; ++k)
+                    acc += Mop(i, k) * X[k + (size_t)j * ldx];
+            else
+                for (int k = 0; k < s; ++k)
+                    acc += X[i + (size_t)k * ldx] * Mop(k, j);
+            R[i + (size_t)j * m] = acc;
+        }
 }
 
 // nm pointers into base, `stride` apart -- one per matrix, for the MKL pack API.
