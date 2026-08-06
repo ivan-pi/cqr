@@ -24,7 +24,7 @@ namespace test {
 // cross-test coupling); the seed only has to be fixed, not unique.
 inline std::mt19937_64 &rng()
 {
-    static std::mt19937_64 g(12345);
+    static std::mt19937_64 g(2026);
     return g;
 }
 

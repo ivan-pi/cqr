@@ -33,15 +33,17 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, max_abs_diff */
 
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <limits>
-#include <random>
 #include <vector>
 #include <algorithm>
+
+using namespace cqr::test;
 
 namespace {
 
@@ -50,43 +52,6 @@ const double eps = std::numeric_limits<double>::epsilon();
 int vlen(MKL_COMPACT_PACK fmt)
 {
     return cqr::detail::vlen_for_format<double>(fmt);
-}
-
-std::mt19937_64 rng(7);
-
-double frand()
-{
-    static std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    return dist(rng);
-}
-
-/* L1 (max column sum) norm of a column-major m x n matrix */
-double norm1(const double *M, int m, int n)
-{
-    double mx = 0;
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        for (int i = 0; i < m; ++i)
-            s += std::abs(M[i + (size_t)j * m]);
-        mx = std::max(mx, s);
-    }
-    return mx;
-}
-
-double maxdiff(const double *a, const double *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, std::abs(a[i] - b[i]));
-    return d;
-}
-
-template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
-{
-    std::vector<T *> p(nm);
-    for (int v = 0; v < nm; ++v)
-        p[v] = base + (size_t)v * stride;
-    return p;
 }
 
 /* Input structures (a subset of the GPU competition's stress set). The QR
@@ -103,7 +68,7 @@ enum Structure { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
 void gen_matrix(double *A, int m, int n, double cond, Structure s = DENSE)
 {
     for (int i = 0; i < m * n; ++i)
-        A[i] = frand();
+        A[i] = frand<double>();
     if (s == DENSE) {
         for (int i = 0; i < std::min(m, n); ++i)
             A[i + (size_t)i * m] += 2.0;
@@ -117,7 +82,7 @@ void gen_matrix(double *A, int m, int n, double cond, Structure s = DENSE)
     else if (n >= 2) {
         const double noise = (s == NEAR_COLLINEAR) ? 1e-9 : 0.0; /* exact dup if 0 */
         for (int i = 0; i < m; ++i)
-            A[i + (size_t)(n - 1) * m] = A[i] * (1.0 + noise * frand());
+            A[i + (size_t)(n - 1) * m] = A[i] * (1.0 + noise * frand<double>());
     }
 }
 
@@ -195,8 +160,8 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
         /* diagnostic: elementwise vs LAPACKE_dgeqrf */
         std::copy(Av, Av + sA, Href.begin());
         LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, n, Href.data(), m, tauref.data());
-        double el =
-            std::max(maxdiff(Hv, Href.data(), sA), maxdiff(tv, tauref.data(), sT));
+        double el = std::max(max_abs_diff(Hv, Href.data(), sA),
+                             max_abs_diff(tv, tauref.data(), sT));
         worst_el = std::max(worst_el, el / std::max(norm1(Av, m, n), 1e-300));
     }
 
@@ -264,8 +229,8 @@ int suite2(MKL_LAYOUT layout, int nm, int m, int n)
                        (MKL_INT)work.size(), &info, fmt, nm);
 
     /* compare the two compact buffers elementwise (same input, same convention) */
-    double da = maxdiff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
-    double dt = maxdiff(tp1.get(), tp2.get(), (size_t)sz_t / sizeof(double));
+    double da = max_abs_diff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
+    double dt = max_abs_diff(tp1.get(), tp2.get(), (size_t)sz_t / sizeof(double));
     // TODO: review: fixed cross-check tolerance (design doc 7.2). Observed
     // agreement with MKL is ~1e-14 on these inputs; a tolerance scaled with n*eps
     // would be a tighter regression signal than the flat 1e-9 if wanted.
@@ -354,7 +319,7 @@ int suite3(int nm, int n, int nrhs)
     for (int v = 0; v < nm; ++v) {
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, maxdiff(Xv, X.data(), sB) /
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
                                             std::max(norm1(X.data(), n, nrhs), 1e-300));
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i) {
@@ -363,7 +328,7 @@ int suite3(int nm, int n, int nrhs)
                     s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
                 AX[i + (size_t)j * n] = s;
             }
-        worst_res = std::max(worst_res, maxdiff(AX.data(), Bv, sB) /
+        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
                                             std::max(norm1(Bv, n, nrhs), 1e-300));
     }
     const double rtol = 100.0 * n * eps;

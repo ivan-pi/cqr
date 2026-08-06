@@ -18,12 +18,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
-#include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
 
 #include "cqr_compact.h" // dgeqrf_compact + dormqr_compact (all four C entry points)
+#include "test_compact_util.hpp" // MatrixBatch, pack/unpack, frand, max_abs_diff
+
+using namespace cqr::test;
 
 // ----------------------- reference kernels (scalar) -----------------
 
@@ -92,90 +94,8 @@ static void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
         }
 }
 
-// ------------------------- batch storage ----------------------------
-
-// A batch of `count` column-major rows x cols matrices held in one contiguous
-// buffer: matrix idx starts at offset idx*rows*cols with leading dimension
-// rows. operator[] hands out a matrix's base pointer for the pointer-based
-// reference kernels; operator() indexes a single element (i, j) of a matrix.
-template <class T> class MatrixBatch {
-  public:
-    MatrixBatch(int count, int rows, int cols)
-        : count_(count), rows_(rows), cols_(cols), a_((size_t)count * rows * cols)
-    {
-    }
-
-    // clang-format off
-    int count() const { return count_; }
-    int rows()  const { return rows_; }
-    int cols()  const { return cols_; }
-
-    // Base pointer of matrix idx (column-major, leading dimension rows()).
-    T       *operator[](int idx)       { return a_.data() + (size_t)idx * rows_ * cols_; }
-    const T *operator[](int idx) const { return a_.data() + (size_t)idx * rows_ * cols_; }
-
-    // Element (i, j) of matrix idx.
-    T       &operator()(int idx, int i, int j)       { return (*this)[idx][i + (size_t)j * rows_]; }
-    const T &operator()(int idx, int i, int j) const { return (*this)[idx][i + (size_t)j * rows_]; }
-    // clang-format on
-
-  private:
-    int count_, rows_, cols_;
-    std::vector<T> a_;
-};
-
-// ----------------------- compact pack / unpack ----------------------
-// Column-major m x n matrices: element (i,j) of matrix idx = g*V+v lives at
-// p[g*ldp*n*V + (j*ldp+i)*V + v]; padded slots carry the identity.
-
-template <class T>
-static void pack_compact(const MatrixBatch<T> &Mk, T *p, int ldp, int V)
-{
-    const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i)
-                    p[(size_t)g * ldp * n * V + ((size_t)j * ldp + i) * V + v] =
-                        (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
-        }
-}
-
-template <class T>
-static void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V)
-{
-    const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i)
-                    Mk(idx, i, j) =
-                        p[(size_t)g * ldp * n * V + ((size_t)j * ldp + i) * V + v];
-        }
-}
-
-// ----------------------------- helpers ------------------------------
-
-static std::mt19937_64 rng(12345);
-
-template <class T> static T frand()
-{
-    static std::uniform_real_distribution<T> dist(T(-1), T(1));
-    return dist(rng);
-}
-
-template <class T> static double max_abs_diff(const T *a, const T *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, (double)std::abs(a[i] - b[i]));
-    return d;
-}
+// MatrixBatch, pack_compact/unpack_compact, frand and max_abs_diff live in
+// test_compact_util.hpp (shared across the compact test suites).
 
 // precision-overloaded shims: pick d/s by the pointer type
 static int geqrf_c(char l, int m, int n, double *a, int ld, double *t, int V, int nm)
