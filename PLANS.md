@@ -69,36 +69,25 @@ The compact batched triangular solve (`cqr_mkl_dtrsm_compact_design.md`): a
 portable, vectorized `mkl_?trsm_compact`, the step that closes the batched
 `AX = B` solve so it needs no MKL compute kernel. Status vs. its design document:
 
-- **Implemented (design sections 2-6, 8.1):** both API surfaces --
-  the MKL-style `cqr_mkl_?trsm_compact` (drop-in for `mkl_?trsm_compact`, no
-  `work`/`info`, `src/cqr_mkl_trsm.cpp`) and the portable `dtrsm_compact` /
-  `strsm_compact` with LAPACK/BLAS-style `info = -j` validation
-  (`src/cqr_trsm_compact_dispatch.cpp`) -- backed by the vectorized substitution
-  in `src/cqr_trsm_compact.hpp`. The tuned column-major/`side='L'` path is
-  templated on the RHS block width and on `uplo/trans/diag` (all compile-time):
-  `trsm_dot_block<JB,...>` (register-blocked row-dot of a `JB`-column block),
-  `trsm_left_dot_tb` (sweeps the RHS in descending 4/2/1 blocks so the 1-3
-  leftover columns still reuse `A`), and `trsm_axpy_col` (contiguous column-axpy
-  for the single `op(A)=A` leftover column); `trsm_left_dot` dispatches the
-  runtime config to these. A stride-generalized kernel
-  (`trsm_compact_group_strided`) handles the other side/layout combinations, all
-  driven over the packs by `trsm_compact_general`. Full
-  `side x uplo x transa x diag` support in FP64/FP32, `alpha = 0` handled as the
-  BLAS `B := 0` fast path.
-- **Validated (design section 7):** `test_cqr_trsm_compact` (no BLAS) runs the
-  argument-validation gate plus a numerical suite vs a scalar `?trsm` reference
-  (itself cross-checked against `cblas_?trsm`) -- the row-dot kernels match it to
-  the last bit, the column-axpy kernel to working precision (~1e-16, a different
-  but backward-stable accumulation order). `test_cqr_trsm_mkl` cross-checks
-  `cqr_mkl_?trsm_compact` vs
-  `mkl_?trsm_compact` over the full `layout x side x uplo x transa x diag` matrix
-  (agreement ~1e-16) and runs the end-to-end `AX = B` solve
-  (`mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> cqr_mkl_dtrsm_compact`). Both
-  are CTest-registered.
-- **Wired into the pipeline:** `examples/solve_qr_compact.cpp`
-  and the `bench_qr_compact` benchmark now call `cqr_mkl_dtrsm_compact` in the cqr
-  workflow, so the batched solve path uses no MKL compute kernel (MKL is used only
-  for pack/unpack).
+- **Implemented (design sections 2-6, 8.1):** both API surfaces -- the MKL-style
+  `cqr_mkl_?trsm_compact` (drop-in, no `work`/`info`) and the portable
+  `dtrsm_compact`/`strsm_compact` (LAPACK-style `info = -j` validation) -- over
+  the vectorized substitution. Column-major `side='L'` is the tuned path: a 4/2/1
+  register-blocked row-dot, with a contiguous column-axpy for the single
+  `op(A)=A` leftover column; the other side/layout combinations route through a
+  stride-generalized kernel. Full `side x uplo x transa x diag` in FP64/FP32,
+  `alpha = 0` handled as the BLAS `B := 0` fast path.
+- **Validated (design section 7):** a BLAS-free test vs. a scalar `?trsm`
+  reference over the full feature matrix, gating both the forward error and the
+  solve's own residual `||op(A) X - alpha B||` (from an independent triangular
+  multiply, so a bug shared by the reference and the kernel cannot pass); plus an
+  MKL test cross-checking vs. `mkl_?trsm_compact` over the full
+  `layout x side x uplo x transa x diag` matrix and closing the end-to-end
+  `AX = B` solve (`cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact ->
+  cqr_mkl_dtrsm_compact`). Both are CTest-registered.
+- **Wired into the pipeline:** `examples/solve_qr_compact.cpp` and the
+  `bench_qr_compact` benchmark call `cqr_mkl_dtrsm_compact`, so the batched solve
+  path uses no MKL compute kernel (MKL only packs/unpacks).
 - **Known gaps / scoped out (design section 6.6):** no singularity check (a zero
   diagonal of a non-unit factor divides to Inf/NaN, as in BLAS `?trsm`), no
   overflow/underflow-safe scaling, and the strided (right-side / row-major) inner
@@ -107,44 +96,20 @@ portable, vectorized `mkl_?trsm_compact`, the step that closes the batched
 
 ### trsm performance vs `mkl_?trsm_compact`
 
-Head-to-head timing of `cqr_mkl_dtrsm_compact` against `mkl_?trsm_compact` on
-identical packed data, single thread, `L/U/N/N`, AVX-512 (`V=8`), matrix orders
-10-148, verified on **both GCC and Clang** (isolated micro-benchmark, not
-in-tree). Speedup = MKL time / cqr time, `> 1` means cqr is faster:
+Isolated single-thread micro-benchmark (`L/U/N/N`, AVX-512, matrix orders 10-148,
+on both GCC and Clang); speedup = MKL time / cqr time:
 
-- **Single RHS (`nrhs = 1`, the QR-solve `R x = Q^T b`):** ~`1.0x` across the
-  whole size range. Solved by the column-axpy 1-tail (`trsm_axpy_col`): the
-  row-dot alone fell to ~`0.85x` at `n = 148` because it read `A` across a row
-  (stride `ldap`) and prefetched poorly out of cache; the axpy streams `A` down
-  columns contiguously, matching MKL (same formulation -- they agree bit-for-bit).
-- **`nrhs` a multiple of 4:** ~`1.3-1.5x` (the `JB = 4` row-dot block reuses each
-  strided `A` load four times, beating MKL).
-- **`nrhs = 2, 3, 5, 6, 7, ...` (mixed / awkward counts):** the 4/2/1 tail
-  blocking lifts these to parity-or-better (~`1.0-1.3x`) -- e.g. `nrhs = 2` went
-  from ~`0.77x` to ~`1.0-1.2x` and `nrhs = 6` from ~`0.85x` to ~`1.1-1.3x`. The
-  compile-time `uplo/trans/diag` specialization also nudged the clean multiples
-  up (Clang `nrhs = 8` at `n = 148`: `0.96x -> 1.23x`). One residual dip: Clang
-  `nrhs = 2` at `n = 148` (~`0.9x`) -- there a 2-wide strided block trails
-  contiguous axpy, but the small/mid-size gains dominate, so `n >= 2` stays on
-  the blocked row-dot.
+- **Single RHS** (`nrhs = 1`, the QR solve `R x = Q^T b`): ~`1.0x` -- the
+  column-axpy tail streams `A` down columns, matching MKL bit-for-bit.
+- **`nrhs` a multiple of 4:** ~`1.3-1.5x` -- the `JB = 4` row-dot block reuses
+  each strided `A` load four times.
+- **Mixed counts** (`nrhs = 2, 3, 5, 6, ...`): the 4/2/1 tail blocking lifts them
+  to parity-or-better (~`1.0-1.3x`).
 
-**Note -- this access-pattern issue is specific to `trsm`.** `geqrf` and `ormqr`
-apply Householder reflectors, whose inner loops already sweep *down columns*
-(`akk[i]`, contiguous), so they have no strided-`A` problem and are untouched.
-
-Remaining `trsm` optimization opportunities (not yet done; performance-only, no
-correctness impact):
-
-1. **Small-`n` overhead (`n ~ 10`): ~`0.6-0.9x`.** Fixed per-group cost swamps
-   the tiny flop count. The compile-time `uplo/trans/diag` specialization (above)
-   removed the runtime config branches and helped, but a dedicated small-`n` code
-   path (and/or amortizing per-group setup) would cut it further.
-2. **Reciprocal-multiply the diagonal** in the register-blocked paths: compute
-   `1/A(k,k)` once and multiply the `JB` columns, instead of `JB` vector
-   divisions (`divpd` is ~5-8x a multiply and poorly pipelined). Helps the wider
-   blocks; irrelevant at `nrhs = 1`. Costs ~1 ULP vs the current division.
-3. **SIMD-tune the strided kernel** (right-side / row-major), currently
-   correctness-first.
+The strided row-load is specific to `trsm` (`geqrf`/`ormqr` already sweep down
+columns). Remaining performance-only opportunities: the small-`n` (`~10`)
+per-group overhead (~`0.6-0.9x`), reciprocal-multiplying the diagonal in the
+blocked paths, and SIMD-tuning the strided kernel.
 
 ## Known gaps
 
