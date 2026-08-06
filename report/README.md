@@ -22,8 +22,9 @@ cd report
 make            # gnuplot figures, then latexmk -> paper.pdf
 ```
 
-Targets: `make figures` (just the plots), `make data` (regenerate placeholders),
-`make clean`, `make veryclean`. Requirements: `gnuplot` (with the `pdfcairo`
+Targets: `make figures` (just the plots), `make placeholder` (re-create the
+synthetic `.dat` files — overwrites real data, so opt-in only), `make clean`,
+`make veryclean`. Requirements: `gnuplot` (with the `pdfcairo`
 terminal), a TeX Live including `latexmk`, and `python3`.
 
 ## Layout

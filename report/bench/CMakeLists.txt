@@ -34,7 +34,9 @@ find_package(OpenMP QUIET)
 # Google Benchmark collection driver. cqr_mkl_dgeqrf_compact is defined in
 # cqr_mkl_geqrf.cpp, which instantiates the header-only kernel directly, so that
 # single source (plus its headers under src/) is all the collector needs from
-# the main tree.
+# the main tree. This mirrors the geqrf subset of the root `cqr_mkl_ext` target
+# (../../CMakeLists.txt): if that library gains sources the kernel depends on,
+# mirror them here.
 add_executable(bench_geqrf_collect
   bench_geqrf_collect.cpp
   "${CQR_ROOT}/src/cqr_mkl_geqrf.cpp")

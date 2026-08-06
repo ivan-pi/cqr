@@ -4,11 +4,9 @@ load 'figures/common.gp'
 set output 'figures/throughput_arm.pdf'
 
 set title "QR factorisation throughput on Arm (SVE)"
-set logscale xy
-set xlabel "matrix order {/:Italic n}"
+set logscale y
 set ylabel "throughput (matrices / s)"
 set format y "10^{%L}"
-set xrange [7:560]
 
 plot \
   'data/geqrf_arm.dat' using 1:3 with linespoints ls 1 title 'cqr (this work)', \

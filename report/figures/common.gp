@@ -10,6 +10,17 @@ set grid back lc rgb "#dddddd" lw 1.0
 
 set key top right samplen 2.0 spacing 1.2 opaque
 
+# Shared x-axis: every figure plots against matrix order on a log scale over the
+# same range. Each figure adds its own y-axis (logscale y for throughput/speedup;
+# gflops keeps a linear y).
+set logscale x
+set xlabel "matrix order {/:Italic n}"
+set xrange [7:560]
+
+# .dat column contract (see report/data/README.md), for the `using` specs:
+#   1 n            2 cqr_gflops     3 cqr_mats_s     4 vendor_mats_s
+#   5 lapack_mats_s  6 sp_cqr_lap   7 sp_vendor_lap  8 sp_cqr_vendor   9 relerr
+
 # 1 = cqr (this work)   2 = vendor (MKL / ArmPL)   3 = per-matrix LAPACK
 # 9 = reference / guide line
 set style line 1 lc rgb "#0072B2" lw 2.5 pt 7 ps 0.6 dt 1       # blue,       filled circle, solid

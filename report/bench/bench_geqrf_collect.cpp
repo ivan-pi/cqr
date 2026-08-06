@@ -51,6 +51,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <random>
 #include <vector>
@@ -201,6 +202,36 @@ double factor_error(const Pool<double> &P, MKL_COMPACT_PACK fmt, int V)
     return worst;
 }
 
+/* Deterministic, fixed-seed pools are identical across every repetition and all
+ * three implementations at a given order, so build each once and reuse it (keyed
+ * on n; the sweep is square and nmat is fixed). Google Benchmark calls the
+ * registered function many times per size (iteration estimation plus each
+ * repetition); without this, each call refills up to ~10^8 random entries. */
+Pool<double> &cached_pool(int m, int n, int nmat)
+{
+    static std::unique_ptr<Pool<double>> cache;
+    static int cache_n = -1;
+    if (!cache || cache_n != n) {
+        cache = std::make_unique<Pool<double>>(m, n, nmat);
+        cache_n = n;
+    }
+    return *cache;
+}
+
+/* The correctness gate is deterministic too, and expensive (a full extra
+ * factorization plus a serial per-matrix LAPACK reference), so compute it once
+ * per order rather than on every repetition. */
+double cached_relerr(const Pool<double> &P, MKL_COMPACT_PACK fmt, int V, int n)
+{
+    static double value = 0;
+    static int cache_n = -1;
+    if (cache_n != n) {
+        value = factor_error(P, fmt, V);
+        cache_n = n;
+    }
+    return value;
+}
+
 enum class Impl { CQR, MKL, LAPACK };
 
 /* One benchmark: factor a batch of `g_nmat` square n x n matrices with the
@@ -217,7 +248,7 @@ void BM_geqrf(benchmark::State &state)
     const int V = vlen_for_format<double>(fmt);
     const int ngroups = (nmat + V - 1) / V;
 
-    Pool<double> P(m, n, nmat);
+    Pool<double> &P = cached_pool(m, n, nmat);
 
     if constexpr (I == Impl::LAPACK) {
         aligned_vector<double> work = P.a; /* standard-layout working copy */
@@ -270,7 +301,7 @@ void BM_geqrf(benchmark::State &state)
     state.counters["gflops"] = benchmark::Counter(
         nmat * geqrf_gflop(m, n), benchmark::Counter::kIsIterationInvariantRate);
     if constexpr (I == Impl::CQR)
-        state.counters["relerr"] = factor_error(P, fmt, V);
+        state.counters["relerr"] = cached_relerr(P, fmt, V, n);
 }
 
 /* Square sizes spanning the target range: powers plus the non-power stencil

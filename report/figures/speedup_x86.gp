@@ -5,11 +5,8 @@ load 'figures/common.gp'
 set output 'figures/speedup_x86.pdf'
 
 set title "Speedup over per-matrix LAPACK (x86, AVX-512)"
-set logscale x
 set logscale y
-set xlabel "matrix order {/:Italic n}"
 set ylabel "speedup ({/:Italic x}, log scale)"
-set xrange [7:560]
 set yrange [0.1:8]
 set key bottom left
 

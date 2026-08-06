@@ -55,12 +55,11 @@ def write_table(path, vendor_col, peak, vendor_ratio, lapack_ratio, v):
     lines.append("# n  cqr_gflops  cqr_mats_s  {0}_mats_s  lapack_mats_s  "
                  "sp_cqr_lap  sp_{0}_lap  sp_cqr_{0}  relerr".format(vendor_col))
     for n in SIZES:
-        gtot = NMAT * geqrf_gflop(n)                  # total GFLOP in the pool
         cqr_eff = cqr_efficiency(n, peak) * staircase(n, v)
         f = vendor_ratio(n)                           # cqr_eff / vendor_eff
         g = lapack_ratio(n)                           # cqr_eff / lapack_eff
-        # matrices/s = nmat * eff / total_gflops   (eff in GFLOP/s)
-        cqr_mats = NMAT * cqr_eff / gtot
+        # matrices/s = eff / gflop_per_matrix  (the batch-size factor cancels)
+        cqr_mats = cqr_eff / geqrf_gflop(n)
         vend_mats = cqr_mats * f
         lap_mats = cqr_mats * g
         lines.append(

@@ -7,10 +7,7 @@ load 'figures/roofline.gp'
 set output 'figures/gflops_x86.pdf'
 
 set title "QR factorisation rate on x86 (AVX-512) vs LIKWID roofline"
-set logscale x
-set xlabel "matrix order {/:Italic n}"
 set ylabel "performance (GFLOP/s)"
-set xrange [7:560]
 set yrange [0:*]
 set key top left
 
