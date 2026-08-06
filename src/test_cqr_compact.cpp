@@ -23,13 +23,15 @@
 #include <cstring>
 #include <cmath>
 #include <ctime>
-#include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
 
 #include "cqr_compact.h"
 #include "cqr_compact.hpp"
+#include "test_compact_util.hpp" // MatrixBatch, pack/unpack, frand, max_abs_diff
+
+using namespace cqr::test;
 
 /* ----------------------- reference kernels (scalar) ----------------- */
 
@@ -138,58 +140,8 @@ static void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
         }
 }
 
-/* ----------------------- compact pack / unpack ---------------------- */
-
-template <class T>
-static void pack_compact(int m, int n, const std::vector<std::vector<T>> &Mk, int ldm,
-                         T *p, int ldp, int V, int nm)
-{
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i)
-                    p[(size_t)g * ldp * n * V + ((size_t)j * ldp + i) * V + v] =
-                        (idx < nm) ? Mk[idx][i + (size_t)j * ldm]
-                                   : (i == j ? T(1) : T(0));
-        }
-}
-
-template <class T>
-static void unpack_compact(int m, int n, std::vector<std::vector<T>> &Mk, int ldm,
-                           const T *p, int ldp, int V, int nm)
-{
-    int ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i)
-                    Mk[idx][i + (size_t)j * ldm] =
-                        p[(size_t)g * ldp * n * V + ((size_t)j * ldp + i) * V + v];
-        }
-}
-
-/* ----------------------------- helpers ------------------------------ */
-
-static std::mt19937_64 rng(42);
-
-template <class T> static T frand()
-{
-    /* one distribution per instantiation (T), reused across calls */
-    static std::uniform_real_distribution<T> dist(T(-1), T(1));
-    return dist(rng);
-}
-
-template <class T> static T max_abs_diff(const std::vector<T> &a, const std::vector<T> &b)
-{
-    T d = 0;
-    for (size_t i = 0; i < a.size(); ++i)
-        d = std::max(d, std::abs(a[i] - b[i]));
-    return d;
-}
+/* MatrixBatch, pack_compact/unpack_compact, frand and max_abs_diff live in
+ * test_compact_util.hpp (shared across the compact test suites). */
 
 /* --------------------------- one test case -------------------------- */
 
@@ -205,69 +157,64 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
         for (int i = 0; i < m; ++i)
             X[i + (size_t)j * m] = T(j + 1); /* ones, twos, threes, ... */
 
-    std::vector<std::vector<T>> A(nm), Afac(nm), B(nm), Bref(nm), Bout(nm), tau(nm);
+    MatrixBatch<T> A(nm, m, m), Afac(nm, m, m), B(nm, m, nrhs), Bref(nm, m, nrhs),
+        Bout(nm, m, nrhs), tau(nm, m, 1);
     for (int kk = 0; kk < nm; ++kk) {
-        A[kk].resize((size_t)m * m);
-        B[kk].resize((size_t)m * nrhs);
-        tau[kk].resize(m);
-        for (auto &x : A[kk])
-            x = frand<T>();
+        T *a = A[kk];
+        for (size_t e = 0; e < (size_t)m * m; ++e)
+            a[e] = frand<T>();
         for (int i = 0; i < m; ++i)
-            A[kk][i + (size_t)i * m] += T(2); /* tame cond for float */
+            a[i + (size_t)i * m] += T(2); /* tame cond for float */
 
         for (int j = 0; j < nrhs; ++j) /* B = A*X */
             for (int i = 0; i < m; ++i) {
                 T s = 0;
                 for (int l = 0; l < m; ++l)
-                    s += A[kk][i + (size_t)l * m] * X[l + (size_t)j * m];
+                    s += a[i + (size_t)l * m] * X[l + (size_t)j * m];
                 B[kk][i + (size_t)j * m] = s;
             }
 
-        Afac[kk] = A[kk];
-        ref_geqr2(m, m, Afac[kk].data(), m, tau[kk].data());
-        Bref[kk] = B[kk];
-        ref_orm2r('T', m, nrhs, k, Afac[kk].data(), m, tau[kk].data(), Bref[kk].data(),
-                  m);
-        Bout[kk].resize((size_t)m * nrhs);
+        std::copy(a, a + (size_t)m * m, Afac[kk]);
+        ref_geqr2(m, m, Afac[kk], m, tau[kk]);
+        std::copy(B[kk], B[kk] + (size_t)m * nrhs, Bref[kk]);
+        ref_orm2r('T', m, nrhs, k, Afac[kk], m, tau[kk], Bref[kk], m);
     }
 
     int ng = (nm + V - 1) / V;
     std::vector<T> ap((size_t)ng * m * m * V), tp((size_t)ng * k * V),
         bp((size_t)ng * m * nrhs * V);
-    pack_compact(m, m, Afac, m, ap.data(), m, V, nm);
-    { /* tau as k x 1 matrices */
-        for (int g = 0; g < ng; ++g)
-            for (int v = 0; v < V; ++v) {
-                int idx = g * V + v;
-                for (int kk = 0; kk < k; ++kk)
-                    tp[(size_t)g * k * V + (size_t)kk * V + v] =
-                        (idx < nm) ? tau[idx][kk] : T(0);
-            }
-    }
-    pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
+    pack_compact(Afac, ap.data(), m, V);
+    for (int g = 0; g < ng; ++g) /* tau as k x 1 matrices */
+        for (int v = 0; v < V; ++v) {
+            int idx = g * V + v;
+            for (int kk = 0; kk < k; ++kk)
+                tp[(size_t)g * k * V + (size_t)kk * V + v] =
+                    (idx < nm) ? tau[idx][kk] : T(0);
+        }
+    pack_compact(B, bp.data(), m, V);
 
     /* check 1: compact Q^T B vs scalar */
     cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
                                      m, nm);
-    unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
+    unpack_compact(Bout, bp.data(), m, V);
     double e1 = 0;
     for (int kk = 0; kk < nm; ++kk)
-        e1 = std::max<double>(e1, max_abs_diff(Bout[kk], Bref[kk]));
+        e1 = std::max<double>(e1, max_abs_diff(Bout[kk], Bref[kk], (size_t)m * nrhs));
 
     /* check 2: solve recovers X */
     double e2 = 0;
     for (int kk = 0; kk < nm; ++kk) {
-        ref_trsm_upper(m, nrhs, Afac[kk].data(), m, Bout[kk].data(), m);
-        e2 = std::max<double>(e2, max_abs_diff(Bout[kk], X));
+        ref_trsm_upper(m, nrhs, Afac[kk], m, Bout[kk], m);
+        e2 = std::max<double>(e2, max_abs_diff(Bout[kk], X.data(), (size_t)m * nrhs));
     }
 
     /* check 3: 'N' undoes 'T' */
     cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
                                      m, nm);
-    unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
+    unpack_compact(Bout, bp.data(), m, V);
     double e3 = 0;
     for (int kk = 0; kk < nm; ++kk)
-        e3 = std::max<double>(e3, max_abs_diff(Bout[kk], B[kk]));
+        e3 = std::max<double>(e3, max_abs_diff(Bout[kk], B[kk], (size_t)m * nrhs));
 
     /* scale-aware: B entries are O(m), QQ^t roundtrip accumulates a bit */
     bool ok1 = e1 <= tol_exact * m, ok2 = e2 <= tol_solve, ok3 = e3 <= tol_exact * m * 10;
@@ -295,8 +242,8 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
         for (int i = 0; i < m; ++i)
             X[i + (size_t)j * m] = T(j + 1); /* ones, twos, threes, ... */
 
-    std::vector<std::vector<T>> Afac(nm), B(nm), Bout(nm), tau(nm);
-    std::vector<std::vector<int>> jpvt(nm);
+    MatrixBatch<T> Afac(nm, m, m), B(nm, m, nrhs), Bout(nm, m, nrhs), tau(nm, m, 1);
+    MatrixBatch<int> jpvt(nm, m, 1);
     for (int kk = 0; kk < nm; ++kk) {
         std::vector<T> A((size_t)m * m);
         for (auto &x : A)
@@ -304,7 +251,6 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
         for (int i = 0; i < m; ++i)
             A[i + (size_t)i * m] += T(2); /* tame cond */
 
-        B[kk].resize((size_t)m * nrhs);
         for (int j = 0; j < nrhs; ++j) /* B = A*X */
             for (int i = 0; i < m; ++i) {
                 T s = 0;
@@ -313,17 +259,14 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
                 B[kk][i + (size_t)j * m] = s;
             }
 
-        Afac[kk] = A;
-        tau[kk].resize(m);
-        jpvt[kk].resize(m);
-        ref_geqp3(m, m, Afac[kk].data(), m, jpvt[kk].data(), tau[kk].data());
-        Bout[kk].resize((size_t)m * nrhs);
+        std::copy(A.begin(), A.end(), Afac[kk]);
+        ref_geqp3(m, m, Afac[kk], m, jpvt[kk], tau[kk]);
     }
 
     int ng = (nm + V - 1) / V;
     std::vector<T> ap((size_t)ng * m * m * V), tp((size_t)ng * k * V),
         bp((size_t)ng * m * nrhs * V);
-    pack_compact(m, m, Afac, m, ap.data(), m, V, nm);
+    pack_compact(Afac, ap.data(), m, V);
     for (int g = 0; g < ng; ++g)
         for (int v = 0; v < V; ++v) {
             int idx = g * V + v;
@@ -331,22 +274,22 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
                 tp[(size_t)g * k * V + (size_t)kk * V + v] =
                     (idx < nm) ? tau[idx][kk] : T(0);
         }
-    pack_compact(m, nrhs, B, m, bp.data(), m, V, nm);
+    pack_compact(B, bp.data(), m, V);
 
     /* kernel: c := Q^T b */
     cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
                                      m, nm);
-    unpack_compact(m, nrhs, Bout, m, bp.data(), m, V, nm);
+    unpack_compact(Bout, bp.data(), m, V);
 
     /* R y = c, then back-permute x(jpvt(j)) = y(j); compare against X */
     double e = 0;
     std::vector<T> x((size_t)m * nrhs);
     for (int kk = 0; kk < nm; ++kk) {
-        ref_trsm_upper(m, nrhs, Afac[kk].data(), m, Bout[kk].data(), m);
+        ref_trsm_upper(m, nrhs, Afac[kk], m, Bout[kk], m);
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < m; ++i)
                 x[jpvt[kk][i] + (size_t)j * m] = Bout[kk][i + (size_t)j * m];
-        e = std::max<double>(e, max_abs_diff(x, X));
+        e = std::max<double>(e, max_abs_diff(x.data(), X.data(), (size_t)m * nrhs));
     }
 
     bool ok = e <= tol_solve;

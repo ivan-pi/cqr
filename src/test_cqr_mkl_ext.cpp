@@ -28,15 +28,17 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, max_abs_diff */
 
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <limits>
-#include <random>
 #include <vector>
 #include <algorithm>
+
+using namespace cqr::test;
 
 namespace {
 
@@ -46,47 +48,6 @@ const double eps = std::numeric_limits<double>::epsilon();
 int vlen(MKL_COMPACT_PACK fmt)
 {
     return cqr::detail::vlen_for_format<double>(fmt);
-}
-
-std::mt19937_64 rng(42);
-
-double frand()
-{
-    static std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    return dist(rng);
-}
-
-/* L1 (max column sum) norm of a column-major m x n matrix */
-double norm1(const double *M, int m, int n)
-{
-    double mx = 0;
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        for (int i = 0; i < m; ++i)
-            s += std::abs(M[i + (size_t)j * m]);
-        mx = std::max(mx, s);
-    }
-    return mx;
-}
-
-double maxdiff(const double *a, const double *b, size_t n)
-{
-    double d = 0;
-    for (size_t i = 0; i < n; ++i)
-        d = std::max(d, std::abs(a[i] - b[i]));
-    return d;
-}
-
-/* Each matrix batch lives in one contiguous buffer, matrix v at offset
- * v*stride. Collect the per-matrix base pointers MKL's pack/unpack routines
- * expect; the stride encodes the storage layout in use. Instantiated with
- * T = const double for packing (inputs) and T = double for unpacking. */
-template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
-{
-    std::vector<T *> p(nm);
-    for (int v = 0; v < nm; ++v)
-        p[v] = base + (size_t)v * stride;
-    return p;
 }
 
 /* ---------------- Suite 1: isolated op(Q) C (section 7.1) -------------- */
@@ -126,14 +87,14 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
         double *Hv = H.data() + v * sH, *tv = tau.data() + v * sT;
         double *Bv = B.data() + v * sB, *Rv = Bref.data() + v * sB;
         for (size_t i = 0; i < sH; ++i)
-            Hv[i] = frand();
+            Hv[i] = frand<double>();
         /* boost the (i,i) diagonal (same offset in both layouts) */
         for (int i = 0; i < std::min(s, k); ++i)
             Hv[(size_t)i * ldH + i] += 2.0;
         /* turn H into a real Householder representation via dense QR */
         LAPACKE_dgeqrf(lap, s, k, Hv, ldH, tv);
         for (size_t i = 0; i < sB; ++i)
-            Bv[i] = frand();
+            Bv[i] = frand<double>();
         std::copy(Bv, Bv + sB, Rv);
         /* dense reference: op(Q) C */
         LAPACKE_dormqr(lap, side, trans, m, n, k, Hv, ldH, tv, Rv, ldC);
@@ -179,7 +140,7 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
         const double *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
-        double resid = maxdiff(Bo, Rv, sB);
+        double resid = max_abs_diff(Bo, Rv, sB);
         double rel = resid / std::max(norm1_layout(Rv, m, n, rowmajor, ldC), 1e-300);
         worst = std::max(worst, rel);
     }
@@ -213,7 +174,7 @@ int suite2(int nm, int n, int nrhs)
     for (int v = 0; v < nm; ++v) {
         double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         for (size_t i = 0; i < sA; ++i)
-            Av[i] = frand();
+            Av[i] = frand<double>();
         for (int i = 0; i < n; ++i)
             Av[i + (size_t)i * n] += 2.0; /* tame cond */
         for (int j = 0; j < nrhs; ++j)    /* B = A X */
@@ -274,7 +235,7 @@ int suite2(int nm, int n, int nrhs)
         const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
         const double *Xv = Xhat.data() + v * sB;
         double fwd =
-            maxdiff(Xv, X.data(), sB) / std::max(norm1(X.data(), n, nrhs), 1e-300);
+            max_abs_diff(Xv, X.data(), sB) / std::max(norm1(X.data(), n, nrhs), 1e-300);
         worst_fwd = std::max(worst_fwd, fwd);
 
         for (int j = 0; j < nrhs; ++j) /* AX = A Xhat */
@@ -284,7 +245,8 @@ int suite2(int nm, int n, int nrhs)
                     s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
                 AX[i + (size_t)j * n] = s;
             }
-        double res = maxdiff(AX.data(), Bv, sB) / std::max(norm1(Bv, n, nrhs), 1e-300);
+        double res =
+            max_abs_diff(AX.data(), Bv, sB) / std::max(norm1(Bv, n, nrhs), 1e-300);
         worst_res = std::max(worst_res, res);
     }
     const double rtol = 100.0 * n * eps;
