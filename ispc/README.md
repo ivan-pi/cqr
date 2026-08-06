@@ -95,9 +95,10 @@ at machine precision; square, tall, padded groups):
 - **trsm** — `R X = alpha B` vs `mkl_dtrsm_compact` and a known `X`, with
   `alpha != 1` and `nrhs = 1` and `6` — ~1e-16.
 - **potrf** — `A = L L^T` (lower, the contiguous path) and `A = U^T U` (upper, the
-  strided path) vs `mkl_dpotrf_compact` (observed bit-exact) and `LAPACKE_dpotrf`,
-  with reconstruction, the untouched opposite triangle, a non-SPD lane that poisons
-  only itself (NaN, siblings intact), and an SPD solve (`potrf` + two MKL `trsm`).
+  strided path) vs `mkl_dpotrf_compact` and `LAPACKE_dpotrf` (both to machine
+  precision), with reconstruction, the untouched opposite triangle, a non-SPD lane
+  that poisons only itself (NaN, siblings intact), and an SPD solve (`potrf` + two
+  MKL `trsm`).
 - **solve** — the full pipeline recovers a known `X`; the ISPC factor also matches
   the GNU kernel to a few ULP (often bit-identical, but that is input/compiler-
   dependent, not guaranteed).
@@ -183,24 +184,31 @@ for. So the one width MKL doesn't offer is where ISPC's model earns its keep.
 ### Cholesky (`potrf`) vs MKL (`bench_potrf`)
 
 `bench_potrf` factors an SPD batch (`A = MᵀM + nI`) with `cqr_ispc_dpotrf_compact`
-and with `mkl_dpotrf_compact`, and reports the ISPC speedup over MKL (both factors
-agree to the ULP). This is the one kernel where **MKL is clearly faster** — geomean
-ISPC/MKL ≈ **0.76×** (lower, the contiguous path) and **0.72×** (upper, strided),
-and unusually stable across runs:
+and with `mkl_dpotrf_compact` and reports the ISPC speedup over MKL (both agree to
+machine precision). The kernel is **blocked** (right-looking, panel width `NB = 8`):
+each panel is factored unblocked, then its cross-panel contribution to the trailing
+submatrix is applied as one symmetric rank-`NB` update (SYRK) — streaming the
+trailing submatrix once per panel (`n/NB` times) instead of once per column, which
+is what keeps a large batch cache-resident. Geomean ISPC/MKL ≈ **1.03×** (lower,
+contiguous) and **0.98×** (upper, strided): **on par with MKL overall, and a clear
+ISPC lead once the matrices are big enough to matter.**
 
-| ISPC/MKL | n=10 | 30–40 | 60 | 100 | 150 | geomean |
+| ISPC/MKL | n=10 | 20–40 | 50 | 60–80 | 100–150 | geomean |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
-| lower (contiguous) | 0.80× | **~1.0×** | 0.75× | 0.64× | 0.58× | **0.76×** |
-| upper (strided) | 0.70× | 0.83× | 0.72× | 0.70× | 0.66× | **0.72×** |
+| lower (contiguous) | 0.72× | 0.84–0.99× | 1.05× | 1.1–1.2× | **1.2–1.3×** | **1.03×** |
+| upper (strided) | 0.69× | 0.74–0.96× | 0.98× | 1.05–1.12× | **1.1–1.3×** | **0.98×** |
 
-The two **tie for cache-resident batches** (`n ≲ 40`, where a group of 8 packed
-matrices is ~0.1 MB) and MKL pulls away as `n` grows. The prototype is an
-**unblocked** right-looking `potf2`: it re-streams the trailing submatrix `O(n)`
-times, so once the working set spills L2 (past `n ≈ 50`) it turns memory-bound and
-ISPC plateaus at ~10 GFLOP/s while MKL — which evidently cache-blocks its `potrf` —
-keeps climbing to ~15–18. So unlike the QR kernels (unblocked ISPC/GNU matched or
-beat MKL), Cholesky is where MKL's blocking earns a clear win at scale; a blocked
-ISPC `potrf` is the way to close it. (Errors track MKL to the ULP throughout.)
+MKL keeps a **small-`n` edge** (`n ≲ 40`, where an 8-matrix group is already
+cache-resident so blocking only adds panel-factor overhead); ISPC crosses over
+around `n ≈ 50` and leads by ~1.2–1.3× at the top of the range.
+
+The blocking is what earned this. The earlier **unblocked** `potf2` re-streamed the
+trailing submatrix `O(n)` times and went memory-bound past L2, plateauing at ~10
+GFLOP/s — geomeans of 0.76× / 0.72×, with MKL winning everywhere for large `n`
+(0.58× at `n=150`). The blocked kernel climbs to ~20–22 GFLOP/s at `n=150`, ~2×
+faster right where it had been losing. Same lesson as the QR kernels from the other
+side: match the memory-traffic structure (here, block for cache) and the plain SPMD
+kernel is competitive with MKL. (Errors track MKL to machine precision throughout.)
 
 > **Measurement caveats — indicative only, not benchmark-grade.** Shared,
 > virtualized 4-vCPU node with **no frequency control** (governor/turbo

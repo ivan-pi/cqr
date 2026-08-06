@@ -241,15 +241,23 @@ export void cqr_ispc_dtrsm_compact(uniform int n, uniform int nrhs, uniform doub
     }
 }
 
-// Cholesky factorization (unblocked potf2), one group of programCount matrices at
-// a time; mirrors cqr::detail::potrf_compact_group{,_strided}. A = L L^T for the
+// Cholesky factorization (blocked, right-looking), one group of programCount
+// matrices at a time; the SPD analogue of mkl_dpotrf_compact. A = L L^T for the
 // lower triangle (upper=0), A = U^T U for the upper (upper=1); only the named
 // triangle is read or written. Element (i,j) is the varying at linear pack index
 // i*rs + j*cs: the factor column is contiguous (rs=1, cs=ldap) for column-major
 // lower and its transpose dual row-major upper, and strided (rs=ldap, cs=1) for
-// column-major upper / row-major lower -- one kernel over the same math, as in the
-// GNU reference. Compact analogue of mkl_dpotrf_compact; ap (n x n col-major) is
-// overwritten with its factor. A padded final group factors the identity (safe).
+// column-major upper / row-major lower -- one kernel over the same math.
+//
+// Blocking: process NB columns at a time. (1) factor the panel with the plain
+// unblocked rank-1 sweep, but bounded to the panel's own columns and run at full
+// row height so the sub-panel L21 below the diagonal block is formed; (2) apply
+// the deferred cross-panel update to the trailing submatrix as ONE symmetric
+// rank-NB update (SYRK) A(i,c) -= sum_p L(i,p) L(c,p). So the O(n^2) trailing
+// submatrix is streamed once per panel (n/NB times) rather than once per column
+// -- the reuse that keeps a large batch cache-resident. For n <= NB there is no
+// trailing block and this reduces to the unblocked kernel. The pivot sqrt is
+// unconditional (a non-SPD lane poisons only itself); no gather/scatter.
 export void cqr_ispc_dpotrf_compact(uniform int rowmajor, uniform int upper,
                                     uniform int n, uniform double ap[], uniform int ldap,
                                     uniform int nm)
@@ -264,63 +272,116 @@ export void cqr_ispc_dpotrf_compact(uniform int rowmajor, uniform int upper,
         (rowmajor == 0 && upper == 0) || (rowmajor != 0 && upper != 0);
     uniform int rs = contiguous ? 1 : ldap; // element (i,j) at pack index i*rs + j*cs
     uniform int cs = contiguous ? ldap : 1;
+    const uniform int NB = 8; // panel width (columns per block)
 
     for (uniform int g = 0; g < ngroups; ++g) {
         // A compact pack == one `varying double`: lane v is matrix v of the group.
         varying double * uniform A = (varying double * uniform)(ap + g * stra);
 
-        for (uniform int j = 0; j < n; ++j) {
-            uniform int cj = j * cs; // pivot column j base
+        for (uniform int j0 = 0; j0 < n; j0 += NB) {
+            uniform int jend = (j0 + NB < n) ? (j0 + NB) : n; // one past panel's last col
 
-            // pivot: d = sqrt(A(j,j)); scale the sub-diagonal column by 1/d.
-            // Unconditional sqrt (Cholesky has no data-dependent branch, unlike
-            // larfg): a non-SPD lane gets NaN/Inf but its siblings stay correct.
-            varying double d = sqrt(A[j * rs + cj]);
-            A[j * rs + cj] = d;
-            varying double invd = 1.0d / d;
-            for (uniform int i = j + 1; i < n; ++i)
-                A[i * rs + cj] = A[i * rs + cj] * invd;
+            // ---- (1) panel factor: unblocked Cholesky on columns j0..jend-1, at
+            // full row height (forming L21); the cross-panel update is deferred to
+            // (2). The rank-1 sweep is the unblocked kernel with the column loops
+            // bounded by jend instead of n. ----
+            for (uniform int j = j0; j < jend; ++j) {
+                uniform int cj = j * cs; // pivot column j base
 
-            // symmetric rank-1 trailing update A(i,jj) -= A(i,j)*A(jj,j), lower
-            // trapezoid (jj > j, i >= jj), 4 columns at a time so each pivot entry
-            // A(i,j) is loaded once and reused across the block.
-            uniform int jj = j + 1;
-            for (; jj + 4 <= n; jj += 4) {
-                uniform int d0 = (jj + 0) * cs, d1 = (jj + 1) * cs;
-                uniform int d2 = (jj + 2) * cs, d3 = (jj + 3) * cs;
-                varying double w0 = A[(jj + 0) * rs + cj], w1 = A[(jj + 1) * rs + cj];
-                varying double w2 = A[(jj + 2) * rs + cj], w3 = A[(jj + 3) * rs + cj];
+                // pivot: d = sqrt(A(j,j)); scale the sub-diagonal column by 1/d.
+                varying double d = sqrt(A[j * rs + cj]);
+                A[j * rs + cj] = d;
+                varying double invd = 1.0d / d;
+                for (uniform int i = j + 1; i < n; ++i)
+                    A[i * rs + cj] = A[i * rs + cj] * invd;
 
-                // near-diagonal triangular corner (rows jj..jj+3), lower part only
-                A[(jj + 0) * rs + d0] -= w0 * w0;
+                // rank-1 update of the remaining PANEL columns jj in (j, jend), at
+                // full height (i >= jj), 4 columns at a time so A(i,j) is reused.
+                uniform int jj = j + 1;
+                for (; jj + 4 <= jend; jj += 4) {
+                    uniform int d0 = (jj + 0) * cs, d1 = (jj + 1) * cs;
+                    uniform int d2 = (jj + 2) * cs, d3 = (jj + 3) * cs;
+                    varying double w0 = A[(jj + 0) * rs + cj], w1 = A[(jj + 1) * rs + cj];
+                    varying double w2 = A[(jj + 2) * rs + cj], w3 = A[(jj + 3) * rs + cj];
 
-                A[(jj + 1) * rs + d0] -= w1 * w0;
-                A[(jj + 1) * rs + d1] -= w1 * w1;
+                    // near-diagonal triangular corner (rows jj..jj+3), lower only
+                    A[(jj + 0) * rs + d0] -= w0 * w0;
 
-                A[(jj + 2) * rs + d0] -= w2 * w0;
-                A[(jj + 2) * rs + d1] -= w2 * w1;
-                A[(jj + 2) * rs + d2] -= w2 * w2;
+                    A[(jj + 1) * rs + d0] -= w1 * w0;
+                    A[(jj + 1) * rs + d1] -= w1 * w1;
 
-                A[(jj + 3) * rs + d0] -= w3 * w0;
-                A[(jj + 3) * rs + d1] -= w3 * w1;
-                A[(jj + 3) * rs + d2] -= w3 * w2;
-                A[(jj + 3) * rs + d3] -= w3 * w3;
+                    A[(jj + 2) * rs + d0] -= w2 * w0;
+                    A[(jj + 2) * rs + d1] -= w2 * w1;
+                    A[(jj + 2) * rs + d2] -= w2 * w2;
 
-                // rectangular tail below the corner: all 4 columns, A(i,j) reused
-                for (uniform int i = jj + 4; i < n; ++i) {
-                    varying double av = A[i * rs + cj];
-                    A[i * rs + d0] -= av * w0;
-                    A[i * rs + d1] -= av * w1;
-                    A[i * rs + d2] -= av * w2;
-                    A[i * rs + d3] -= av * w3;
+                    A[(jj + 3) * rs + d0] -= w3 * w0;
+                    A[(jj + 3) * rs + d1] -= w3 * w1;
+                    A[(jj + 3) * rs + d2] -= w3 * w2;
+                    A[(jj + 3) * rs + d3] -= w3 * w3;
+
+                    // rectangular tail below the corner: all 4 columns, A(i,j) reused
+                    for (uniform int i = jj + 4; i < n; ++i) {
+                        varying double av = A[i * rs + cj];
+                        A[i * rs + d0] -= av * w0;
+                        A[i * rs + d1] -= av * w1;
+                        A[i * rs + d2] -= av * w2;
+                        A[i * rs + d3] -= av * w3;
+                    }
+                }
+                // remainder panel columns (fewer than 4 left)
+                for (; jj < jend; ++jj) {
+                    uniform int dj = jj * cs;
+                    varying double w = A[jj * rs + cj];
+                    for (uniform int i = jj; i < n; ++i)
+                        A[i * rs + dj] -= A[i * rs + cj] * w;
                 }
             }
-            // remainder columns (fewer than 4 left)
-            for (; jj < n; ++jj) {
-                uniform int dj = jj * cs;
-                varying double w = A[jj * rs + cj];
-                for (uniform int i = jj; i < n; ++i)
-                    A[i * rs + dj] -= A[i * rs + cj] * w;
+
+            // ---- (2) deferred trailing update as a symmetric rank-(jend-j0)
+            // update: A(i,c) -= sum_{p=j0..jend-1} A(i,p) A(c,p), c in [jend,n),
+            // i in [c,n) (lower trapezoid). Dot-product form so each trailing
+            // element is written once; 4 trailing columns at a time so each panel
+            // load A(i,p) feeds 4 columns. The panel stays hot across the sweep. ----
+            uniform int c = jend;
+            for (; c + 4 <= n; c += 4) {
+                uniform int e0 = (c + 0) * cs, e1 = (c + 1) * cs;
+                uniform int e2 = (c + 2) * cs, e3 = (c + 3) * cs;
+
+                // near-diagonal triangular corner (rows c..c+3), lower only
+                for (uniform int i = c; i < c + 4; ++i)
+                    for (uniform int ct = c; ct <= i; ++ct) {
+                        varying double s = 0.0d;
+                        for (uniform int p = j0; p < jend; ++p)
+                            s += A[i * rs + p * cs] * A[ct * rs + p * cs];
+                        A[i * rs + ct * cs] -= s;
+                    }
+
+                // rectangular tail below the corner: all 4 columns, A(i,p) reused
+                for (uniform int i = c + 4; i < n; ++i) {
+                    varying double s0 = 0.0d, s1 = 0.0d, s2 = 0.0d, s3 = 0.0d;
+                    for (uniform int p = j0; p < jend; ++p) {
+                        uniform int dp = p * cs;
+                        varying double av = A[i * rs + dp];
+                        s0 += av * A[(c + 0) * rs + dp];
+                        s1 += av * A[(c + 1) * rs + dp];
+                        s2 += av * A[(c + 2) * rs + dp];
+                        s3 += av * A[(c + 3) * rs + dp];
+                    }
+                    A[i * rs + e0] -= s0;
+                    A[i * rs + e1] -= s1;
+                    A[i * rs + e2] -= s2;
+                    A[i * rs + e3] -= s3;
+                }
+            }
+            // remainder trailing columns (fewer than 4 left)
+            for (; c < n; ++c) {
+                uniform int ec = c * cs;
+                for (uniform int i = c; i < n; ++i) {
+                    varying double s = 0.0d;
+                    for (uniform int p = j0; p < jend; ++p)
+                        s += A[i * rs + p * cs] * A[c * rs + p * cs];
+                    A[i * rs + ec] -= s;
+                }
             }
         }
     }
