@@ -98,6 +98,13 @@ if(CQR_WITH_MKL)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
   endif()
+
+  # Context for the compact QR's large-n ceiling: compact GEMM vs a per-matrix
+  # dgemm loop vs a single dgemm. Shows the compact format wins only for tiny n
+  # and plateaus far below a regular GEMM -- the wall larfb reaches
+  # (cqr_geqrf_compact_cache_blocking.md). Needs MKL (compact GEMM + CBLAS).
+  add_executable(bench_gemm_compact examples/bench_gemm_compact.cpp)
+  target_link_libraries(bench_gemm_compact PRIVATE MKL::Compact)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -184,5 +191,10 @@ if(CQR_BUILD_TESTS)
     # padded final group.
     add_test(NAME bench_geqrf_compact_integration COMMAND bench_geqrf_compact 33 1)
     set_tests_properties(bench_geqrf_compact_integration PROPERTIES LABELS "integration")
+
+    # Compact-vs-regular GEMM context benchmark: smoke-run it (no correctness
+    # gate; it is a measurement) so it stays building.
+    add_test(NAME bench_gemm_compact_smoke COMMAND bench_gemm_compact 16 1)
+    set_tests_properties(bench_gemm_compact_smoke PROPERTIES LABELS "integration")
   endif()
 endif()
