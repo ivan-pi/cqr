@@ -231,8 +231,7 @@ void potrf_compact_general(bool rowmajor, bool upper, Int n, T *ap, Int ldap, In
         else
             /* strided: sweep the reflectorless potf2 with row stride ldap,
              * column stride 1 -- column-major upper and row-major lower. */
-            potrf_compact_group_strided<T, V, Int>(
-                n, make_view<T, V, Int>(a, static_cast<std::size_t>(ldap), 1));
+            potrf_compact_group_strided<T, V, Int>(n, make_view<T, V, Int>(a, ldap, 1));
     }
 }
 

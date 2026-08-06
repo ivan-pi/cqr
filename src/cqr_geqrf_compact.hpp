@@ -319,8 +319,8 @@ void geqrf_compact_general(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup
     const std::size_t str_t = static_cast<std::size_t>(k) * V;
 
     /* element strides (in VT units) and per-matrix group stride (in T units) */
-    const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1; /* down a col */
-    const std::size_t a_panel = rowmajor ? 1 : (std::size_t)ldap;   /* across cols */
+    const Int a_special = rowmajor ? ldap : 1; /* down a col  */
+    const Int a_panel = rowmajor ? 1 : ldap;   /* across cols */
     const std::size_t str_a =
         (rowmajor ? (std::size_t)ldap * m : (std::size_t)ldap * n) * V;
 

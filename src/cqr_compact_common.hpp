@@ -121,27 +121,32 @@ inline void broadcast(typename pack<T, V>::type &v, T x) noexcept
 
 template <typename VT, typename Int = int> struct BatchView {
     VT *const data = nullptr;
-    const std::size_t special = 0; /* stride along the swept (reflector) axis */
-    const std::size_t panel = 0;   /* stride along the orthogonal panel axis  */
+    const Int special = 0; /* stride along the swept (reflector) axis */
+    const Int panel = 0;   /* stride along the orthogonal panel axis  */
 
-    VT &operator()(Int i, Int p) const noexcept
+    /* The batch and matrix dimensions fit in Int (compact targets many small
+     * matrices), so the element offset is formed in Int with no widening of the
+     * induction variables -- which keeps the strided sweep vectorizable. The
+     * per-group base offset, which can exceed Int, is applied to the pointer by
+     * the caller before the view is built. */
+    inline VT &operator()(Int i, Int p) const noexcept
     {
-        return data[static_cast<std::size_t>(i) * special +
-                    static_cast<std::size_t>(p) * panel];
+        return data[i * special + p * panel];
     }
 };
 
-/* Reinterpret a packed T buffer as a group view of V-wide pack elements. */
+/* Reinterpret a packed T buffer as a group view of V-wide pack elements. The
+ * strides are per-matrix leading dimensions (in pack units), so they take the
+ * kernel's Int like the dimensions do. */
 template <typename T, int V, typename Int = int>
-BatchView<const typename pack<T, V>::type, Int>
-make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept
+BatchView<const typename pack<T, V>::type, Int> make_const_view(const T *p, Int special,
+                                                                Int panel) noexcept
 {
     using VT = typename pack<T, V>::type;
     return {reinterpret_cast<const VT *>(p), special, panel};
 }
 template <typename T, int V, typename Int = int>
-BatchView<typename pack<T, V>::type, Int> make_view(T *p, std::size_t special,
-                                                    std::size_t panel) noexcept
+BatchView<typename pack<T, V>::type, Int> make_view(T *p, Int special, Int panel) noexcept
 {
     using VT = typename pack<T, V>::type;
     return {reinterpret_cast<VT *>(p), special, panel};

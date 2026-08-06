@@ -201,9 +201,9 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
         Int p = 0;
 
         /* main loop: 4 panel slices at a time; A(i,kk) loaded once, used 4x.
-         * Both index*stride products are evaluated in 64-bit inside operator(),
-         * and the panel offset p*stride is loop-invariant across i, so the
-         * codegen matches the hand-strided version. */
+         * The index*stride products are formed in Int inside operator() (the
+         * batch/matrix dims fit int), and the panel offset p*stride is loop-
+         * invariant across i, so the codegen matches the hand-strided version. */
         for (; p + 4 <= panel_cnt; p += 4) {
             VT w0 = C(kk, p + 0), w1 = C(kk, p + 1), w2 = C(kk, p + 2), w3 = C(kk, p + 3);
             for (Int i = kk + 1; i < spec_len; ++i) {
@@ -302,12 +302,12 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans, Int m, Int n, I
      * axis) with kk along its columns; for C the special axis is rows when
      * side='L' and columns when side='R'. Column-major: a row step is 1 and a
      * column step is ld; row-major flips that. */
-    const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
-    const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
-    const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1;
-    const std::size_t a_panel = rowmajor ? 1 : (std::size_t)ldap;
-    const std::size_t c_special = left ? c_row : c_col;
-    const std::size_t c_panel = left ? c_col : c_row;
+    const Int c_row = rowmajor ? ldcp : 1;
+    const Int c_col = rowmajor ? 1 : ldcp;
+    const Int a_special = rowmajor ? ldap : 1;
+    const Int a_panel = rowmajor ? 1 : ldap;
+    const Int c_special = left ? c_row : c_col;
+    const Int c_panel = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ldap*(complementary extent) -- the column count k for col-major (A is
