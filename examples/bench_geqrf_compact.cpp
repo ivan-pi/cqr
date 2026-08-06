@@ -57,7 +57,9 @@
 namespace {
 
 using clk = std::chrono::steady_clock;
-using cqr::detail::vlen_for_format;
+using cqr::detail::compact_format_name; /* format -> "SSE"/"AVX"/"AVX512" */
+using cqr::detail::format_for_vlen;     /* interleave width -> pack format */
+using cqr::detail::vlen_for_format;     /* pack format -> interleave width */
 
 void check(bool cond, const char *what)
 {
@@ -71,27 +73,6 @@ void check(bool cond, const char *what)
 double geqrf_gflop(int m, int n)
 {
     return (2.0 * m * n * (double)n - (2.0 / 3.0) * n * (double)n * n) * 1e-9;
-}
-
-const char *compact_format_name(MKL_COMPACT_PACK format)
-{
-    switch (format) {
-    case MKL_COMPACT_SSE: return "SSE";
-    case MKL_COMPACT_AVX: return "AVX";
-    case MKL_COMPACT_AVX512: return "AVX512";
-    default: return "unknown";
-    }
-}
-
-/* The compact pack format whose double interleave width is v (2/4/8 ->
- * SSE/AVX/AVX512); MKL_COMPACT_SSE for anything else (rejected before use). */
-MKL_COMPACT_PACK format_for_vlen(int v)
-{
-    switch (v) {
-    case 4: return MKL_COMPACT_AVX;
-    case 8: return MKL_COMPACT_AVX512;
-    default: return MKL_COMPACT_SSE;
-    }
 }
 
 /* std::vector storage aligned to the compact pack width (64 B covers every
@@ -347,7 +328,8 @@ int main(int argc, char **argv)
      * A wider interleave than the host's native SIMD cannot execute, so reject it
      * (mkl_get_format_compact reports the widest the architecture supports). */
     const MKL_COMPACT_PACK native = mkl_get_format_compact();
-    const MKL_COMPACT_PACK fmt = args.simdlen ? format_for_vlen(args.simdlen) : native;
+    const MKL_COMPACT_PACK fmt =
+        args.simdlen ? format_for_vlen<double>(args.simdlen) : native;
     const int V = vlen_for_format<double>(fmt);
     check(V > 0 && V <= vlen_for_format<double>(native),
           "requested --simdlen exceeds the host's native SIMD width");

@@ -281,6 +281,3 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
   `geqrf_compact_group_strided<T,V>` (general, via `BatchView`), driven over all
   packs by `geqrf_compact_general<T,V>` (either layout; the entry point both C
   adapters call) and the col-major convenience driver `geqrf_compact<T,V>`.
-
-The throughput benchmark (`bench_geqrf_compact`) is documented in
-[`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).

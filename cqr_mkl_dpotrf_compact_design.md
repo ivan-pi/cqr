@@ -314,6 +314,3 @@ A suggested split into new source files:
 
 The `cqr_mkl_?potrf_compact` prototypes are added to `cqr_mkl_ext.h` and the
 portable `?potrf_compact` prototypes to `cqr_compact.h`.
-
-The throughput benchmark (`bench_potrf_compact`) is documented in
-[`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).

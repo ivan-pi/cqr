@@ -71,21 +71,11 @@ void check(bool cond, const char *what)
     }
 }
 
-/* Interleave width V for the active compact format (doubles): MKL packs
- * V = (SIMD register bytes) / sizeof(double). Shared helper, specialised
- * for double here. */
+/* Shared compact-format helpers (see cqr_mkl_ext.h): the interleave width V for
+ * the active pack format -- MKL packs V = (SIMD register bytes) / sizeof(double),
+ * used for double here -- and a human-readable name of the SIMD ISA behind it. */
+using cqr::detail::compact_format_name;
 using cqr::detail::vlen_for_format;
-
-/* Human-readable name of the SIMD ISA behind an MKL Compact pack format. */
-const char *compact_format_name(MKL_COMPACT_PACK format)
-{
-    switch (format) {
-    case MKL_COMPACT_SSE: return "SSE";
-    case MKL_COMPACT_AVX: return "AVX";
-    case MKL_COMPACT_AVX512: return "AVX512";
-    default: return "unknown";
-    }
-}
 
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
@@ -295,8 +285,8 @@ int main(int argc, char **argv)
                 "mkl_dtrsm_compact\n");
     std::printf("  cqr-batch  cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
                 "cqr_mkl_dtrsm_compact\n");
-    std::printf(
-        "  unbatched  LAPACKE_dgeqrf         -> LAPACKE_dormqr          -> cblas_dtrsm\n");
+    std::printf("  unbatched  LAPACKE_dgeqrf         -> LAPACKE_dormqr          -> "
+                "cblas_dtrsm\n");
 #ifdef _OPENMP
     std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
                 nmat, reps, nrhs, V, compact_format_name(fmt), nthreads);
