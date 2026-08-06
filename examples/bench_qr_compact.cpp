@@ -3,15 +3,17 @@
  * Throughput benchmark: solving many small square systems A_v X_v = B_v with
  * the QR pipeline (X = R^-1 Q^T B), comparing three ways to run the same math:
  *
- *   MKL batched  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
- *   cqr batched  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> cqr_mkl_dtrsm_compact
- *   unbatched    LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm
+ *   MKL batched  mkl_dgeqrf_compact     -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact
+ *   cqr batched  cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> cqr_mkl_dtrsm_compact
+ *   unbatched    LAPACKE_dgeqrf         -> LAPACKE_dormqr          -> cblas_dtrsm
  *
- * The two batched paths run the identical compact pipeline and differ only in
- * the closing triangular solve -- MKL's `mkl_?trsm_compact` versus this repo's
- * open `cqr_mkl_?trsm_compact` -- so their ratio isolates the trsm this library
- * adds. (MKL has no compact `ormqr`, so `cqr_mkl_dormqr_compact` is shared by
- * both.) The unbatched path is the conventional per-matrix LAPACK baseline.
+ * The two batched paths run the same compact pipeline from different libraries:
+ * the MKL path uses MKL's own `mkl_?geqrf_compact` and `mkl_?trsm_compact`, the
+ * cqr path this repo's open `cqr_mkl_?geqrf_compact` and `cqr_mkl_?trsm_compact`,
+ * so the cqr path runs the whole solve with no MKL compute kernel (MKL only packs
+ * and unpacks) and their ratio is the end-to-end MKL-vs-open comparison. MKL has
+ * no compact `ormqr`, so `cqr_mkl_dormqr_compact` is shared by both. The
+ * unbatched path is the conventional per-matrix LAPACK baseline.
  *
  * For each size, a pool of `nmat` well-conditioned matrices with known solution
  * X == 1 is built once, and each path solves it -- the batched paths packing
@@ -122,16 +124,18 @@ double sol_error(const double *x, int n)
     return e;
 }
 
-/* Which triangular solve closes the batched pipeline: MKL's compact routine or
- * this repo's open one. Everything else in the pipeline is identical. */
-enum class TrsmImpl { Mkl, Cqr };
+/* Which library backs the batched compute pipeline -- the QR factorization and
+ * the closing triangular solve. MKL has no compact ormqr, so cqr_mkl_dormqr is
+ * shared by both; every other compute kernel comes from the selected library. */
+enum class Backend { Mkl, Cqr };
 
 /* ===== batched path: compact group-of-V pipeline ======================= *
  * Process the pool in groups of V, packing/factoring/solving/unpacking each
- * group inside the timed region. `impl` picks the trsm backend (mkl_?trsm_compact
- * or cqr_mkl_?trsm_compact); the pack/geqrf/ormqr/unpack around it is the same
- * for both. Returns the max solution error. */
-double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, TrsmImpl impl)
+ * group inside the timed region. `impl` picks the backend for the geqrf and the
+ * trsm (MKL's compact kernels, or this repo's open drop-ins); the shared
+ * cqr_mkl_dormqr and the pack/unpack around them are identical for both. Returns
+ * the max solution error. */
+double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, Backend impl)
 {
     const int n = P.n, nmat = P.nmat, nrhs = 1;
     const int ngroups = (nmat + V - 1) / V;
@@ -149,9 +153,17 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, TrsmImpl impl)
             mkl_dget_size_compact(n, nrhs, fmt, V), align);
         double *ap = ap_buf.get(), *taup = taup_buf.get(), *bp = bp_buf.get();
 
+        /* Select the batched backend once: MKL's own compact kernels, or this
+         * repo's open drop-ins (byte-identical signatures). The ormqr below is
+         * always cqr's -- MKL ships no compact ormqr. */
+        const auto geqrf_compact =
+            (impl == Backend::Cqr) ? cqr_mkl_dgeqrf_compact : mkl_dgeqrf_compact;
+        const auto trsm_compact =
+            (impl == Backend::Cqr) ? cqr_mkl_dtrsm_compact : mkl_dtrsm_compact;
+
         MKL_INT info[1]; /* compact status: a single scalar (MKL convention) */
         double wq;
-        mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info, fmt, V);
+        geqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, &wq, -1, info, fmt, V);
         const MKL_INT lwork = (MKL_INT)wq;
         std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
 
@@ -173,17 +185,13 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, TrsmImpl impl)
             mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Aptr.data(), n, ap, n, fmt, cnt);
             mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, cnt);
 
-            mkl_dgeqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info,
-                               fmt, cnt);
+            geqrf_compact(MKL_COL_MAJOR, n, n, ap, n, taup, work.data(), lwork, info, fmt,
+                          cnt);
             double dummy;
             cqr_mkl_dormqr_compact(MKL_COL_MAJOR, 'L', 'T', n, nrhs, n, ap, n, taup, bp,
                                    n, &dummy, 1, info, fmt, cnt);
-            if (impl == TrsmImpl::Cqr)
-                cqr_mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
-                                      MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
-            else
-                mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS,
-                                  MKL_NONUNIT, n, nrhs, 1.0, ap, n, bp, n, fmt, cnt);
+            trsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_UPPER, MKL_NOTRANS, MKL_NONUNIT, n,
+                         nrhs, 1.0, ap, n, bp, n, fmt, cnt);
 
             mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xptr.data(), n, bp, n, fmt,
                                   cnt);
@@ -279,12 +287,12 @@ int main(int argc, char **argv)
     const double eps = std::numeric_limits<double>::epsilon();
 
     std::printf("QR solve throughput (matrices/second), three paths:\n");
-    std::printf("  MKL-batch  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
+    std::printf("  MKL-batch  mkl_dgeqrf_compact     -> cqr_mkl_dormqr_compact -> "
                 "mkl_dtrsm_compact\n");
-    std::printf("  cqr-batch  mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
+    std::printf("  cqr-batch  cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> "
                 "cqr_mkl_dtrsm_compact\n");
     std::printf(
-        "  unbatched  LAPACKE_dgeqrf     -> LAPACKE_dormqr          -> cblas_dtrsm\n");
+        "  unbatched  LAPACKE_dgeqrf         -> LAPACKE_dormqr          -> cblas_dtrsm\n");
 #ifdef _OPENMP
     std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
                 nmat, reps, nrhs, V, compact_format_name(fmt), nthreads);
@@ -294,9 +302,10 @@ int main(int argc, char **argv)
 #endif
     /* Throughput as matrices/second (scientific) for each path, then two speedups:
      * cqr-batch over the per-matrix baseline (the headline batched win), and
-     * cqr-batch over MKL-batch (the two batched paths differ only in the trsm, so
-     * this is the end-to-end effect of swapping in the open solve). The error is
-     * the forward error vs the known solution X == 1, not vs LAPACK. */
+     * cqr-batch over MKL-batch (the two batched paths differ in the geqrf and the
+     * trsm -- ormqr is shared -- so this is the end-to-end effect of the fully open
+     * compact pipeline vs MKL's). The error is the forward error vs the known
+     * solution X == 1, not vs LAPACK. */
     std::printf("   n | MKL-batch   cqr-batch   unbatched  | cqr/unbat | cqr/MKL | max "
                 "fwd err (vs X=1)\n");
     std::printf("     |  (mat/s)     (mat/s)     (mat/s)    |           |         |\n");
@@ -317,9 +326,9 @@ int main(int argc, char **argv)
 
         double err_m = 0.0, err_c = 0.0, err_u = 0.0;
         const double tb_mkl =
-            best_time(reps, [] {}, [&] { err_m = run_batched(P, fmt, V, TrsmImpl::Mkl); });
+            best_time(reps, [] {}, [&] { err_m = run_batched(P, fmt, V, Backend::Mkl); });
         const double tb_cqr =
-            best_time(reps, [] {}, [&] { err_c = run_batched(P, fmt, V, TrsmImpl::Cqr); });
+            best_time(reps, [] {}, [&] { err_c = run_batched(P, fmt, V, Backend::Cqr); });
         const double tu = best_time(
             reps,
             [&] {
