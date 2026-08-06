@@ -77,7 +77,10 @@ Cholesky that -- unlike LAPACK -- does not verify that the inputs are SPD (secti
 6.2). Where ArmPL exposes the interleaved layout through explicit
 `ninter`/`bstrd`/`istrd`/`jstrd` strides, this API abstracts it behind the
 `MKL_COMPACT_PACK` parameter and `MKL_LAYOUT`, preserving symmetry with MKL's
-native compact API so `mkl_?gepack_compact` output feeds it directly.
+native compact API: the batch is moved into the compact layout by
+`mkl_?gepack_compact` and back out by `mkl_?geunpack_compact`, and this routine
+consumes the packed buffer directly in between (as does `mkl_?trsm_compact` when
+the factor feeds a solve, so no unpack is needed until the final result is read).
 
 ## 4. Input Parameters
 
