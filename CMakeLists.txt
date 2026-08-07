@@ -105,6 +105,13 @@ if(CQR_WITH_MKL)
   # (cqr_geqrf_compact_cache_blocking.md). Needs MKL (compact GEMM + CBLAS).
   add_executable(bench_gemm_compact examples/bench_gemm_compact.cpp)
   target_link_libraries(bench_gemm_compact PRIVATE MKL::Compact)
+
+  # Three-way factorization comparison: the blocked (2-D tiled larfb) compact QR
+  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf. Uses the internal blocked
+  # kernel directly, so it links cqr_compact for the header. Correctness-gated
+  # against LAPACK, so it doubles as an integration test of the blocked path.
+  add_executable(bench_geqrf_blocked_mkl examples/bench_geqrf_blocked_mkl.cpp)
+  target_link_libraries(bench_geqrf_blocked_mkl PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -196,5 +203,10 @@ if(CQR_BUILD_TESTS)
     # gate; it is a measurement) so it stays building.
     add_test(NAME bench_gemm_compact_smoke COMMAND bench_gemm_compact 16 1)
     set_tests_properties(bench_gemm_compact_smoke PROPERTIES LABELS "integration")
+
+    # Three-way blocked-QR comparison: correctness-gated against LAPACK, so a
+    # small quick run doubles as an integration test of the blocked path.
+    add_test(NAME bench_geqrf_blocked_mkl_integration COMMAND bench_geqrf_blocked_mkl 40 1)
+    set_tests_properties(bench_geqrf_blocked_mkl_integration PROPERTIES LABELS "integration")
   endif()
 endif()
