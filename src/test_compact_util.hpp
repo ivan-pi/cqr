@@ -104,6 +104,15 @@ template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
 // Symmetric positive-definite n x n matrix (column-major): A = M^T M + n*I, a
 // tame condition number. cond > 0 squeezes the spectrum by a symmetric
 // congruence D A D, D = diag(10^{-cond*i/(n-1)}) -- dynamic range, still SPD.
+//
+// The result is symmetric to the bit, not just to working precision. M^T M is
+// symmetric in exact arithmetic, but A(i,j) and A(j,i) come from two separately
+// evaluated dot products, so a value-unsafe FP model (icpx defaults to
+// -fp-model=fast) can round them one ULP apart. The row-major "opposite triangle
+// untouched" checks are sensitive to this: they read a row-major factor back
+// through its transpose, comparing A(j,i) with A(i,j), so a sub-ULP asymmetry
+// there reads as the kernel having written the wrong triangle. The trailing
+// mirror pins A(j,i) == A(i,j) exactly, on every compiler and FP model.
 template <class T> void gen_spd(T *A, int n, double cond = 0.0)
 {
     std::vector<T> M((size_t)n * n);
@@ -123,6 +132,12 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
                 double sj = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
                 A[i + (size_t)j * n] *= (T)(si * sj);
             }
+    // Mirror the lower triangle onto the upper so A(j,i) == A(i,j) bit-for-bit
+    // (the congruence above scales A(i,j) and A(j,i) by the same si*sj, so it
+    // preserves whatever symmetry M^T M produced; enforce it exactly here).
+    for (int j = 0; j < n; ++j)
+        for (int i = j + 1; i < n; ++i)
+            A[j + (size_t)i * n] = A[i + (size_t)j * n];
 }
 
 // Fill one order-s triangular matrix (leading dim s) in the given layout:
