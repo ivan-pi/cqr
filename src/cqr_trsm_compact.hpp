@@ -33,7 +33,7 @@
 #ifndef CQR_TRSM_COMPACT_HPP
 #define CQR_TRSM_COMPACT_HPP
 
-#include "cqr_compact.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
+#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
 
 #include <cstddef>
 #include <cassert>
@@ -243,10 +243,10 @@ void trsm_compact_general(bool left, bool upper, bool rowmajor, bool tran, bool 
 
     /* element strides (in VT units). Column-major: a row step is 1 and a column
      * step is ld; row-major flips that. A is s x s, B is m x n. */
-    const std::size_t a_row = rowmajor ? (std::size_t)ldap : 1;
-    const std::size_t a_col = rowmajor ? 1 : (std::size_t)ldap;
-    const std::size_t b_row = rowmajor ? (std::size_t)ldbp : 1;
-    const std::size_t b_col = rowmajor ? 1 : (std::size_t)ldbp;
+    const Int a_row = rowmajor ? ldap : 1;
+    const Int a_col = rowmajor ? 1 : ldap;
+    const Int b_row = rowmajor ? ldbp : 1;
+    const Int b_col = rowmajor ? 1 : ldbp;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ld*(complementary extent) -- for A (s x s) that is ldap*s either way;

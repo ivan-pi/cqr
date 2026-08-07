@@ -1,4 +1,4 @@
-/* cqr_compact.hpp
+/* cqr_ormqr_compact.hpp
  *
  * Compact (interleaved-batch) application of Householder reflectors,
  * templated on scalar type T and interleave width V:
@@ -12,15 +12,9 @@
  * The missing mkl_?ormqr_compact, in portable form.
  *
  * Design:
- *   - V is the compact-format interleave width (number of matrices whose
- *     element (i,j) is stored contiguously). It does NOT need to match the
- *     hardware vector width:
- *       x86:   V*sizeof(T) = 16/32/64 bytes maps exactly to XMM/YMM/ZMM.
- *       NEON:  128-bit registers; V=4 or V=8 doubles lower to short
- *              unrolled bursts of 2/4 independent fmla v*.2d chains,
- *              which wide cores (Apple M-series) execute very well.
- *       SVE:   compile fixed-width with -msve-vector-bits=512 on A64FX
- *              to map V=8 doubles onto one SVE register.
+ *   - The pack<T,V> element and the BatchView addressing machinery live in the
+ *     shared cqr_compact_common.hpp (V is the compact-format interleave width;
+ *     see there for the width/hardware mapping).
  *   - The algorithm is unblocked dorm2r: pivot-free and branch-free, so
  *     the scalar code lifts verbatim with double -> V-wide vector.
  *   - RHS columns are register-blocked (JB=4) so each reflector load
@@ -72,88 +66,17 @@
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
  */
 
-#ifndef CQR_COMPACT_HPP
-#define CQR_COMPACT_HPP
+#ifndef CQR_ORMQR_COMPACT_HPP
+#define CQR_ORMQR_COMPACT_HPP
+
+#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
 
 #include <cstddef>
 #include <cassert>
-#include <cmath>
 #include <type_traits>
 
 namespace cqr {
 namespace detail {
-
-/* ------------------------------------------------------------------ */
-/* pack<T,V>::type : the V-wide SIMD element                          */
-/* ------------------------------------------------------------------ */
-
-/* Define the V-wide element as a GNU vector type when the compiler provides
- * the vector_size and may_alias attributes, detected directly via
- * __has_attribute (itself guarded for preprocessors that predate it). A
- * compiler that supplies these attributes -- GCC, Clang, Intel icpx/icpc --
- * uses the vector type; any other stops at the #error below. */
-#if defined(__has_attribute)
-#if __has_attribute(vector_size) && __has_attribute(__may_alias__)
-#define CQR_HAS_GNU_VECTORS 1
-#endif
-#endif
-
-#if defined(CQR_HAS_GNU_VECTORS)
-
-template <typename T, int V> struct pack {
-    /* GNU vector_size requires a power-of-two byte width; the supported
-     * interleave widths are 2/4/8/16, matching the C API. Check it here -- the
-     * single chokepoint -- so a bad width fails with this message instead of a
-     * cryptic error inside the attribute instantiation. */
-    static_assert(V == 2 || V == 4 || V == 8 || V == 16,
-                  "interleave width V must be 2, 4, 8, or 16");
-    /* aligned(alignof(T)) relaxes the alignment requirement so the type
-     * is valid on any T-aligned buffer (unaligned vector loads are free
-     * on all modern hardware); may_alias exempts it from strict-aliasing
-     * violations when viewing a plain T array. */
-    using type
-        __attribute__((vector_size(V * sizeof(T)), aligned(alignof(T)), may_alias)) = T;
-};
-
-#else
-#error "ormqr_compact requires the GNU vector extensions " \
-       "(__attribute__((vector_size)) with may_alias); compile with a " \
-       "compiler that supports them (GCC, Clang, Intel icpx/icpc). These " \
-       "attributes are available under strict -std=c++17, not only GNU mode."
-#endif
-
-/* ------------------------------------------------------------------ */
-/* Lane-wise vector helpers shared by the compact kernels.             */
-/*                                                                     */
-/* These V-wide helpers take and return their vectors by reference.    */
-/* Passing a GNU vector by value would, without -march, commit the     */
-/* base-ISA vector argument/return ABI, which GCC and Clang (rightly)  */
-/* flag via -Wpsabi; a reference is just a pointer, so there is no such */
-/* boundary -- and once inlined the codegen is identical -- keeping the */
-/* build warning-clean with no compiler flag. Results are written      */
-/* through an out-parameter (named first).                             */
-/* ------------------------------------------------------------------ */
-
-/* r := sqrt(x), lane-wise. The short loop lowers to one vsqrt* on GCC/Clang; it
- * runs once per column, negligible next to the O(n^2)/O(n^3) vector arithmetic.
- * Used by geqrf's larfg (column norm) and potrf's pivot. */
-template <typename T, int V>
-inline void vsqrt(typename pack<T, V>::type &r,
-                  const typename pack<T, V>::type &x) noexcept
-{
-    for (int v = 0; v < V; ++v)
-        r[v] = std::sqrt(x[v]);
-}
-
-/* v := x broadcast to all V lanes. GNU vector types broadcast a scalar in
- * arithmetic but not in assignment (`v = x;` is a compile error); `x - VT{}`
- * subtracts an all-zero vector, leaving x in every lane (and, unlike `VT{} + x`,
- * it preserves the sign of a zero x). Used by trsm to scale B by alpha. */
-template <typename T, int V>
-inline void broadcast(typename pack<T, V>::type &v, T x) noexcept
-{
-    v = x - typename pack<T, V>::type{};
-}
 
 /* ------------------------------------------------------------------ */
 /* Reflector sweep direction (internal control flag).                  */
@@ -166,47 +89,6 @@ inline void broadcast(typename pack<T, V>::type &v, T x) noexcept
 /* ------------------------------------------------------------------ */
 
 enum class Direction { Forward, Backward };
-
-/* ------------------------------------------------------------------ */
-/* BatchView: a strided 2-D view of one group of V interleaved matrices*/
-/*                                                                     */
-/* The element type is the V-wide pack (use a const pack for read-only */
-/* operands such as the reflector batch A). Indices are in elements;   */
-/* strides are in units of the V-wide pack, so one BatchView addresses */
-/* element (i,p) of every matrix in the group at once. The two axes    */
-/* are named for their role in the reflector sweep, not for row/col:   */
-/*   special -- the axis the Householder vector runs along             */
-/*              (rows of A and, for side='L', of C; columns for 'R'),  */
-/*   panel   -- the orthogonal axis, register-blocked 4 at a time.     */
-/* ------------------------------------------------------------------ */
-
-template <typename VT, typename Int = int> struct BatchView {
-    VT *const data = nullptr;
-    const std::size_t special = 0; /* stride along the swept (reflector) axis */
-    const std::size_t panel = 0;   /* stride along the orthogonal panel axis  */
-
-    VT &operator()(Int i, Int p) const noexcept
-    {
-        return data[static_cast<std::size_t>(i) * special +
-                    static_cast<std::size_t>(p) * panel];
-    }
-};
-
-/* Reinterpret a packed T buffer as a group view of V-wide pack elements. */
-template <typename T, int V, typename Int = int>
-BatchView<const typename pack<T, V>::type, Int>
-make_const_view(const T *p, std::size_t special, std::size_t panel) noexcept
-{
-    using VT = typename pack<T, V>::type;
-    return {reinterpret_cast<const VT *>(p), special, panel};
-}
-template <typename T, int V, typename Int = int>
-BatchView<typename pack<T, V>::type, Int> make_view(T *p, std::size_t special,
-                                                    std::size_t panel) noexcept
-{
-    using VT = typename pack<T, V>::type;
-    return {reinterpret_cast<VT *>(p), special, panel};
-}
 
 /* ------------------------------------------------------------------ */
 /* One group of V interleaved matrices                                 */
@@ -319,9 +201,9 @@ void ormqr_compact_group_strided(Direction dir, Int spec_len, Int panel_cnt, Int
         Int p = 0;
 
         /* main loop: 4 panel slices at a time; A(i,kk) loaded once, used 4x.
-         * Both index*stride products are evaluated in 64-bit inside operator(),
-         * and the panel offset p*stride is loop-invariant across i, so the
-         * codegen matches the hand-strided version. */
+         * The index*stride products are formed in Int inside operator() (the
+         * batch/matrix dims fit int), and the panel offset p*stride is loop-
+         * invariant across i, so the codegen matches the hand-strided version. */
         for (; p + 4 <= panel_cnt; p += 4) {
             VT w0 = C(kk, p + 0), w1 = C(kk, p + 1), w2 = C(kk, p + 2), w3 = C(kk, p + 3);
             for (Int i = kk + 1; i < spec_len; ++i) {
@@ -420,12 +302,12 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans, Int m, Int n, I
      * axis) with kk along its columns; for C the special axis is rows when
      * side='L' and columns when side='R'. Column-major: a row step is 1 and a
      * column step is ld; row-major flips that. */
-    const std::size_t c_row = rowmajor ? (std::size_t)ldcp : 1;
-    const std::size_t c_col = rowmajor ? 1 : (std::size_t)ldcp;
-    const std::size_t a_special = rowmajor ? (std::size_t)ldap : 1;
-    const std::size_t a_panel = rowmajor ? 1 : (std::size_t)ldap;
-    const std::size_t c_special = left ? c_row : c_col;
-    const std::size_t c_panel = left ? c_col : c_row;
+    const Int c_row = rowmajor ? ldcp : 1;
+    const Int c_col = rowmajor ? 1 : ldcp;
+    const Int a_special = rowmajor ? ldap : 1;
+    const Int a_panel = rowmajor ? 1 : ldap;
+    const Int c_special = left ? c_row : c_col;
+    const Int c_panel = left ? c_col : c_row;
 
     /* group strides (in scalar T units): elements packed per matrix is
      * ldap*(complementary extent) -- the column count k for col-major (A is
@@ -452,4 +334,4 @@ void ormqr_compact_general(bool left, bool rowmajor, char trans, Int m, Int n, I
 } /* namespace detail */
 } /* namespace cqr */
 
-#endif /* CQR_COMPACT_HPP */
+#endif /* CQR_ORMQR_COMPACT_HPP */

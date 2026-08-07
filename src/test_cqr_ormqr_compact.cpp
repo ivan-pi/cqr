@@ -1,4 +1,4 @@
-/* test_cqr_compact.cpp
+/* test_cqr_ormqr_compact.cpp
  *
  * Self-contained validation of the templated compact ormqr.
  * Reference: unblocked Householder QR (dgeqr2-style, LAPACK reflector
@@ -12,7 +12,7 @@
  *   2. back substitution recovers X
  *   3. applying 'N' after 'T' recovers the original B  (Q Q^T = I)
  *
- * Build (native):   g++ -O3 -march=native -std=c++17 cqr_compact_dispatch.cpp test_cqr_compact.cpp -o test_cqr
+ * Build (native):   g++ -O3 -march=native -std=c++17 cqr_ormqr_compact_dispatch.cpp test_cqr_ormqr_compact.cpp -o test_cqr
  * Build (AArch64):  aarch64-linux-gnu-g++ -O3 -march=armv8.2-a -std=c++17 -static ...
  *
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
@@ -28,7 +28,7 @@
 #include <algorithm>
 
 #include "cqr_compact.h"
-#include "cqr_compact.hpp"
+#include "cqr_ormqr_compact.hpp"
 #include "test_compact_util.hpp" // MatrixBatch, pack/unpack, frand, max_abs_diff
 
 using namespace cqr::test;

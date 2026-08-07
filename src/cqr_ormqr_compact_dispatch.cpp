@@ -1,4 +1,4 @@
-/* cqr_compact_dispatch.cpp
+/* cqr_ormqr_compact_dispatch.cpp
  *
  * extern "C" wrappers around the templated implementation; dispatch on
  * the runtime interleave width V to a compile-time instantiation.
@@ -7,7 +7,7 @@
  */
 
 #include "cqr_compact.h"
-#include "cqr_compact.hpp"
+#include "cqr_ormqr_compact.hpp"
 
 namespace {
 

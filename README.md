@@ -107,26 +107,27 @@ not part of the supported interface:
 
 | File | Role |
 |------|------|
+| `src/cqr_compact_common.hpp` | Shared machinery for the compact kernels: the `pack<T,V>` packed vector type plus the `BatchView` / `vsqrt` / `broadcast` helpers, included by every routine header below. |
 | `src/cqr_geqrf_compact.hpp` | Templated SIMD QR-factorization kernel (vectorized `geqr2`; scalar `T`, interleave width `V`). |
 | `src/cqr_potrf_compact.hpp` | Templated SIMD Cholesky-factorization kernel (vectorized `potf2`; scalar `T`, interleave width `V`). |
-| `src/cqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`); also hosts the shared `pack<T,V>` / `BatchView` / `vsqrt` / `broadcast` machinery. |
+| `src/cqr_ormqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
 | `src/cqr_trsm_compact.hpp` | Templated compact triangular-solve kernels (tuned column-major/left + general strided) and group driver (scalar `T`, interleave width `V`). |
 | `src/cqr_geqrf_compact_dispatch.cpp` | Portable geqrf C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_potrf_compact_dispatch.cpp` | Portable potrf C entry points (runtime `V` -> compile-time dispatch). |
-| `src/cqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
+| `src/cqr_ormqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
 | `src/cqr_trsm_compact_dispatch.cpp` | Portable trsm C entry points with LAPACK/BLAS-style `info = -j` validation (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_geqrf.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the geqrf kernel. |
+| `src/cqr_mkl_geqrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_LAYOUT`, then calls the geqrf kernel. |
 | `src/cqr_mkl_potrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_UPLO`/`MKL_LAYOUT`, then calls the potrf kernel. |
-| `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and calls the ormqr kernel. |
-| `src/cqr_mkl_trsm.cpp` | Unwraps the MKL enums + `MKL_COMPACT_PACK` -> `V` and calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
+| `src/cqr_mkl_ormqr.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `side`/`trans`/`MKL_LAYOUT`, then calls the ormqr kernel. |
+| `src/cqr_mkl_trsm.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps the MKL enums (`MKL_SIDE`/`MKL_UPLO`/`MKL_TRANSPOSE`/`MKL_DIAG`/`MKL_LAYOUT`), then calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
 | `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 | `src/test_compact_util.hpp` | Shared test helpers (seeded RNG, error metrics, SPD generation, Compact pack/unpack); header-only, no MKL. |
 | `src/test_cqr_geqrf_compact.cpp` | Self-contained geqrf correctness test vs a scalar `geqr2` reference (no BLAS). |
 | `src/test_cqr_geqrf_mkl.cpp` | MKL + dense-LAPACK validation of `cqr_mkl_dgeqrf_compact` (residual, orthogonality, solve). |
 | `src/test_cqr_potrf_compact.cpp` | Self-contained potrf correctness test vs a scalar `potf2` reference (no BLAS). |
 | `src/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation of `cqr_mkl_dpotrf_compact` (residual, untouched triangle, uniqueness, cross-check, solve). |
-| `src/test_cqr_compact.cpp` | Self-contained ormqr correctness/bench test (no BLAS). |
-| `src/test_cqr_mkl_ext.cpp` | MKL-backed validation through the real compact pipeline. |
+| `src/test_cqr_ormqr_compact.cpp` | Self-contained ormqr correctness/bench test (no BLAS). |
+| `src/test_cqr_ormqr_mkl.cpp` | MKL-backed validation through the real compact pipeline. |
 | `src/test_cqr_trsm_compact.cpp` | Self-contained trsm test (no BLAS): C API validation + numerical vs a scalar `?trsm` reference. |
 | `src/test_cqr_trsm_mkl.cpp` | MKL-backed cross-check of `cqr_mkl_?trsm_compact` vs `mkl_?trsm_compact` + an end-to-end MKL-compute-free solve. |
 
