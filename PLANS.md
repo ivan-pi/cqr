@@ -17,9 +17,10 @@ vectorized `mkl_?geqrf_compact`. Status vs. its design document:
   `LAPACKE_dorgqr`/`dgeqrf`, cross-checking vs. `mkl_dgeqrf_compact` (both
   layouts), closing the `AX=B` solve, and covering rank-deficient / near-collinear
   stress structures. All match LAPACK/MKL to machine precision.
-- **Benchmarked (design section 9):** `bench_geqrf_compact` (vs.
-  `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`) is built and CTest-gated,
-  reporting GFLOP/s and a geometric-mean speedup.
+- **Benchmarked (see [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md)):**
+  `bench_geqrf_compact` (vs. `mkl_dgeqrf_compact` and per-matrix
+  `LAPACKE_dgeqrf`) is built and CTest-gated, reporting GFLOP/s and a
+  geometric-mean speedup.
 - **Known gaps / scoped out (design section 6.6):** no overflow/underflow-safe
   `dlarfg` rescaling (matters only near `1e+/-150`), no column pivoting, and the
   row-major sweep is correctness-first, not separately SIMD-tuned (mirroring
@@ -52,6 +53,12 @@ batches. Status vs. its design document:
   cross-checking vs. `mkl_dpotrf_compact` (both layouts, both `uplo`; observed
   bit-exact), and closing the SPD `AX = B` solve (`potrf` + two
   `mkl_dtrsm_compact`). All match LAPACK/MKL to machine precision.
+- **Benchmarked (see [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md)):**
+  `bench_potrf_compact` (vs. `mkl_dpotrf_compact` and per-matrix `LAPACKE_dpotrf`,
+  over pools of SPD matrices) is built and CTest-gated, reporting GFLOP/s and a
+  geometric-mean speedup; it factors on the tuned col-major lower path and gates
+  the compact factor elementwise against `LAPACKE_dpotrf` (the SPD factor being
+  unique).
 - **Known gaps / scoped out (design section 6.6):** positive-definiteness is
   assumed, not enforced (a non-SPD lane poisons itself with `NaN`/`Inf` instead
   of `info = j`, mirroring MKL's reserved `info`); no overflow/underflow-safe
@@ -59,9 +66,6 @@ batches. Status vs. its design document:
   inner sweep is correctness-first, not separately SIMD-tuned. Blocked
   (`syrk`/`trsm`) factorization is intentionally not used at the target sizes.
   Complex (`c`/`z`) Hermitian variants are out of scope, as for the QR routines.
-- **Deferred:** a throughput benchmark (`cqr_mkl_?potrf_compact` vs.
-  `mkl_?potrf_compact` vs. per-matrix `LAPACKE_?potrf`), mirroring
-  `bench_geqrf_compact`, is left for a future change.
 
 ## trsm (`cqr_mkl_dtrsm_compact`)
 

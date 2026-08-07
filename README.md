@@ -71,15 +71,24 @@ Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
   over pools of small matrices (order 10-100), reporting geometric-mean speedups.
   As for `bench_geqrf_compact`, build with host-tuned flags (`-march=native`) for
   a fair comparison against MKL. All paths are checked against the known solution.
-* `bench_geqrf_compact [nmat] [reps]` - throughput of the *factorization*:
+* `bench_geqrf_compact [nmat] [reps]` - throughput of the QR *factorization*:
   `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs per-matrix
   `LAPACKE_dgeqrf`, across the target square-size range, reporting GFLOP/s and a
   geometric-mean speedup, checked against LAPACK. For a fair comparison, build
   with host-tuned flags (e.g. `-DCMAKE_CXX_FLAGS="-O3 -march=native"`) so the
   compact kernel uses the full vector width, as MKL's runtime dispatch does.
+* `bench_potrf_compact [nmat] [reps]` - the Cholesky counterpart: throughput of
+  the SPD *factorization* `cqr_mkl_dpotrf_compact` vs `mkl_dpotrf_compact` vs
+  per-matrix `LAPACKE_dpotrf`, over the same square-size range (tuned col-major
+  lower, `A = L L^T`), reporting GFLOP/s and a geometric-mean speedup, checked
+  elementwise against LAPACK (the SPD factor is unique). Same `--size-sweep` /
+  `--simdlen` flags and the same `-march=native` caveat as `bench_geqrf_compact`.
 
 All are registered with CTest (`example_solve_qr_compact`,
-`bench_qr_compact_integration`, `bench_geqrf_compact_integration`).
+`bench_qr_compact_integration`, `bench_geqrf_compact_integration`,
+`bench_potrf_compact_integration`). The three benchmarks -- what they measure,
+how to run them, the flags, and the `-march=native` caveat -- are documented in
+detail in [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).
 
 ## Layout
 
@@ -127,7 +136,8 @@ not part of the supported interface:
 |------|------|
 | `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
 | `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
-| `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
+| `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the QR *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
+| `examples/bench_potrf_compact.cpp` | Throughput benchmark of the SPD Cholesky *factorization* vs. `mkl_dpotrf_compact` and per-matrix `LAPACKE_dpotrf`. |
 
 ## Related work
 

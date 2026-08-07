@@ -181,6 +181,32 @@ template <typename T> inline int vlen_for_format(MKL_COMPACT_PACK format)
     return bytes / static_cast<int>(sizeof(T));
 }
 
+/* Inverse of vlen_for_format: the pack format whose interleave width for scalar
+ * type T is v, i.e. v * sizeof(T) register bytes (16/32/64 -> SSE/AVX/AVX512).
+ * Any other v returns MKL_COMPACT_SSE; callers validate v against the host's
+ * native width before use. */
+template <typename T> inline MKL_COMPACT_PACK format_for_vlen(int v)
+{
+    switch (v * static_cast<int>(sizeof(T))) {
+    case 16: return MKL_COMPACT_SSE;
+    case 32: return MKL_COMPACT_AVX;
+    case 64: return MKL_COMPACT_AVX512;
+    default: return MKL_COMPACT_SSE; /* unrecognised; caller validates */
+    }
+}
+
+/* Human-readable name of the SIMD ISA behind an MKL Compact pack format
+ * ("SSE"/"AVX"/"AVX512", or "unknown"). */
+inline const char *compact_format_name(MKL_COMPACT_PACK format)
+{
+    switch (format) {
+    case MKL_COMPACT_SSE: return "SSE";
+    case MKL_COMPACT_AVX: return "AVX";
+    case MKL_COMPACT_AVX512: return "AVX512";
+    default: return "unknown";
+    }
+}
+
 } /* namespace detail */
 } /* namespace cqr */
 

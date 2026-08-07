@@ -83,12 +83,22 @@ if(CQR_WITH_MKL)
   endif()
 
   # Throughput benchmark of the QR factorization itself: cqr_mkl_dgeqrf_compact
-  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (design doc benchmark 1).
+  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (see examples/BENCHMARKS.md).
   add_executable(bench_geqrf_compact examples/bench_geqrf_compact.cpp)
   target_link_libraries(bench_geqrf_compact
     PRIVATE cqr_mkl_ext MKL::Compact)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
+  endif()
+
+  # Throughput benchmark of the Cholesky factorization on SPD matrices:
+  # cqr_mkl_dpotrf_compact vs mkl_dpotrf_compact vs per-matrix LAPACKE_dpotrf
+  # (the potrf analogue of bench_geqrf_compact; see examples/BENCHMARKS.md).
+  add_executable(bench_potrf_compact examples/bench_potrf_compact.cpp)
+  target_link_libraries(bench_potrf_compact
+    PRIVATE cqr_mkl_ext MKL::Compact)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(bench_potrf_compact PRIVATE OpenMP::OpenMP_CXX)
   endif()
 endif()
 
@@ -171,5 +181,11 @@ if(CQR_BUILD_TESTS)
     # padded final group.
     add_test(NAME bench_geqrf_compact_integration COMMAND bench_geqrf_compact 33 1)
     set_tests_properties(bench_geqrf_compact_integration PROPERTIES LABELS "integration")
+
+    # The Cholesky factorization benchmark is likewise accuracy-gated against
+    # per-matrix LAPACK (elementwise vs LAPACKE_dpotrf, the SPD factor being
+    # unique), so register a small, quick run too. 33 exercises a padded group.
+    add_test(NAME bench_potrf_compact_integration COMMAND bench_potrf_compact 33 1)
+    set_tests_properties(bench_potrf_compact_integration PROPERTIES LABELS "integration")
   endif()
 endif()
