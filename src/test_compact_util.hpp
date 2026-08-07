@@ -105,14 +105,14 @@ template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
 // tame condition number. cond > 0 squeezes the spectrum by a symmetric
 // congruence D A D, D = diag(10^{-cond*i/(n-1)}) -- dynamic range, still SPD.
 //
-// The result is symmetric bit-for-bit: A = M^T M is symmetric in exact
-// arithmetic, but the dot products for A(i,j) and A(j,i) are only guaranteed to
-// agree to the last ULP -- and a value-unsafe FP model (Intel icpx defaults to
-// -fp-model=fast) can make them differ by one. The final mirror forces exact
-// symmetry on every compiler and FP model, which the row-major "opposite
-// triangle untouched" gates rely on: unpacking a row-major factor reads the
-// transpose partner, so those checks compare A(j,i) against A(i,j) and a sub-ULP
-// asymmetry would masquerade as the kernel having written the wrong triangle.
+// The result is symmetric to the bit, not just to working precision. M^T M is
+// symmetric in exact arithmetic, but A(i,j) and A(j,i) come from two separately
+// evaluated dot products, so a value-unsafe FP model (icpx defaults to
+// -fp-model=fast) can round them one ULP apart. The row-major "opposite triangle
+// untouched" checks are sensitive to this: they read a row-major factor back
+// through its transpose, comparing A(j,i) with A(i,j), so a sub-ULP asymmetry
+// there reads as the kernel having written the wrong triangle. The trailing
+// mirror pins A(j,i) == A(i,j) exactly, on every compiler and FP model.
 template <class T> void gen_spd(T *A, int n, double cond = 0.0)
 {
     std::vector<T> M((size_t)n * n);
