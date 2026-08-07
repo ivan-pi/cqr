@@ -115,6 +115,42 @@ columns). Remaining performance-only opportunities: the small-`n` (`~10`)
 per-group overhead (~`0.6-0.9x`), reciprocal-multiplying the diagonal in the
 blocked paths, and SIMD-tuning the strided kernel.
 
+## syrk (`cqr_mkl_dsyrk_compact`)
+
+The compact batched symmetric rank-k update (`cqr_mkl_dsyrk_compact_design.md`): a
+portable, vectorized `mkl_?syrk_compact` (which MKL omits), completing the compact
+BLAS-3 set and forming the Gram matrix of a Cholesky QR. Status vs. its design
+document:
+
+- **Implemented (design sections 2-6, 8.1):** both API surfaces -- the MKL-style
+  `cqr_mkl_?syrk_compact` (drop-in style, no `work`/`info`, dispatching on the
+  `MKL_COMPACT_PACK` format enum) and the portable `dsyrk_compact`/`ssyrk_compact`
+  (LAPACK/BLAS-style `info = -j` validation) -- over the vectorized dot-product
+  rank-k update. Column-major `trans='T'` (`C = A^T A`, the Cholesky-QR Gram
+  matrix in LAPACK's native layout) is the tuned path: a `JB = 4` register-blocked
+  contiguous column-dot; the other three trans/layout combinations route through a
+  stride-generalized kernel. Full `uplo x trans` in FP64/FP32, `beta = 0` handled
+  as the BLAS overwrite (C not read), `k = 0` / `alpha = 0` reducing to
+  `C := beta C`.
+- **Validated (design section 7):** a BLAS-free portable test vs a scalar `?syrk`
+  reference over the full `uplo x trans x layout` matrix (the reference accumulates
+  in a different order, so a bug shared by reference and kernel cannot pass), plus
+  an MKL test cross-checking vs per-matrix `cblas_?syrk` (whole matrix: active
+  triangle correct + opposite untouched) and vs `mkl_?gemm_compact` (active
+  triangle), and closing an end-to-end Cholesky QR (`cqr_mkl_dsyrk_compact ->
+  cqr_mkl_dpotrf_compact -> cqr_mkl_dtrsm_compact`) that recovers `A = Q R` with
+  `Q^T Q = I`. All are CTest-registered.
+- **Known gaps / scoped out (design section 6.6):** the strided (`trans='N'` and
+  both row-major) inner sweep is correctness-first, not separately SIMD-tuned --
+  `trans='N'` row-major is itself a contiguous case and a natural future second
+  tuned path, mirroring `potrf`'s row-major-upper dual. No overflow/underflow-safe
+  scaling. The complex (`c`/`z`) symmetric update is `?herk`, out of scope. The
+  Cholesky-QR orthogonality caveat (`cond(A)^2 * eps`) is a property of that
+  algorithm, not of `?syrk`.
+- **Deferred:** a throughput benchmark (`cqr_mkl_?syrk_compact` vs the general
+  `mkl_?gemm_compact`), and a worked Cholesky-QR solve example/benchmark mirroring
+  `solve_qr_compact`/`bench_qr_compact`, are left for a future change.
+
 ## Known gaps
 
 Gaps between the `ormqr` implementation and its design document

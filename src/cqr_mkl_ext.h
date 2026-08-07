@@ -8,6 +8,7 @@
  *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *   cqr_mkl_?potrf_compact -- Cholesky factorization of an SPD Compact-format batch
  *   cqr_mkl_?trsm_compact  -- triangular solve op(A) X = alpha B (and variants)
+ *   cqr_mkl_?syrk_compact  -- symmetric rank-k update C := alpha A op(A) + beta C
  *
  * All use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
  * MKL compact ecosystem, but are backed by this project's own portable SIMD
@@ -23,9 +24,12 @@
  * they mix freely with MKL's native compact routines. cqr_mkl_?trsm_compact is a
  * portable, open alternative to mkl_?trsm_compact (identical signature), the step
  * that closes a batched solve, so it runs end to end with no MKL compute kernel.
- * The API mirrors MKL's native compact ecosystem (MKL_LAYOUT + MKL_COMPACT_PACK);
- * see the full parameter reference in the per-routine design docs
- * (cqr_mkl_d{geqrf,ormqr,potrf,trsm}_compact_design.md).
+ * cqr_mkl_?syrk_compact is the missing mkl_?syrk_compact: the symmetric rank-k
+ * update, which forms the Gram matrix A^T A of a Cholesky QR (feeding
+ * cqr_mkl_?potrf_compact then cqr_mkl_?trsm_compact) at half the flops of a
+ * general gemm. The API mirrors MKL's native compact ecosystem
+ * (MKL_LAYOUT + MKL_COMPACT_PACK); see the full parameter reference in the
+ * per-routine design docs (cqr_mkl_d{geqrf,ormqr,potrf,trsm,syrk}_compact_design.md).
  *
  * Typical use -- the batched AX = B solver (now MKL-compute-free):
  *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
@@ -143,6 +147,34 @@ void cqr_mkl_strsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
                            MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
                            float alpha, const float *ap, MKL_INT ldap, float *bp,
                            MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm);
+
+/* Symmetric rank-k update. For every matrix in the batch, forms in place
+ *
+ *     C := alpha * A * A^T + beta * C    (trans = MKL_NOTRANS, A is n x k)   or
+ *     C := alpha * A^T * A + beta * C    (trans = MKL_TRANS,   A is k x n),
+ *
+ * where C is the symmetric n x n result and only its uplo triangle (MKL_UPPER or
+ * MKL_LOWER) is referenced and updated. op(A) = A^H (MKL_CONJTRANS) folds to A^T
+ * for the real types (the conjugated update is ?herk, out of scope here). As in
+ * BLAS ?syrk, beta = 0 overwrites C (its prior contents, even NaN, are not read).
+ *
+ * The Compact-format counterpart of BLAS ?syrk, completing the compact BLAS-3 set
+ * alongside mkl_?gemm_compact and mkl_?trsm_compact; unlike forming A*op(A) with
+ * mkl_?gemm_compact it exploits the symmetry (half the flops, a triangle of
+ * writes). Its headline use is the Gram matrix of a Cholesky QR: A^T A -> potrf
+ * -> trsm. Like the BLAS ?syrk it batches, it takes no workspace and reports no
+ * info, and does no argument checking (Compact convention) -- use dsyrk_compact /
+ * ssyrk_compact (cqr_compact.h) for LAPACK/BLAS-style validation. See
+ * cqr_mkl_dsyrk_compact_design.md. */
+void cqr_mkl_dsyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
+                           MKL_INT n, MKL_INT k, double alpha, const double *ap,
+                           MKL_INT ldap, double beta, double *cp, MKL_INT ldcp,
+                           MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_ssyrk_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_TRANSPOSE trans,
+                           MKL_INT n, MKL_INT k, float alpha, const float *ap,
+                           MKL_INT ldap, float beta, float *cp, MKL_INT ldcp,
+                           MKL_COMPACT_PACK format, MKL_INT nm);
 
 #ifdef __cplusplus
 }
