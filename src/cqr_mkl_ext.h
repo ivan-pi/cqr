@@ -7,6 +7,8 @@
  *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
  *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
  *   cqr_mkl_?potrf_compact -- Cholesky factorization of an SPD Compact-format batch
+ *   cqr_mkl_?sytrfnp_compact -- unpivoted LDL^T factorization of a symmetric batch
+ *   cqr_mkl_?sytrsnp_compact -- solve A X = B from an unpivoted LDL^T factor
  *   cqr_mkl_?trsm_compact  -- triangular solve op(A) X = alpha B (and variants)
  *
  * All use MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
@@ -115,6 +117,48 @@ void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double 
 void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
                             MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
                             MKL_INT nm);
+
+/* LDL^T factorization, without pivoting, of a batch of symmetric n x n matrices
+ * in Compact format: A = L D L^T (MKL_LOWER) or A = U^T D U (MKL_UPPER), with
+ * L (U) unit lower (upper) triangular and D diagonal. On exit the diagonal
+ * holds D and the strict off-diagonal of the named triangle holds L or U (unit
+ * diagonal implied); the other triangle is untouched. The "np" suffix follows
+ * MKL's own unpivoted compact LU (mkl_?getrfnp_compact); MKL itself has no
+ * compact sytrf, so this fills that gap (there is nothing to be a drop-in for).
+ * Indefinite matrices factor fine (no sqrt); a zero *pivot* -- a singular
+ * leading principal minor -- poisons its lane with Inf/NaN, not info = j. Note
+ * the upper convention is the transpose dual A = U^T D U (as ?potrf's
+ * A = U^T U), not LAPACK ?sytrf's A = U D U^T. No workspace, no argument
+ * checking; info is a scalar status (0 ok, -1 for an unrecognized format). See
+ * cqr_mkl_dsytrfnp_compact_design.md. */
+void cqr_mkl_dsytrfnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
+                              MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                              MKL_INT nm);
+
+void cqr_mkl_ssytrfnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
+                              MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                              MKL_INT nm);
+
+/* Solve A X = B from the factor produced by cqr_mkl_?sytrfnp_compact -- the
+ * step that closes the batched symmetric solve (the LAPACK ?sytrf/?sytrs
+ * pairing). For every matrix, three in-place substitution sweeps (B := X):
+ *
+ *     L z = B;   D w = z;   L^T X = w      (MKL_LOWER, A = L D L^T)
+ *     U^T z = B; D w = z;   U   X = w      (MKL_UPPER, A = U^T D U)
+ *
+ * The triangular sweeps are the compact trsm with a unit diagonal; the diagonal
+ * solve between them is the one step trsm cannot express. B is n x nrhs with
+ * leading dimension ldbp (>= n col-major, >= nrhs row-major). No workspace, no
+ * argument checking; a zero D(i) (singular lane) yields Inf/NaN in that lane's
+ * solution. info is a scalar status (0 ok, -1 for an unrecognized format). See
+ * cqr_mkl_dsytrfnp_compact_design.md. */
+void cqr_mkl_dsytrsnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                              const double *ap, MKL_INT ldap, double *bp, MKL_INT ldbp,
+                              MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_ssytrsnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                              const float *ap, MKL_INT ldap, float *bp, MKL_INT ldbp,
+                              MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
 
 /* Triangular solve with multiple right-hand sides. For every matrix in the
  * batch, solves in place

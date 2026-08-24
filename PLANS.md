@@ -67,6 +67,44 @@ batches. Status vs. its design document:
   (`syrk`/`trsm`) factorization is intentionally not used at the target sizes.
   Complex (`c`/`z`) Hermitian variants are out of scope, as for the QR routines.
 
+## sytrfnp / sytrsnp (`cqr_mkl_dsytrfnp_compact`, `cqr_mkl_dsytrsnp_compact`)
+
+The compact **unpivoted LDL^T** factorization and its solve companion
+(`cqr_mkl_dsytrfnp_compact_design.md`): the square-root-free sibling of `potrf`
+for symmetric batches -- indefinite included -- plus the three-sweep solve
+(unit `trsm`, diagonal solve, unit `trsm^T`) that closes `AX = B`. MKL has no
+compact `sytrf`, so these fill a gap; the `np` naming follows MKL's own
+unpivoted `mkl_?getrfnp_compact`. Status vs. the design document:
+
+- **Implemented (design sections 6-8):** the vectorized square-root-free sweep
+  (FP64 + FP32) with the `JB = 4` register-blocked trailing update, reusing the
+  potrf kernel structure; the solve driver composing two unit-diagonal
+  `trsm_compact_general` sweeps around a stride-general diagonal solve; the
+  portable C APIs `?sytrfnp_compact` / `?sytrsnp_compact` (LAPACK-style
+  `info=-j` validation) and the MKL-style `cqr_mkl_?sytrfnp_compact` /
+  `cqr_mkl_?sytrsnp_compact` (no checking, scalar `info`). Column-major lower
+  (and its dual row-major upper) is the tuned contiguous path. The upper
+  convention is the transpose dual `A = U^T D U` (design 6.3), not LAPACK
+  `?sytrf`'s `U D U^T`.
+- **Validated (design section 7):** a BLAS-free test vs. a scalar reference over
+  the full `(T, V, uplo, layout)` matrix with padded groups, the portable
+  end-to-end indefinite solve, the section-6.2 semantics (zero *diagonal* with
+  nonsingular minors factors exactly; a zero-*pivot* lane poisons itself without
+  contaminating pack siblings), and C-API validation; plus an MKL test gating
+  the reconstruction residual (`20 n eps`), the untouched triangle, an
+  elementwise `(L, D)` cross-check vs `mkl_dgetrfnp_compact` (unpivoted LU of a
+  symmetric matrix shares `L`, and `diag(U) = D`; observed agreement `~1e-15`),
+  and the end-to-end indefinite solve over both `uplo` and layouts. Both are
+  CTest-registered.
+- **Known gaps / scoped out (design sections 6.2, 6.7):** no pivoting -- a
+  singular (or ill-conditioned) leading principal minor poisons its lane, by
+  design, and Bunch-Kaufman-style robustness for general indefinite input is
+  explicitly out of scope (per-lane pivot decisions do not vectorize; MKL's own
+  compact LU makes the same trade). No overflow/underflow-safe scaling; complex
+  Hermitian variants out of scope; the strided (column-major upper / row-major
+  lower) sweep is correctness-first, as for `potrf`. No dedicated benchmark yet
+  (the potrf benchmark harness would port directly).
+
 ## trsm (`cqr_mkl_dtrsm_compact`)
 
 The compact batched triangular solve (`cqr_mkl_dtrsm_compact_design.md`): a

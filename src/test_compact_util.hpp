@@ -140,6 +140,37 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
             A[j + (size_t)i * n] = A[i + (size_t)j * n];
 }
 
+// Symmetric *indefinite* n x n matrix (column-major) with a known-good
+// unpivoted LDL^T: A = L D L^T built from a random unit-lower L (entries in
+// (-0.5, 0.5), so element growth in re-factorization stays mild) and a diagonal
+// D with |d| in [0.5, 2.5) and mixed signs (d_1 is forced negative for n >= 2,
+// so the matrix is genuinely indefinite -- Cholesky would fail on it). Every
+// leading principal minor is prod(d_1..d_k) != 0, so the unpivoted
+// factorization exists and is exactly this (L, D). As in gen_spd, the upper
+// triangle is mirrored from the lower so A is symmetric to the bit.
+template <class T> void gen_sym_ldlt(T *A, int n)
+{
+    std::vector<T> L((size_t)n * n, T(0)), d(n);
+    for (int j = 0; j < n; ++j) {
+        L[j + (size_t)j * n] = T(1);
+        for (int i = j + 1; i < n; ++i)
+            L[i + (size_t)j * n] = T(0.5) * frand<T>();
+        T mag = T(0.5) + std::abs(frand<T>()) * T(2);
+        d[j] = (frand<T>() >= 0 ? mag : -mag);
+    }
+    if (n >= 2) d[1] = -std::abs(d[1]);
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i < n; ++i) {
+            T s = 0;
+            for (int l = 0; l <= j; ++l)
+                s += L[i + (size_t)l * n] * d[l] * L[j + (size_t)l * n];
+            A[i + (size_t)j * n] = s;
+        }
+    for (int j = 0; j < n; ++j)
+        for (int i = j + 1; i < n; ++i)
+            A[j + (size_t)i * n] = A[i + (size_t)j * n];
+}
+
 // Fill one order-s triangular matrix (leading dim s) in the given layout:
 // random in the referenced triangle, the diagonal boosted away from zero for
 // conditioning, the other (never-referenced) triangle zeroed. Shared by the

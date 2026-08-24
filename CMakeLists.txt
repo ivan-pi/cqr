@@ -33,6 +33,8 @@ add_library(cqr_compact
   src/cqr_ormqr_compact_dispatch.cpp
   src/cqr_geqrf_compact_dispatch.cpp
   src/cqr_potrf_compact_dispatch.cpp
+  src/cqr_sytrfnp_compact_dispatch.cpp
+  src/cqr_sytrsnp_compact_dispatch.cpp
   src/cqr_trsm_compact_dispatch.cpp)
 target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(cqr_compact PUBLIC cxx_std_17)
@@ -50,6 +52,8 @@ if(CQR_WITH_MKL)
     src/cqr_mkl_ormqr.cpp
     src/cqr_mkl_geqrf.cpp
     src/cqr_mkl_potrf.cpp
+    src/cqr_mkl_sytrfnp.cpp
+    src/cqr_mkl_sytrsnp.cpp
     src/cqr_mkl_trsm.cpp)
   target_include_directories(cqr_mkl_ext
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -126,6 +130,14 @@ if(CQR_BUILD_TESTS)
   target_link_libraries(test_cqr_potrf_compact PRIVATE cqr_compact)
   add_test(NAME portable_potrf COMMAND test_cqr_potrf_compact)
 
+  # Portable self-contained unpivoted-LDL^T test (no BLAS): the compact sytrfnp
+  # kernel vs a scalar reference over both uplo and all layouts, the sytrsnp
+  # solve closing A X = B on indefinite batches, zero-diagonal / zero-pivot
+  # semantics, plus C API validation of both routines.
+  add_executable(test_cqr_sytrfnp_compact src/test_cqr_sytrfnp_compact.cpp)
+  target_link_libraries(test_cqr_sytrfnp_compact PRIVATE cqr_compact)
+  add_test(NAME portable_sytrfnp COMMAND test_cqr_sytrfnp_compact)
+
   # Portable self-contained triangular-solve test (no BLAS): C API argument
   # validation + the compact trsm kernel vs a scalar ?trsm reference.
   add_executable(test_cqr_trsm_compact src/test_cqr_trsm_compact.cpp)
@@ -156,6 +168,16 @@ if(CQR_BUILD_TESTS)
     target_link_libraries(test_cqr_potrf_mkl
       PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
     add_test(NAME mkl_potrf_suites COMMAND test_cqr_potrf_mkl)
+
+    # MKL + dense LAPACK validation of cqr_mkl_dsytrfnp_compact and
+    # cqr_mkl_dsytrsnp_compact (design doc section 7): factorization invariants
+    # (reconstruction residual, untouched triangle), cross-check of (L, D) vs
+    # mkl_dgetrfnp_compact (unpivoted LU of a symmetric matrix shares L, and
+    # U = D L^T), and the end-to-end indefinite solve.
+    add_executable(test_cqr_sytrfnp_mkl src/test_cqr_sytrfnp_mkl.cpp)
+    target_link_libraries(test_cqr_sytrfnp_mkl
+      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
+    add_test(NAME mkl_sytrfnp_suites COMMAND test_cqr_sytrfnp_mkl)
 
     # MKL cross-check of cqr_mkl_?trsm_compact vs mkl_?trsm_compact over the full
     # feature matrix, plus an end-to-end AX=B solve driven entirely by cqr

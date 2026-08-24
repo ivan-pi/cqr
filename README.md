@@ -17,6 +17,14 @@ an Intel MKL-style API:
   vectorized alternative to `mkl_?potrf_compact`. Paired with
   `cqr_mkl_?trsm_compact` it factors and solves batched SPD systems. See its
   [design document](cqr_mkl_dpotrf_compact_design.md).
+* **`cqr_mkl_?sytrfnp_compact`** / **`cqr_mkl_?sytrsnp_compact`** - the batched
+  **LDL^T factorization without pivoting** (`A = L D L^T` / `U^T D U`) of
+  symmetric matrices -- indefinite included, this being the square-root-free
+  factorization Cholesky cannot do -- and the solve that completes `AX = B` from
+  the factor (two unit-triangular sweeps around the diagonal solve `trsm` cannot
+  express). MKL has no compact `sytrf` at all, so like `?ormqr_compact` these
+  fill a gap (the `np` suffix follows MKL's own unpivoted `mkl_?getrfnp_compact`).
+  See the [design document](cqr_mkl_dsytrfnp_compact_design.md).
 * **`cqr_mkl_?trsm_compact`** - an open drop-in for
   `mkl_?trsm_compact` (the batched triangular solve), so the whole `AX = B`
   pipeline runs with no MKL compute kernel. See its
