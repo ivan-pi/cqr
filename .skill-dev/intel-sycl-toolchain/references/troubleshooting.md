@@ -84,6 +84,39 @@ If binaries must run without a sourced environment, use the conda route instead 
 its binaries are relocatable with a single rpath flag. That difference is the main
 practical reason to pick one route over the other.
 
+### Why conda binaries are self-contained and oneAPI ones are not
+
+Worth understanding, because it explains why adding one `-rpath` fixes conda
+completely but leaves oneAPI failing. Two independent factors compound.
+
+**1. Where the libraries sit.** `libsycl` does not link the OpenCL adapter directly;
+it `dlopen`s it at runtime, and that adapter in turn needs `libtbb.so.12`.
+
+| beside `libsycl.so.9` | conda | apt/oneAPI |
+|---|---|---|
+| UR adapters | 9 | 9 |
+| `libtbb.so.12` | **yes** | **no** — separate component directory |
+
+**2. Which ELF tag the loader gets.** Check with `readelf -d`:
+
+```
+conda   libsycl.so.9 : (RPATH)   [$ORIGIN:$ORIGIN/.]
+oneAPI  libsycl.so.9 : (RUNPATH) [$ORIGIN]
+```
+
+`DT_RPATH` is inherited through transitive dependency resolution; `DT_RUNPATH` is
+consulted only for the object's own direct dependencies. So when the dlopen'd adapter
+looks for `libtbb.so.12`, conda's `RPATH` still applies *and* the file is right there
+— it resolves. On oneAPI neither holds: the `RUNPATH` is not inherited, and TBB is in
+another directory anyway.
+
+This is also why the failure appears as `No device...` rather than a loader error:
+`libsycl` itself loads fine on both routes. Only the adapter it opens later fails,
+and a missing adapter reads as "no device".
+
+Note the `-rpath` you pass on *your own* link line lands on the executable, which does
+not help here — the search that fails belongs to `libsycl`, not your binary.
+
 Also check the obvious: `sycl-ls` with no output means no device at all is
 registered, which is a broken install rather than an environment problem.
 
