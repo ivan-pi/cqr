@@ -30,7 +30,8 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h"     /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_matrix_view.hpp" /* MatrixView, shared with the tests and benchmarks */
 
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +42,10 @@
 #include <algorithm>
 
 namespace {
+
+using cqr::detail::ConstMatrixView;
+using cqr::detail::mat_view;
+using cqr::detail::MatrixView;
 
 /* Deterministic uniform reals in [-1, 1), seeded once for reproducibility. */
 std::mt19937_64 rng(42);
@@ -68,8 +73,12 @@ void check_info(MKL_INT info, const char *what)
 
 /* Minimal column-major dense matrix: owns its storage and hands raw pointers
  * (data(), ld()) to BLAS/LAPACK and the compact pack/unpack routines.
- * Leading dimension == row count (contiguous storage, no padding). Indices are
- * assumed to stay in int32 range. */
+ * Leading dimension == row count (contiguous storage, no padding).
+ *
+ * The storage is all it owns: element access goes through MatrixView
+ * (src/cqr_matrix_view.hpp), the non-owning strided view the test suites and
+ * benchmarks address their dense matrices with, so the index arithmetic lives
+ * in one place and is bounds-checked in a Debug build. */
 class Matrix {
   public:
     Matrix(int rows, int cols) : rows_(rows), cols_(cols), a_(rows * cols) {}
@@ -89,8 +98,10 @@ class Matrix {
     int ld()   const { return rows_; }
     double       *data()       { return a_.data(); }
     const double *data() const { return a_.data(); }
-    double &operator()(int i, int j)       { return a_[i + j * rows_]; }
-    double  operator()(int i, int j) const { return a_[i + j * rows_]; }
+    MatrixView<double>      view()       { return mat_view(a_.data(), rows_, cols_); }
+    ConstMatrixView<double> view() const { return mat_view(a_.data(), rows_, cols_); }
+    double &operator()(int i, int j)       { return view()(i, j); }
+    double  operator()(int i, int j) const { return view()(i, j); }
     // clang-format on
 
   private:
@@ -133,20 +144,22 @@ void batch_solve(int nm, int n, int nrhs)
      * B_v = A_v X so the solve must recover X (mirrors the compact suite-2
      * construction in the design doc). */
     Matrix X(n, nrhs);
+    const auto Xv = X.view();
     for (int j = 0; j < nrhs; ++j)
         for (int i = 0; i < n; ++i)
-            X(i, j) = double(j + 1);
+            Xv(i, j) = double(j + 1);
 
     /* The batch is an array of independently-allocated matrices, not one
      * contiguous block -- that is fine, the compact pack routines take an
      * array of per-matrix base pointers. */
     std::vector<Matrix> A(nm, Matrix(n, n)), B(nm, Matrix(n, nrhs));
     for (int v = 0; v < nm; ++v) {
+        const auto Av = A[v].view();
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                A[v](i, j) = frand();
-        for (int i = 0; i < n; ++i)
-            A[v](i, i) += 2.0; /* tame conditioning */
+                Av(i, j) = frand();
+        for (int d = 0; d < n; ++d)
+            Av(d, d) += 2.0; /* tame conditioning */
         cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0,
                     A[v].data(), A[v].ld(), X.data(), X.ld(), 0.0, B[v].data(),
                     B[v].ld()); /* B_v = A_v X */

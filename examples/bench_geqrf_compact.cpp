@@ -63,17 +63,21 @@ struct Pool {
     int m, n, nmat;
     aligned_vector<double> a; /* nmat * m*n, 64 B-aligned */
 
+    /* Matrix v of the pool, as a dense view over its slice of the buffer. */
+    MatrixView<double> A(int v) { return mat_view(a.data() + (size_t)v * m * n, m, n); }
+
     Pool(int m_, int n_, int nmat_)
         : m(m_), n(n_), nmat(nmat_), a((size_t)nmat_ * m_ * n_)
     {
         std::mt19937_64 rng(2025);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
         for (int v = 0; v < nmat; ++v) {
-            double *A = a.data() + (size_t)v * m * n;
-            for (int i = 0; i < m * n; ++i)
-                A[i] = dist(rng);
-            for (int i = 0; i < std::min(m, n); ++i)
-                A[i + (size_t)i * m] += 2.0 * n;
+            const auto Av = A(v);
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i)
+                    Av(i, j) = dist(rng);
+            for (int d = 0; d < std::min(m, n); ++d)
+                Av(d, d) += 2.0 * n;
         }
     }
 };

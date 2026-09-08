@@ -48,29 +48,31 @@ namespace {
  * columns included -- exactly as they do for dense LAPACK. */
 enum Structure { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
 
-/* build a random m x n matrix (column-major). For DENSE, a diagonal boost tames
- * the conditioning and cond applies the competition's column scaling
+/* build a random m x n matrix. For DENSE, a diagonal boost tames the
+ * conditioning and cond applies the competition's column scaling
  * (columns *= logspace(0,-cond,n)). The structured variants make the last column
  * a (near-)copy of the first, so the trailing reflector sees a (near-)zero
  * sub-diagonal norm -- the branch the masked larfg must get right. */
-template <class T> void gen_matrix(T *A, int m, int n, double cond, Structure s = DENSE)
+template <class T> void gen_matrix(MatrixView<T> A, double cond, Structure s = DENSE)
 {
-    for (int i = 0; i < m * n; ++i)
-        A[i] = frand<T>();
+    const int m = A.rows, n = A.cols;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i)
+            A(i, j) = frand<T>();
     if (s == DENSE) {
-        for (int i = 0; i < std::min(m, n); ++i)
-            A[i + (size_t)i * m] += T(2);
+        for (int d = 0; d < std::min(m, n); ++d)
+            A(d, d) += T(2);
         if (cond > 0.0)
             for (int j = 0; j < n; ++j) {
                 double sc = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
                 for (int i = 0; i < m; ++i)
-                    A[i + (size_t)j * m] *= sc;
+                    A(i, j) *= sc;
             }
     }
     else if (n >= 2) {
         const double noise = (s == NEAR_COLLINEAR) ? 1e-9 : 0.0; /* exact dup if 0 */
         for (int i = 0; i < m; ++i)
-            A[i + (size_t)(n - 1) * m] = A[i] * (1.0 + noise * frand<T>());
+            A(i, n - 1) = A(i, 0) * (1.0 + noise * frand<T>());
     }
 }
 
@@ -87,7 +89,7 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_matrix(A.data() + v * sA, m, n, cond, structure);
+        gen_matrix(mat_view(A.data() + v * sA, m, n), cond, structure);
 
     /* pack A, factor with the routine under test, unpack (H, tau) */
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
@@ -118,9 +120,13 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
     double worst_res = 0, worst_orth = 0, worst_el = 0;
     std::vector<T> Q((size_t)m * k), QtA((size_t)k * n), QtQ((size_t)k * k);
     std::vector<T> Href(sA), tauref(sT);
+    const auto QtAm = mat_view(QtA.data(), k, n);
+    const auto QtQm = mat_view(QtQ.data(), k, k);
     for (int v = 0; v < nm; ++v) {
         const T *Av = A.data() + v * sA;
         const T *Hv = H.data() + v * sA, *tv = tau.data() + v * sT;
+        const auto Am = mat_view(Av, m, n); /* the input, column-major */
+        const auto Hm = mat_view(Hv, m, n); /* the factor (H, tau) it produced */
 
         /* Q = householder_product(H, tau): first k columns of Q (m x k). The
          * reflectors occupy the first k columns of the m x n H, i.e. the first
@@ -134,24 +140,24 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
         double resid = 0;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < k; ++i) {
-                double R = (i <= j) ? Hv[i + (size_t)j * m] : 0.0; /* triu */
-                resid = std::max(resid, std::abs(R - QtA[i + (size_t)j * k]));
+                double R = (i <= j) ? Hm(i, j) : 0.0; /* triu */
+                resid = std::max(resid, std::abs(R - QtAm(i, j)));
             }
-        worst_res = std::max(worst_res, resid / std::max(norm1(Av, m, n), 1e-300));
+        worst_res = std::max(worst_res, resid / std::max(norm1(Am), 1e-300));
 
         /* orthogonality Q^T Q - I (k x k) */
         lapack<T>::gemm(CblasColMajor, CblasTrans, CblasNoTrans, k, k, m, T(1), Q.data(),
                         m, Q.data(), m, T(0), QtQ.data(), k);
-        for (int i = 0; i < k; ++i)
-            QtQ[i + (size_t)i * k] -= T(1);
-        worst_orth = std::max(worst_orth, norm1(QtQ.data(), k, k));
+        for (int d = 0; d < k; ++d)
+            QtQm(d, d) -= T(1);
+        worst_orth = std::max(worst_orth, norm1(QtQm));
 
         /* diagnostic: elementwise vs LAPACKE_dgeqrf */
         std::copy(Av, Av + sA, Href.begin());
         lapack<T>::geqrf(LAPACK_COL_MAJOR, m, n, Href.data(), m, tauref.data());
         double el = std::max(max_abs_diff(Hv, Href.data(), sA),
                              max_abs_diff(tv, tauref.data(), sT));
-        worst_el = std::max(worst_el, el / std::max(norm1(Av, m, n), 1e-300));
+        worst_el = std::max(worst_el, el / std::max(norm1(Am), 1e-300));
     }
 
     // TODO: review: worst_el is printed as a diagnostic only (design doc 7.1). A
@@ -184,7 +190,7 @@ template <class T> int suite2(MKL_LAYOUT layout, int nm, int m, int n)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_matrix(A.data() + v * sA, m, n, 0.0);
+        gen_matrix(mat_view(A.data() + v * sA, m, n), 0.0);
     /* A was generated column-major; for a row-major run reinterpret the same
      * numbers as a row-major m x n (a genuinely different matrix, still fine). */
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
@@ -237,14 +243,15 @@ template <class T> int suite3(int nm, int n, int nrhs)
     const double eps = std::numeric_limits<T>::epsilon();
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = mkl<T>::vlen(fmt), m = n, k = n;
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA;
-        gen_matrix(Av, n, n, 0.0);
-        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
+        const auto Av = mat_view(A.data() + v * sA, n, n);
+        gen_matrix(Av, 0.0);
+        matmul(Av, X, mat_view(B.data() + v * sB, n, nrhs)); /* B = A X */
     }
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Bp = batch_ptrs<const T>(B.data(), nm, sB);
@@ -293,15 +300,17 @@ template <class T> int suite3(int nm, int n, int nrhs)
         std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> AX(sB);
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
     for (int v = 0; v < nm; ++v) {
-        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const T *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
-                                            std::max(norm1(X.data(), n, nrhs), 1e-300));
-        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
-        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
-                                            std::max(norm1(Bv, n, nrhs), 1e-300));
+        const auto Av = mat_view<const T>(A.data() + v * sA, n, n);
+        const auto Bv = mat_view<const T>(B.data() + v * sB, n, nrhs);
+        const auto Xv = mat_view<const T>(Xhat.data() + v * sB, n, nrhs);
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv.data, Xs.data(), sB) /
+                                            std::max(norm1(X), 1e-300));
+        matmul(Av, Xv, AX);
+        worst_res = std::max(worst_res, max_abs_diff(AXs.data(), Bv.data, sB) /
+                                            std::max(norm1(Bv), 1e-300));
     }
     const double rtol = 100.0 * n * eps;
     bool ok = (worst_fwd <= rtol && worst_res <= rtol);

@@ -74,23 +74,26 @@ struct Pool {
     std::vector<double> a; /* nmat * n*n */
     std::vector<double> b; /* nmat * n   */
 
+    /* Matrix v of the pool, as a dense view over its slice of the buffer. */
+    MatrixView<double> A(int v) { return mat_view(a.data() + (size_t)v * n * n, n, n); }
+
     Pool(int n_, int nmat_)
         : n(n_), nmat(nmat_), a((size_t)nmat_ * n_ * n_), b((size_t)nmat_ * n_)
     {
         std::mt19937_64 rng(42);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
         for (int v = 0; v < nmat; ++v) {
-            double *A = a.data() + (size_t)v * n * n;
+            const auto Av = A(v);
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    A[i + (size_t)j * n] = dist(rng);
-            for (int i = 0; i < n; ++i)
-                A[i + (size_t)i * n] += 2.0 * n; /* diag dominant */
+                    Av(i, j) = dist(rng);
+            for (int d = 0; d < n; ++d)
+                Av(d, d) += 2.0 * n; /* diag dominant */
             double *B = b.data() + (size_t)v * n;
             for (int i = 0; i < n; ++i) { /* B = A * ones */
                 double s = 0.0;
                 for (int j = 0; j < n; ++j)
-                    s += A[i + (size_t)j * n];
+                    s += Av(i, j);
                 B[i] = s;
             }
         }

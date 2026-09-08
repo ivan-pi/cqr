@@ -43,14 +43,14 @@ using namespace cqr::test;
 // off it. Only the named triangle is read or written. No singularity check
 // (mirrors the routine under test): a zero pivot yields Inf/NaN.
 
-template <class T> static void ref_sytf2np(char uplo, int n, T *a, int lda)
+template <class T> static void ref_sytf2np(char uplo, MatrixView<T> As)
 {
     const bool upper = (uplo == 'U' || uplo == 'u');
+    const int n = As.rows;
     // One sweep serves both triangles, as in the kernel: factor the lower
     // triangle of A for uplo lower and of A^T for upper (A is symmetric, so
     // U^T D U of A is L D L^T of A^T). Same operand pairing either way, so the
     // reference and the kernel stay bit-comparable.
-    const auto As = mat_view(a, n, n, lda);
     const auto A = upper ? As.transposed() : As;
     for (int j = 0; j < n; ++j) {
         const T d = A(j, j);
@@ -76,9 +76,9 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
     // random symmetric-indefinite batch + scalar reference factor for this uplo
     MatrixBatch<T> A(nm, n, n), Aref(nm, n, n);
     for (int idx = 0; idx < nm; ++idx) {
-        gen_sym_ldlt(A[idx], n);
+        gen_sym_ldlt(A.view(idx));
         std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
-        ref_sytf2np(uplo, n, Aref[idx], n);
+        ref_sytf2np(uplo, Aref.view(idx));
     }
 
     // pack the full symmetric A, factor with the routine under test, unpack
@@ -92,7 +92,7 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
     double e_fac = 0, e_rec = 0, e_untouched = 0, a_norm = 1;
     for (int idx = 0; idx < nm; ++idx) {
         const auto Ain = A.view(idx), Fac = Aout.view(idx), Ref = Aref.view(idx);
-        a_norm = std::max(a_norm, norm1(A[idx], n, n));
+        a_norm = std::max(a_norm, norm1(Ain));
         // check 1: named-triangle factor vs scalar reference (elementwise)
         // check 3: strictly-opposite triangle unchanged from the input A
         for (int j = 0; j < n; ++j)
@@ -142,10 +142,11 @@ static int run_solve(int nm, int n, int nrhs, char uplo, char layout)
 
     // known X, B = A X densely
     MatrixBatch<T> A(nm, n, n), B(nm, n, nrhs);
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
     for (int idx = 0; idx < nm; ++idx) {
-        gen_sym_ldlt(A[idx], n);
-        matmul(n, nrhs, n, A[idx], n, X.data(), n, B[idx], n);
+        gen_sym_ldlt(A.view(idx));
+        matmul(A.view(idx), X, B.view(idx));
     }
 
     int ng = (nm + V - 1) / V;
@@ -165,13 +166,14 @@ static int run_solve(int nm, int n, int nrhs, char uplo, char layout)
 
     double e_fwd = 0, e_res = 0;
     const size_t sB = (size_t)n * nrhs;
-    std::vector<T> AX(sB);
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
     for (int idx = 0; idx < nm; ++idx) {
-        e_fwd = std::max(e_fwd, max_abs_diff(Xhat[idx], X.data(), sB) /
-                                    std::max(norm1(X.data(), n, nrhs), 1e-300));
-        matmul(n, nrhs, n, A[idx], n, Xhat[idx], n, AX.data(), n);
-        e_res = std::max(e_res, max_abs_diff(AX.data(), B[idx], sB) /
-                                    std::max(norm1(B[idx], n, nrhs), 1e-300));
+        e_fwd = std::max(e_fwd, max_abs_diff(Xhat[idx], Xs.data(), sB) /
+                                    std::max(norm1(X), 1e-300));
+        matmul(A.view(idx), Xhat.view(idx), AX);
+        e_res = std::max(e_res, max_abs_diff(AXs.data(), B[idx], sB) /
+                                    std::max(norm1(B.view(idx)), 1e-300));
     }
     // fused vs two-step, on the raw compact buffers (padded lanes included)
     const bool fused_same = (ap2 == ap) && (bp2 == bp);
@@ -225,7 +227,7 @@ template <class T, int V> static int run_zerodiag(char uplo, char layout)
             for (int i = 0; i < n; ++i)
                 Ain(i, j) = (T)ldlt_reconstruct(F, i, j, false);
         std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
-        ref_sytf2np(uplo, n, Aref[idx], n);
+        ref_sytf2np(uplo, Aref.view(idx));
     }
 
     std::vector<T> ap((size_t)n * n * V);
@@ -282,9 +284,9 @@ template <class T, int V> static int run_zeropivot(int n, char uplo, char layout
             Bad(0, 1) = Bad(1, 0) = T(1);
         }
         else {
-            gen_sym_ldlt(A[idx], n);
+            gen_sym_ldlt(A.view(idx));
             std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
-            ref_sytf2np(uplo, n, Aref[idx], n);
+            ref_sytf2np(uplo, Aref.view(idx));
         }
     }
 
@@ -332,7 +334,9 @@ static int test_validation()
 {
     const int n = 8, nrhs = 3, V = 4, nm = 4, ld = 8;
     std::vector<double> ap((size_t)ld * n * V, 0), bp((size_t)ld * nrhs * V, 0);
-    for (int v = 0; v < V; ++v) // seed a unit diagonal so factoring/solving is sane
+    // Seed a unit diagonal so factoring/solving is sane. The offset is the
+    // compact (interleaved) one, which is not a dense 2-D layout.
+    for (int v = 0; v < V; ++v)
         for (int i = 0; i < n; ++i)
             ap[((size_t)i * ld + i) * V + v] = 1.0;
     auto callf = [&](char lay, char up, int n_, int ldap_, int V_, int nm_) {

@@ -61,7 +61,7 @@ template <class T> int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_sym_ldlt(A.data() + v * sA, n);
+        gen_sym_ldlt(mat_view(A.data() + v * sA, n, n));
 
     /* pack the full symmetric A, factor with the routine under test, unpack */
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
@@ -99,8 +99,7 @@ template <class T> int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
                 Res(i, j) = (T)(ldlt_reconstruct(H, i, j, up) - (double)A(i, j));
-        worst_res = std::max(worst_res,
-                             norm1(R.data(), n, n) / std::max(norm1(Av, n, n), 1e-300));
+        worst_res = std::max(worst_res, norm1(Res) / std::max(norm1(A), 1e-300));
 
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
@@ -131,7 +130,7 @@ template <class T> int suite2(int nm, int n)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_sym_ldlt(A.data() + v * sA, n);
+        gen_sym_ldlt(mat_view(A.data() + v * sA, n, n));
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
 
     MKL_INT sz_a = mkl<T>::get_size(n, n, fmt, nm);
@@ -183,14 +182,15 @@ template <class T> int suite3(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, i
     const bool row = (layout == MKL_ROW_MAJOR);
     const char ul = (uplo == MKL_UPPER) ? 'U' : 'L';
 
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA;
-        gen_sym_ldlt(Av, n);
-        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
+        const auto Av = mat_view(A.data() + v * sA, n, n);
+        gen_sym_ldlt(Av);
+        matmul(Av, X, mat_view(B.data() + v * sB, n, nrhs)); /* B = A X */
     }
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
 
@@ -261,15 +261,17 @@ template <class T> int suite3(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, i
                     (long)info_s, (long)info_v);
     }
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> AX(sB);
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
     for (int v = 0; v < nm; ++v) {
-        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const T *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
-                                            std::max(norm1(X.data(), n, nrhs), 1e-300));
-        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
-        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
-                                            std::max(norm1(Bv, n, nrhs), 1e-300));
+        const auto Av = mat_view<const T>(A.data() + v * sA, n, n);
+        const auto Bv = mat_view<const T>(B.data() + v * sB, n, nrhs);
+        const auto Xv = mat_view<const T>(Xhat.data() + v * sB, n, nrhs);
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv.data, Xs.data(), sB) /
+                                            std::max(norm1(X), 1e-300));
+        matmul(Av, Xv, AX);
+        worst_res = std::max(worst_res, max_abs_diff(AXs.data(), Bv.data, sB) /
+                                            std::max(norm1(Bv), 1e-300));
     }
     /* the residual is what the backward-stable sweeps control; the forward
      * error additionally carries cond(A), so its gate gets headroom */

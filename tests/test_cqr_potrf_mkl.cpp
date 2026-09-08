@@ -55,7 +55,7 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_spd(A.data() + v * sA, n, cond);
+        gen_spd(mat_view(A.data() + v * sA, n, n), cond);
 
     /* pack the full symmetric A, factor with the routine under test, unpack */
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
@@ -103,8 +103,7 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
                         s += H(l, i) * H(l, j);
                 Res(i, j) = (T)s - A(i, j);
             }
-        worst_res = std::max(worst_res,
-                             norm1(R.data(), n, n) / std::max(norm1(Av, n, n), 1e-300));
+        worst_res = std::max(worst_res, norm1(Res) / std::max(norm1(A), 1e-300));
 
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
@@ -124,7 +123,7 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
                 const bool named = up ? (i <= j) : (i >= j);
                 if (named) el = std::max<double>(el, std::abs(H(i, j) - Lr(i, j)));
             }
-        lref_norm = norm1(Lref.data(), n, n); /* triangular factor L1 norm */
+        lref_norm = norm1(Lr); /* triangular factor L1 norm */
         worst_el = std::max(worst_el, el / std::max(lref_norm, 1e-300));
     }
 
@@ -150,7 +149,7 @@ template <class T> int suite2(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
 
     std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
-        gen_spd(A.data() + v * sA, n, 0.0);
+        gen_spd(mat_view(A.data() + v * sA, n, n), 0.0);
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
 
     MKL_INT sz_a = mkl<T>::get_size(n, n, fmt, nm);
@@ -182,14 +181,15 @@ template <class T> int suite3(int nm, int n, int nrhs)
     const double eps = std::numeric_limits<T>::epsilon();
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = mkl<T>::vlen(fmt);
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA;
-        gen_spd(Av, n, 0.0);
-        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
+        const auto Av = mat_view(A.data() + v * sA, n, n);
+        gen_spd(Av, 0.0);
+        matmul(Av, X, mat_view(B.data() + v * sB, n, nrhs)); /* B = A X */
     }
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Bp = batch_ptrs<const T>(B.data(), nm, sB);
@@ -224,15 +224,17 @@ template <class T> int suite3(int nm, int n, int nrhs)
         std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> AX(sB);
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
     for (int v = 0; v < nm; ++v) {
-        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const T *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
-                                            std::max(norm1(X.data(), n, nrhs), 1e-300));
-        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
-        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
-                                            std::max(norm1(Bv, n, nrhs), 1e-300));
+        const auto Av = mat_view<const T>(A.data() + v * sA, n, n);
+        const auto Bv = mat_view<const T>(B.data() + v * sB, n, nrhs);
+        const auto Xv = mat_view<const T>(Xhat.data() + v * sB, n, nrhs);
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv.data, Xs.data(), sB) /
+                                            std::max(norm1(X), 1e-300));
+        matmul(Av, Xv, AX);
+        worst_res = std::max(worst_res, max_abs_diff(AXs.data(), Bv.data, sB) /
+                                            std::max(norm1(Bv), 1e-300));
     }
     const double rtol = 100.0 * n * eps;
     bool ok = (worst_fwd <= rtol && worst_res <= rtol);

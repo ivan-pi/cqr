@@ -55,7 +55,8 @@ int suite1(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE transa
     const size_t sA = (size_t)s * s, sB = (size_t)m * n;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        gen_tri(A.data() + v * sA, s, uplo == MKL_UPPER, rowmajor);
+        /* A is square, so its leading dimension is s in either layout */
+        gen_tri(mat_view(A.data() + v * sA, s, s, s, rowmajor), uplo == MKL_UPPER);
         T *Bv = B.data() + v * sB;
         for (size_t e = 0; e < sB; ++e)
             Bv[e] = frand<T>();
@@ -108,14 +109,15 @@ template <class T> int suite2(int nm, int n, int nrhs)
     const double eps = std::numeric_limits<T>::epsilon();
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = mkl<T>::vlen(fmt), m = n, k = n;
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA;
-        gen_boosted(Av, n, n); /* diagonal boost tames conditioning */
-        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
+        const auto Av = mat_view(A.data() + v * sA, n, n);
+        gen_boosted(Av); /* diagonal boost tames conditioning */
+        matmul(Av, X, mat_view(B.data() + v * sB, n, nrhs)); /* B = A X */
     }
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
     auto Bp = batch_ptrs<const T>(B.data(), nm, sB);
@@ -156,16 +158,17 @@ template <class T> int suite2(int nm, int n, int nrhs)
     mkl<T>::geunpack(MKL_COL_MAJOR, n, nrhs, Op.data(), n, cp, m, fmt, nm);
 
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> AX(sB);
-    const double nX =
-        std::max(norm1(X.data(), n, nrhs), 1e-300); /* X is loop-invariant */
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
+    const double nX = std::max(norm1(X), 1e-300); /* X is loop-invariant */
     for (int v = 0; v < nm; ++v) {
-        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const T *Xv = Xhat.data() + v * sB;
-        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) / nX);
-        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
-        worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
-                                            std::max(norm1(Bv, n, nrhs), 1e-300));
+        const auto Av = mat_view<const T>(A.data() + v * sA, n, n);
+        const auto Bv = mat_view<const T>(B.data() + v * sB, n, nrhs);
+        const auto Xv = mat_view<const T>(Xhat.data() + v * sB, n, nrhs);
+        worst_fwd = std::max(worst_fwd, max_abs_diff(Xv.data, Xs.data(), sB) / nX);
+        matmul(Av, Xv, AX);
+        worst_res = std::max(worst_res, max_abs_diff(AXs.data(), Bv.data, sB) /
+                                            std::max(norm1(Bv), 1e-300));
     }
     const double rtol = 100.0 * n * eps;
     bool ok = (info == 0) && (worst_fwd <= rtol) && (worst_res <= rtol);
