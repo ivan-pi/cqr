@@ -35,8 +35,12 @@ Correctness is independent of these flags; only throughput changes.
 include/   public headers: cqr_compact.h (portable C API), cqr_mkl_ext.h
            (MKL-style API), cqr_mkl_alloc.h (optional RAII mkl_malloc helpers)
 src/       the templated kernels (cqr_*_compact.hpp, one per routine, on the
-           shared cqr_compact_common.hpp) and the two adapter sources that
-           implement the public headers: cqr_compact.cpp, cqr_mkl_ext.cpp
+           shared cqr_compact_common.hpp; sysvnp's is a driver over the sytrfnp
+           and sytrsnp group kernels), the two adapter sources that implement
+           the public headers (cqr_compact.cpp, cqr_mkl_ext.cpp), and
+           cqr_matrix_view.hpp, the dense MatrixView the tests, benchmarks and
+           examples share (internal: src/ is on their include path, but the
+           public API stays include/)
 tests/     portable (no BLAS) and MKL-backed suites, templated on the scalar
            type; test_compact_util.hpp / test_mkl_util.hpp hold the helpers and
            the compact<T> / cqr_mkl<T> / mkl<T> / lapack<T> dispatch structs
@@ -105,6 +109,30 @@ argument, which cannot be parenthesized, so they also sit between
   `aligned(alignof(T))`; always name it as `typename pack<T,V>::type` and never
   pass it as a template *argument* (clang strips typedef alignment there and
   emits aligned loads that fault on 16-byte-aligned buffers -- issue #34).
+- **Never pass a pack across a call by reference.** The second face of the
+  same clang behavior (issue #34 fixed the template-argument face in PR #35):
+  a `const typename pack<T,V>::type &` parameter is loaded with the *natural*
+  vector alignment once the call is not inlined -- the typedef's relaxed
+  alignment does not survive on the referent -- and faults on a buffer or stack
+  local that is only `T`-aligned. The `JB = 4` block helper of `sytrfnp` was
+  first written that way (the pivot `d` passed by reference from the caller's
+  local) and segfaulted on a `movapd` under clang in the plain Release
+  configuration CI uses, while the same source passed every test under gcc.
+  Passing by value is no escape (`-Wpsabi`, see `cqr_compact_common.hpp`).
+  Instead give the helper the view and the indices and let it load what it
+  needs (`potrf_update_block` / `sytrfnp_update_block` do exactly that), or
+  pass the scalar the pack was broadcast from. The tiny lane-wise helpers
+  (`vsqrt`, `broadcast`, `trsm_dot_block`'s `va`) get away with references only
+  because they always inline.
+- **Build and test with both gcc and clang before pushing.** CI runs both, and
+  the packs' alignment is exactly the kind of contract only one of them
+  enforces: both alignment faults so far (issue #34 and the one above) were
+  invisible to gcc. The portable tree needs nothing but the compiler:
+
+  ```sh
+  CXX=clang++ cmake -S . -B build-clang -DCQR_WITH_MKL=OFF && cmake --build build-clang && ctest --test-dir build-clang
+  ```
+
 - **Threading over groups.** Every all-groups driver is a call to
   `for_each_group<V>(nm, flops_per_group, body)` (`cqr_compact_common.hpp`):
   a static-schedule `omp parallel for` on at most one thread per group, gated
@@ -112,6 +140,13 @@ argument, which cannot be parenthesized, so they also sit between
   kernel. The gate refuses when nesting is exhausted (that is what makes the
   library compose with a caller's outer parallel loop), when there is a single
   group, or below `parallel_min_flops`.
+- **Two views, one idea.** Compact (packed) operands are addressed through
+  `BatchView` (`src/cqr_compact_common.hpp`), dense host-side ones through
+  `MatrixView` (`src/cqr_matrix_view.hpp`). Both carry the layout as runtime
+  strides `(si, sj)`, so one body serves column-major and row-major and a
+  transpose is a stride swap. Do not hand-write `A[i + (size_t)j * lda]` in
+  new tests, benchmarks or examples -- take a view. `MatrixView` asserts its
+  bounds, so run the suites once in a `Debug` build when adding indexing code.
 - **One kernel per routine.** Every kernel addresses its operands through
   `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
   `side='R'` are the same code with different strides. Register blocking is

@@ -1,13 +1,16 @@
 #ifndef CQR_MKL_EXT_H
 #define CQR_MKL_EXT_H
 
-/* cqr_mkl_ext.h -- batched QR, Cholesky, and triangular solve for matrices in
- * Intel MKL's Compact format.
+/* cqr_mkl_ext.h -- batched QR, Cholesky, LDL^T, and triangular solve for
+ * matrices in Intel MKL's Compact format.
  *
- *   cqr_mkl_?geqrf_compact -- QR factorization of a Compact-format batch
- *   cqr_mkl_?ormqr_compact -- apply Q (or Q^T) of a Compact-format QR
- *   cqr_mkl_?potrf_compact -- Cholesky factorization of an SPD Compact-format batch
- *   cqr_mkl_?trsm_compact  -- triangular solve op(A) X = alpha B (and variants)
+ *   cqr_mkl_?geqrf_compact   -- QR factorization of a Compact-format batch
+ *   cqr_mkl_?ormqr_compact   -- apply Q (or Q^T) of a Compact-format QR
+ *   cqr_mkl_?potrf_compact   -- Cholesky factorization of an SPD Compact-format batch
+ *   cqr_mkl_?sytrfnp_compact -- unpivoted LDL^T factorization of a symmetric batch
+ *   cqr_mkl_?sytrsnp_compact -- solve A X = B from that LDL^T factor
+ *   cqr_mkl_?sysvnp_compact  -- LDL^T factor + solve, fused per group
+ *   cqr_mkl_?trsm_compact    -- triangular solve op(A) X = alpha B (and variants)
  *
  * All take MKL's MKL_LAYOUT + MKL_COMPACT_PACK interface, so they drop into the
  * MKL compact ecosystem (pack with mkl_?gepack_compact, take `format` from
@@ -16,12 +19,16 @@
  * cqr_mkl_?potrf_compact and cqr_mkl_?trsm_compact are signature- and
  * storage-compatible alternatives to the MKL routines of the same name, so they
  * mix freely with them; cqr_mkl_?ormqr_compact is the apply-Q step MKL omits
- * (LAPACK ?ormqr plus the layout/format/nm arguments). Together they factor and
- * solve batched systems entirely in the compact format:
+ * (LAPACK ?ormqr plus the layout/format/nm arguments), and the three symmetric
+ * "np" routines are the unpivoted LDL^T MKL has no compact form of at all (the
+ * suffix follows MKL's own unpivoted mkl_?getrfnp_compact). Together they factor
+ * and solve batched systems entirely in the compact format:
  *
  *     cqr_mkl_dgeqrf_compact (..., A -> H, tau);       // A = Q R
  *     cqr_mkl_dormqr_compact('L','T', ..., H, tau, B); // B := Q^T B
  *     cqr_mkl_dtrsm_compact  (..., U, R, B);           // B := R^{-1} Q^T B = X
+ *
+ *     cqr_mkl_dsysvnp_compact(..., A -> (L, D), B);   // A = L D L^T; B := A^{-1} B
  *
  * Conventions shared by all routines:
  *   - No argument checking (compact routines skip it for vectorization); the
@@ -49,7 +56,8 @@
  *     parallelism is enabled (OMP_NUM_THREADS=8,2 with OMP_MAX_ACTIVE_LEVELS=2).
  *     See the note in cqr_compact.h.
  *
- * Per-routine parameter references: docs/cqr_mkl_d{geqrf,ormqr,potrf,trsm}_compact_design.md.
+ * Per-routine parameter references:
+ * docs/cqr_mkl_d{geqrf,ormqr,potrf,sytrfnp,trsm}_compact_design.md.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
@@ -97,6 +105,49 @@ void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double 
 void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
                             MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
                             MKL_INT nm);
+
+/* LDL^T factorization without pivoting of a batch of symmetric n x n matrices:
+ * A = L D L^T (MKL_LOWER) or A = U^T D U (MKL_UPPER; the transpose dual, as
+ * ?potrf's U^T U, not LAPACK ?sytrf's U D U^T). mkl_?potrf_compact's signature
+ * (MKL has no compact sytrf). On exit the diagonal holds D and the strict
+ * off-diagonal of the named triangle the unit L/U; the other triangle is
+ * untouched. No workspace, no ipiv, no singularity test: indefinite matrices
+ * factor (no sqrt), but a zero pivot -- a singular leading principal minor --
+ * poisons its lane with Inf/NaN rather than reporting info = j. */
+void cqr_mkl_dsytrfnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
+                              MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                              MKL_INT nm);
+
+void cqr_mkl_ssytrfnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
+                              MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                              MKL_INT nm);
+
+/* Solve A X = B from the factor of cqr_mkl_?sytrfnp_compact (same uplo), in
+ * place: L z = B; D w = z; L^T X = w (MKL_LOWER), or U^T z = B; D w = z;
+ * U X = w (MKL_UPPER). LAPACK ?sytrs minus ipiv, plus layout/format/nm. B is
+ * n x nrhs with ldbp >= n (column-major) or >= nrhs (row-major); the factor is
+ * not modified. A zero D(i) yields Inf/NaN in that lane's X, not an error. */
+void cqr_mkl_dsytrsnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                              const double *ap, MKL_INT ldap, double *bp, MKL_INT ldbp,
+                              MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_ssytrsnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                              const float *ap, MKL_INT ldap, float *bp, MKL_INT ldbp,
+                              MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
+
+/* Symmetric solve A X = B in one pass: cqr_mkl_?sytrfnp_compact followed by
+ * cqr_mkl_?sytrsnp_compact, fused per group of V matrices so each factor is
+ * solved with while cache-resident and the whole solve is one threaded group
+ * loop. LAPACK ?sysv minus ipiv and workspace. On exit ap holds the (D, L|U)
+ * factor exactly as ?sytrfnp leaves it and bp holds X; the result is
+ * bit-identical to the two separate calls. */
+void cqr_mkl_dsysvnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                             double *ap, MKL_INT ldap, double *bp, MKL_INT ldbp,
+                             MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
+
+void cqr_mkl_ssysvnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,
+                             float *ap, MKL_INT ldap, float *bp, MKL_INT ldbp,
+                             MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm);
 
 /* Triangular solve with multiple right-hand sides, in place:
  *     op(A) X = alpha B  (MKL_LEFT)   or   X op(A) = alpha B  (MKL_RIGHT),

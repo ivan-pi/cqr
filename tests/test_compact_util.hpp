@@ -11,6 +11,7 @@
 #define TEST_COMPACT_UTIL_HPP
 
 #include "cqr_compact.h"
+#include "cqr_matrix_view.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -19,6 +20,12 @@
 #include <algorithm>
 
 namespace cqr::test {
+
+// The dense strided view every suite addresses its host-side matrices through
+// (src/cqr_matrix_view.hpp); the kernels' BatchView is the compact analogue.
+using cqr::detail::ConstMatrixView;
+using cqr::detail::mat_view;
+using cqr::detail::MatrixView;
 
 // One RNG per test binary (each test is a separate executable, so there is no
 // cross-test coupling); the seed only has to be fixed, not unique.
@@ -154,8 +161,8 @@ void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
 }
 
 // ----------------------- portable C API, by scalar type ------------
-// compact<T>::geqrf / ormqr / potrf / trsm forward to the d/s entry points of
-// cqr_compact.h, so the templated suites call one name for both precisions;
+// compact<T>::geqrf / ormqr / potrf / sytrfnp / sytrsnp / sysvnp / trsm forward
+// to the d/s entry points of cqr_compact.h, so the templated suites call one name for both precisions;
 // compact<T>::name labels their output.
 
 template <class T> struct compact;
@@ -172,6 +179,14 @@ template <> struct compact<T> {                                                 
     { return p##ormqr_compact(tr, m, nrhs, k, a, lda, tau, b, ldb, V, nm); }               \
     static int potrf(char lay, char up, int n, T *a, int ld, int V, int nm)                \
     { return p##potrf_compact(lay, up, n, a, ld, V, nm); }                                 \
+    static int sytrfnp(char lay, char up, int n, T *a, int ld, int V, int nm)              \
+    { return p##sytrfnp_compact(lay, up, n, a, ld, V, nm); }                               \
+    static int sytrsnp(char lay, char up, int n, int nrhs, const T *a, int lda, T *b,      \
+                       int ldb, int V, int nm)                                             \
+    { return p##sytrsnp_compact(lay, up, n, nrhs, a, lda, b, ldb, V, nm); }                \
+    static int sysvnp(char lay, char up, int n, int nrhs, T *a, int lda, T *b, int ldb,    \
+                      int V, int nm)                                                       \
+    { return p##sysvnp_compact(lay, up, n, nrhs, a, lda, b, ldb, V, nm); }                 \
     static int trsm(char lay, char si, char up, char tr, char di, int m, int n, T alpha,   \
                     const T *a, int lda, T *b, int ldb, int V, int nm)                     \
     { return p##trsm_compact(lay, si, up, tr, di, m, n, alpha, a, lda, b, ldb, V, nm); }   \
@@ -243,6 +258,54 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
             A[j + (size_t)i * n] = A[i + (size_t)j * n];
 }
 
+// Symmetric *indefinite* n x n matrix (column-major) with a known-good
+// unpivoted LDL^T: A = L D L^T built from a random unit-lower L (entries in
+// (-0.5, 0.5), so element growth in re-factorization stays mild) and a diagonal
+// D with |d| in [0.5, 2.5) and mixed signs (d_1 is forced negative for n >= 2,
+// so the matrix is genuinely indefinite -- Cholesky would fail on it). Every
+// leading principal minor is prod(d_1..d_k) != 0, so the unpivoted
+// factorization exists and is exactly this (L, D). As in gen_spd, the upper
+// triangle is mirrored from the lower so A is symmetric to the bit.
+template <class T> void gen_sym_ldlt(T *A, int n)
+{
+    std::vector<T> Ls((size_t)n * n, T(0)), d(n);
+    const auto L = mat_view(Ls.data(), n, n);
+    const auto Av = mat_view(A, n, n);
+    for (int j = 0; j < n; ++j) {
+        L(j, j) = T(1);
+        for (int i = j + 1; i < n; ++i)
+            L(i, j) = T(0.5) * frand<T>();
+        T mag = T(0.5) + std::abs(frand<T>()) * T(2);
+        d[j] = (j == 1 || frand<T>() < 0) ? -mag : mag; // mixed signs, d_1 < 0
+    }
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i < n; ++i) {
+            T s = 0;
+            for (int l = 0; l <= j; ++l)
+                s += L(i, l) * d[l] * L(j, l);
+            Av(i, j) = s;
+        }
+    for (int j = 0; j < n; ++j)
+        for (int i = j + 1; i < n; ++i)
+            Av(j, i) = Av(i, j);
+}
+
+// Element (i,j) of an n x n unpivoted LDL^T factor as stored by ?sytrfnp:
+// A(i,j) = sum_{l <= min(i,j)} F(i,l) D(l) F(j,l) with F the unit factor read
+// from the strict lower triangle (uplo 'L') or, for the transpose dual
+// A = U^T D U, from the strict upper one (F(i,l) = U(l,i)). `at(i,j)` reads the
+// stored factor. Shared by the reconstruction checks of both ?sytrfnp suites.
+template <class At> double ldlt_reconstruct(const At &at, int i, int j, bool upper)
+{
+    double s = 0;
+    for (int l = 0; l <= std::min(i, j); ++l) {
+        const double fi = (l == i) ? 1.0 : (upper ? (double)at(l, i) : (double)at(i, l));
+        const double fj = (l == j) ? 1.0 : (upper ? (double)at(l, j) : (double)at(j, l));
+        s += fi * (double)at(l, l) * fj;
+    }
+    return s;
+}
+
 // Fill one order-s triangular matrix (leading dim s) in the given layout:
 // random in the referenced triangle, the diagonal boosted away from zero for
 // conditioning, the other (never-referenced) triangle zeroed. Shared by the
@@ -312,6 +375,8 @@ template <class T> class MatrixBatch {
     int cols()  const { return cols_; }
     T       *operator[](int idx)       { return a_.data() + (size_t)idx * rows_ * cols_; }
     const T *operator[](int idx) const { return a_.data() + (size_t)idx * rows_ * cols_; }
+    MatrixView<T>       view(int idx)       { return mat_view((*this)[idx], rows_, cols_); }
+    ConstMatrixView<T>  view(int idx) const { return mat_view((*this)[idx], rows_, cols_); }
     T       &operator()(int idx, int i, int j)       { return (*this)[idx][i + (size_t)j * rows_]; }
     const T &operator()(int idx, int i, int j) const { return (*this)[idx][i + (size_t)j * rows_]; }
     // clang-format on

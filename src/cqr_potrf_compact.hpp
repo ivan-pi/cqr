@@ -106,11 +106,10 @@ void potrf_compact(bool rowmajor, bool upper, Int n, T *ap, Int ldap, Int nm)
     for_each_group<V>(
         nm,
         [&](Int g) {
-            /* The kernel factors the lower triangle of the view it is given: A
-         * itself for uplo lower, A^T for upper (U^T U = A is L L^T of A^T = A). */
-            auto A = make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap);
-            if (upper) A = A.transposed();
-            potrf_compact_group<T, V, Int>(n, A);
+            /* the kernel factors the lower triangle of the view it is given: A
+             * itself for uplo lower, A^T for upper (U^T U = A is L L^T of A^T) */
+            potrf_compact_group<T, V, Int>(
+                n, make_lower_view<T, V, Int>(ap + g * str_a, rowmajor, upper, ldap));
         },
         (double)n * n * n / 3.0 * V /* ~potf2 flops per group */);
 }

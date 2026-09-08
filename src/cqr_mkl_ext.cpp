@@ -11,7 +11,8 @@
  * here it is a single scalar status, 0 on success, or -1 for an unrecognized
  * format (the one failure dispatch can detect). ?geqrf and ?ormqr answer the
  * lwork = -1 workspace query with 1: the kernels need no scratch. ?trsm has no
- * info and no workspace, like the BLAS ?trsm it batches.
+ * info and no workspace, like the BLAS ?trsm it batches; ?potrf, ?sytrfnp,
+ * ?sytrsnp and ?sysvnp have info but no workspace.
  *
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
  */
@@ -20,6 +21,9 @@
 #include "cqr_geqrf_compact.hpp"
 #include "cqr_ormqr_compact.hpp"
 #include "cqr_potrf_compact.hpp"
+#include "cqr_sytrfnp_compact.hpp"
+#include "cqr_sytrsnp_compact.hpp"
+#include "cqr_sysvnp_compact.hpp"
 #include "cqr_trsm_compact.hpp"
 
 namespace {
@@ -93,6 +97,50 @@ void potrf(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap,
 }
 
 template <typename T>
+void sytrfnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap,
+             MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    if (n == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool upper = (uplo == MKL_UPPER);
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::sytrfnp_compact<T, decltype(v)::value, MKL_INT>(
+                     rowmajor, upper, n, ap, ldap, nm);
+             }));
+}
+
+template <typename T>
+void sytrsnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs, const T *ap,
+             MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_INT *info, MKL_COMPACT_PACK format,
+             MKL_INT nm)
+{
+    if (n == 0 || nrhs == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool upper = (uplo == MKL_UPPER);
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::sytrsnp_compact<T, decltype(v)::value, MKL_INT>(
+                     rowmajor, upper, n, nrhs, ap, ldap, bp, ldbp, nm);
+             }));
+}
+
+template <typename T>
+void sysvnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs, T *ap,
+            MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_INT *info, MKL_COMPACT_PACK format,
+            MKL_INT nm)
+{
+    if (n == 0 || nrhs == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool upper = (uplo == MKL_UPPER);
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::sysvnp_compact<T, decltype(v)::value, MKL_INT>(
+                     rowmajor, upper, n, nrhs, ap, ldap, bp, ldbp, nm);
+             }));
+}
+
+template <typename T>
 void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE transa,
           MKL_DIAG diag, MKL_INT m, MKL_INT n, T alpha, const T *ap, MKL_INT ldap, T *bp,
           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
@@ -138,6 +186,25 @@ void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE transa,
                                     MKL_COMPACT_PACK format, MKL_INT nm)                 \
     {                                                                                    \
         potrf(layout, uplo, n, ap, ldap, info, format, nm);                              \
+    }                                                                                    \
+    void cqr_mkl_##p##sytrfnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n,       \
+                                      T *ap, MKL_INT ldap, MKL_INT *info,                \
+                                      MKL_COMPACT_PACK format, MKL_INT nm)               \
+    {                                                                                    \
+        sytrfnp(layout, uplo, n, ap, ldap, info, format, nm);                            \
+    }                                                                                    \
+    void cqr_mkl_##p##sytrsnp_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n,       \
+                                      MKL_INT nrhs, const T *ap, MKL_INT ldap, T *bp,    \
+                                      MKL_INT ldbp, MKL_INT *info,                       \
+                                      MKL_COMPACT_PACK format, MKL_INT nm)               \
+    {                                                                                    \
+        sytrsnp(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, info, format, nm);            \
+    }                                                                                    \
+    void cqr_mkl_##p##sysvnp_compact(                                                    \
+        MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs, T *ap, MKL_INT ldap,  \
+        T *bp, MKL_INT ldbp, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)         \
+    {                                                                                    \
+        sysvnp(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, info, format, nm);             \
     }                                                                                    \
     void cqr_mkl_##p##trsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,      \
                                    MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m,       \

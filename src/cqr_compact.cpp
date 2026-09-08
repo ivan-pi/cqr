@@ -13,6 +13,9 @@
 #include "cqr_geqrf_compact.hpp"
 #include "cqr_ormqr_compact.hpp"
 #include "cqr_potrf_compact.hpp"
+#include "cqr_sytrfnp_compact.hpp"
+#include "cqr_sytrsnp_compact.hpp"
+#include "cqr_sysvnp_compact.hpp"
 #include "cqr_trsm_compact.hpp"
 
 #include <cassert>
@@ -99,6 +102,79 @@ int potrf(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
 }
 
 template <typename T>
+int sytrfnp(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
+{
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    const bool lo = opt(uplo, 'L'), up = opt(uplo, 'U');
+    if (!col && !row) return -1;
+    if (!lo && !up) return -2;
+    if (n < 0) return -3;
+    if (ldap < max1(n)) return -5;
+    if (!vlen_ok(V)) return -6;
+    if (nm < 0) return -7;
+    if (n == 0 || nm == 0) return 0;
+    assert(ap != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::sytrfnp_compact<T, decltype(v)::value>(row, up, n, ap, ldap, nm);
+    });
+    return 0;
+}
+
+/* ?sytrsnp_compact and ?sysvnp_compact share one signature (layout, uplo, n,
+ * nrhs, ap, ldap, bp, ldbp, V, nm) and hence one validation, in argument order:
+ * -1 layout, -2 uplo, -3 n, -4 nrhs, -6 ldap, -8 ldbp, -9 V, -10 nm. Sets the
+ * kernel flags. */
+inline int sytrs_args(char layout, char uplo, int n, int nrhs, int ldap, int ldbp, int V,
+                      int nm, bool &row, bool &up)
+{
+    const bool col = opt(layout, 'C'), lo = opt(uplo, 'L');
+    row = opt(layout, 'R');
+    up = opt(uplo, 'U');
+    if (!col && !row) return -1;
+    if (!lo && !up) return -2;
+    if (n < 0) return -3;
+    if (nrhs < 0) return -4;
+    if (ldap < max1(n)) return -6;
+    if (ldbp < max1(row ? nrhs : n)) return -8;
+    if (!vlen_ok(V)) return -9;
+    if (nm < 0) return -10;
+    return 0;
+}
+
+template <typename T>
+int sytrsnp(char layout, char uplo, int n, int nrhs, const T *ap, int ldap, T *bp,
+            int ldbp, int V, int nm)
+{
+    bool row, up;
+    if (int e = sytrs_args(layout, uplo, n, nrhs, ldap, ldbp, V, nm, row, up)) return e;
+    if (n == 0 || nrhs == 0 || nm == 0) return 0;
+    assert(ap != nullptr && bp != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::sytrsnp_compact<T, decltype(v)::value>(row, up, n, nrhs, ap, ldap,
+                                                            bp, ldbp, nm);
+    });
+    return 0;
+}
+
+template <typename T>
+int sysvnp(char layout, char uplo, int n, int nrhs, T *ap, int ldap, T *bp, int ldbp,
+           int V, int nm)
+{
+    bool row, up;
+    if (int e = sytrs_args(layout, uplo, n, nrhs, ldap, ldbp, V, nm, row, up)) return e;
+    if (n == 0 || nrhs == 0 || nm == 0) return 0;
+    assert(ap != nullptr && bp != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::sysvnp_compact<T, decltype(v)::value>(row, up, n, nrhs, ap, ldap, bp,
+                                                           ldbp, nm);
+    });
+    return 0;
+}
+
+template <typename T>
 int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n, T alpha,
          const T *ap, int ldap, T *bp, int ldbp, int V, int nm)
 {
@@ -151,6 +227,21 @@ int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n
     int p##potrf_compact(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)  \
     {                                                                                    \
         return potrf(layout, uplo, n, ap, ldap, V, nm);                                  \
+    }                                                                                    \
+    int p##sytrfnp_compact(char layout, char uplo, int n, T *ap, int ldap, int V,        \
+                           int nm)                                                       \
+    {                                                                                    \
+        return sytrfnp(layout, uplo, n, ap, ldap, V, nm);                                \
+    }                                                                                    \
+    int p##sytrsnp_compact(char layout, char uplo, int n, int nrhs, const T *ap,         \
+                           int ldap, T *bp, int ldbp, int V, int nm)                     \
+    {                                                                                    \
+        return sytrsnp(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, V, nm);                \
+    }                                                                                    \
+    int p##sysvnp_compact(char layout, char uplo, int n, int nrhs, T *ap, int ldap,      \
+                          T *bp, int ldbp, int V, int nm)                                \
+    {                                                                                    \
+        return sysvnp(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, V, nm);                 \
     }                                                                                    \
     int p##trsm_compact(char layout, char side, char uplo, char transa, char diag,       \
                         int m, int n, T alpha, const T *ap, int ldap, T *bp, int ldbp,   \

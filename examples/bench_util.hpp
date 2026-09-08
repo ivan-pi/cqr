@@ -1,9 +1,11 @@
 /* bench_util.hpp
  *
  * The harness shared by the benchmark programs: abort-on-failure checks, the
- * MKL compact-format lookups, pack-aligned std::vector storage, best-of-N
- * timing, the OpenMP thread count, and the factorization benchmarks' command
- * line (--size-sweep, --simdlen, [nmat] [reps]). Needs MKL headers only.
+ * MKL compact-format lookups, the dense MatrixView the pools are addressed
+ * through, pack-aligned std::vector storage, best-of-N
+ * timing, the OpenMP thread count, and the factorization / solve benchmarks'
+ * command line (--size-sweep, --simdlen, --nrhs, [nmat] [reps]). Needs MKL
+ * headers only.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
@@ -12,6 +14,7 @@
 #define CQR_BENCH_UTIL_HPP
 
 #include "cqr_mkl_ext.h"
+#include "cqr_matrix_view.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -30,7 +33,9 @@ namespace cqr::bench {
 
 using cqr::detail::compact_format_name; /* format -> "SSE"/"AVX"/"AVX512" */
 using cqr::detail::format_for_vlen;     /* interleave width -> pack format */
-using cqr::detail::vlen_for_format;     /* pack format -> interleave width */
+using cqr::detail::mat_view;            /* dense strided view (cqr_matrix_view.hpp) */
+using cqr::detail::MatrixView;
+using cqr::detail::vlen_for_format; /* pack format -> interleave width */
 
 /* Report and abort on the spot if cond is false. */
 inline void check(bool cond, const char *what)
@@ -91,13 +96,15 @@ inline int omp_threads()
     return nthreads;
 }
 
-/* Command line of the factorization benchmarks: positional [nmat] [reps], plus
- * --size-sweep=nmin:nmax[:stride] (cqr-only scan) and --simdlen=2|4|8 (force the
- * interleave width instead of the host default). The constructor parses and
- * validates and resolves the pack format; hold the object const. */
+/* Command line of the factorization and solve benchmarks: positional [nmat]
+ * [reps], plus --size-sweep=nmin:nmax[:stride] (cqr-only scan), --simdlen=2|4|8
+ * (force the interleave width instead of the host default) and --nrhs=k (right-
+ * hand sides; the factorization benchmarks ignore it). The constructor parses
+ * and validates and resolves the pack format; hold the object const. */
 struct CmdArgs {
     int nmat = 512;
     int reps = 3;
+    int nrhs = 1;
     bool sweep = false;
     int sweep_min = 0, sweep_max = 0, sweep_step = 1;
     MKL_COMPACT_PACK fmt; /* the host's widest, or the --simdlen one */
@@ -117,14 +124,16 @@ struct CmdArgs {
             }
             else if (std::strncmp(argv[i], "--simdlen=", 10) == 0)
                 simdlen = std::atoi(argv[i] + 10);
+            else if (std::strncmp(argv[i], "--nrhs=", 7) == 0)
+                nrhs = std::atoi(argv[i] + 7);
             else
                 pos.push_back(argv[i]);
         }
         if (!pos.empty()) nmat = std::atoi(pos[0]);
         if (pos.size() > 1) reps = std::atoi(pos[1]);
-        if (!(nmat > 0 && reps > 0)) {
+        if (!(nmat > 0 && reps > 0 && nrhs > 0)) {
             std::printf("usage: %s [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8] "
-                        "[nmat>0] [reps>0]\n",
+                        "[--nrhs=k>0] [nmat>0] [reps>0]\n",
                         prog);
             std::exit(1);
         }
