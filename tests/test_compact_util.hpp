@@ -11,6 +11,7 @@
 #define TEST_COMPACT_UTIL_HPP
 
 #include "cqr_compact.h"
+#include "cqr_compact_common.hpp"
 #include "cqr_matrix_view.hpp"
 
 #include <cassert>
@@ -25,10 +26,17 @@
 namespace cqr::test {
 
 // The dense strided view every suite addresses its host-side matrices through
-// (src/cqr_matrix_view.hpp); the kernels' BatchView is the compact analogue.
+// (src/cqr_matrix_view.hpp), and the compact analogue the kernels use, which
+// the pack/unpack helpers below address the interleaved side through
+// (src/cqr_compact_common.hpp).
 using cqr::detail::ConstMatrixView;
 using cqr::detail::mat_view;
 using cqr::detail::MatrixView;
+
+using cqr::detail::for_vlen;
+using cqr::detail::group_stride;
+using cqr::detail::make_const_view;
+using cqr::detail::make_view;
 
 // The scalar a view addresses. Helpers that only read take the view type
 // itself, so one signature serves MatrixView<T> and ConstMatrixView<T> (which
@@ -409,31 +417,43 @@ template <class T> class MatrixBatch {
 };
 
 // Compact pack/unpack (matches mkl_?gepack_compact). group g = idx/V, slot
-// v = idx%V; element (i,j) of matrix idx lives at, per layout,
-//   col-major: p[g*ldp*cols*V + (j*ldp + i)*V + v]
-//   row-major: p[g*ldp*rows*V + (i*ldp + j)*V + v]
+// v = idx%V; element (i,j) of every matrix in a group is one V-wide pack, and
+// the packs of a group sit at the leading dimension ldp in the given layout.
 // Padded slots (idx >= nm) carry the identity.
 //
-// The compact side keeps its offset spelled out: the interleaved layout is not
-// a dense 2-D matrix, and this formula is the thing under test -- writing it
-// through the kernels' own BatchView would check the library against itself.
-// The dense side goes through MatrixBatch, hence through MatrixView.
+// Both sides are addressed through the project's views: the dense side through
+// MatrixBatch (hence MatrixView), the interleaved side through the kernels'
+// own BatchView, whose element is the pack and whose strides are in packs --
+// `P(i, j)[v]` is element (i,j) of slot v. The layout is the view's strides,
+// so one body serves column-major and row-major, and the group offset is the
+// library's group_stride. BatchView is templated on the interleave width, so
+// for_vlen turns the runtime V into the compile-time one (2, 4, 8 or 16 --
+// the widths the C API accepts).
+//
+// The library and its tests are one internal codebase and share these views on
+// purpose; what makes the suites independent of the kernels is that they
+// compute the *answers* independently (scalar LAPACK references, dense
+// LAPACK/MKL cross-checks), not that they re-derive the addressing.
 template <class T>
 void pack_compact(const MatrixBatch<T> &Mk, T *p, int ldp, int V, bool rowmajor = false)
 {
     const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
     const int ng = (nm + V - 1) / V;
-    const size_t gstride = (size_t)ldp * (rowmajor ? m : n) * V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    p[g * gstride + off * V + v] =
-                        (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
-                }
+    const std::size_t gstride = group_stride(rowmajor, ldp, m, n, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P = make_view<T, VV>(p + (std::size_t)g * gstride, rowmajor, ldp);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < m; ++i)
+                        P(i, j)[v] = (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 template <class T>
@@ -441,17 +461,23 @@ void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V, bool rowmajo
 {
     const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
     const int ng = (nm + V - 1) / V;
-    const size_t gstride = (size_t)ldp * (rowmajor ? m : n) * V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    Mk(idx, i, j) = p[g * gstride + off * V + v];
-                }
+    const std::size_t gstride = group_stride(rowmajor, ldp, m, n, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P =
+                make_const_view<T, VV>(p + (std::size_t)g * gstride, rowmajor, ldp);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                if (idx >= nm) continue;
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < m; ++i)
+                        Mk(idx, i, j) = P(i, j)[v];
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 // A tau batch (k scalars per matrix) is packed as k x 1 matrices; padded slots
@@ -459,25 +485,41 @@ void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V, bool rowmajo
 template <class T> void pack_tau(const MatrixBatch<T> &tau, T *tp, int V)
 {
     const int k = tau.rows(), nm = tau.count(), ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int kk = 0; kk < k; ++kk)
-                tp[(size_t)g * k * V + (size_t)kk * V + v] =
-                    (idx < nm) ? tau[idx][kk] : T(0);
+    const std::size_t gstride = group_stride(false, k, k, 1, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P = make_view<T, VV>(tp + (std::size_t)g * gstride, false, k);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                for (int kk = 0; kk < k; ++kk)
+                    P(kk, 0)[v] = (idx < nm) ? tau[idx][kk] : T(0);
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 template <class T> void unpack_tau(MatrixBatch<T> &tau, const T *tp, int V)
 {
     const int k = tau.rows(), nm = tau.count(), ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int kk = 0; kk < k; ++kk)
-                tau[idx][kk] = tp[(size_t)g * k * V + (size_t)kk * V + v];
+    const std::size_t gstride = group_stride(false, k, k, 1, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P =
+                make_const_view<T, VV>(tp + (std::size_t)g * gstride, false, k);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                if (idx >= nm) continue;
+                for (int kk = 0; kk < k; ++kk)
+                    tau[idx][kk] = P(kk, 0)[v];
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 } // namespace cqr::test
