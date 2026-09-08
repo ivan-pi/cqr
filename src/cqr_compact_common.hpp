@@ -7,7 +7,8 @@
  *   BatchView             -- a strided 2-D view of one group of V interleaved
  *                            matrices; every kernel addresses its operands
  *                            through it, so one kernel serves every layout.
- *   make_view / make_const_view -- reinterpret a packed T buffer as such a view.
+ *   make_view / make_const_view -- view a packed T buffer for a layout and ld.
+ *   group_stride          -- scalars per group of V interleaved matrices.
  *   for_vlen              -- runtime interleave width -> compile-time V.
  *
  * V is the compact-format interleave width (the number of matrices whose
@@ -131,22 +132,35 @@ template <typename T, int V, typename Int = int, bool Const = false> struct Batc
 
     inline VT &operator()(Int i, Int j) const noexcept { return data[i * si + j * sj]; }
 
+    /* The same storage read as the transposed matrices: (i,j) -> (j,i). */
+    BatchView transposed() const noexcept { return {data, sj, si}; }
     BatchView<T, V, Int, true> as_const() const noexcept { return {data, si, sj}; }
 };
 template <typename T, int V, typename Int = int>
 using ConstBatchView = BatchView<T, V, Int, true>;
 
-/* Reinterpret a packed T buffer as a group view of V-wide pack elements (a const
- * view for read-only operands such as the reflector batch A). */
+/* View one group of matrices stored with leading dimension ld in the given
+ * layout: column-major has unit row stride, row-major unit column stride. A
+ * const view is for read-only operands such as the reflector batch A. */
 template <typename T, int V, typename Int = int>
-BatchView<T, V, Int> make_view(T *p, Int si, Int sj) noexcept
+BatchView<T, V, Int> make_view(T *p, bool rowmajor, Int ld) noexcept
 {
-    return {reinterpret_cast<typename pack<T, V>::type *>(p), si, sj};
+    return {reinterpret_cast<typename pack<T, V>::type *>(p), rowmajor ? ld : Int(1),
+            rowmajor ? Int(1) : ld};
 }
 template <typename T, int V, typename Int = int>
-ConstBatchView<T, V, Int> make_const_view(const T *p, Int si, Int sj) noexcept
+ConstBatchView<T, V, Int> make_const_view(const T *p, bool rowmajor, Int ld) noexcept
 {
-    return {reinterpret_cast<const typename pack<T, V>::type *>(p), si, sj};
+    return {reinterpret_cast<const typename pack<T, V>::type *>(p),
+            rowmajor ? ld : Int(1), rowmajor ? Int(1) : ld};
+}
+
+/* Scalars per group of V interleaved rows x cols matrices with leading dimension
+ * ld: ld times the complementary extent, times V. */
+template <typename Int>
+std::size_t group_stride(bool rowmajor, Int ld, Int rows, Int cols, int V) noexcept
+{
+    return (std::size_t)ld * (rowmajor ? rows : cols) * V;
 }
 
 /* Runtime interleave width -> compile-time instantiation: calls f with a

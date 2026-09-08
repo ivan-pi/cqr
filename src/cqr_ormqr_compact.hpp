@@ -138,23 +138,21 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
     const Int len = left ? m : n;
     const Int npanel = left ? n : m;
 
-    /* Element strides (in packs): column-major row step 1, column step ld;
-     * row-major flips. A is swept down its columns; for side='R' C is viewed
-     * transposed so its rows become the swept axis. */
-    const Int a_si = rowmajor ? ldap : 1, a_sj = rowmajor ? 1 : ldap;
-    const Int c_row = rowmajor ? ldcp : 1, c_col = rowmajor ? 1 : ldcp;
-    const Int c_si = left ? c_row : c_col, c_sj = left ? c_col : c_row;
-
-    /* Group strides (in scalars): ld times the complementary extent. */
-    const std::size_t str_a = (std::size_t)ldap * (rowmajor ? len : k) * V;
+    const std::size_t str_a = group_stride(rowmajor, ldap, len, k, V);
     const std::size_t str_t = (std::size_t)k * V;
-    const std::size_t str_c = (std::size_t)ldcp * (rowmajor ? m : n) * V;
+    const std::size_t str_c = group_stride(rowmajor, ldcp, m, n, V);
 
     const Int ngroups = (nm + V - 1) / V;
-    for (Int g = 0; g < ngroups; ++g)
+    for (Int g = 0; g < ngroups; ++g) {
+        /* A is swept down its columns. For side='R' the reflectors act on the
+         * rows of C, so the kernel is handed C^T. */
+        auto C = make_view<T, V, Int>(cp + g * str_c, rowmajor, ldcp);
+        if (!left) C = C.transposed();
         ormqr_compact_group<T, V, Int>(
-            dir, len, npanel, k, make_const_view<T, V, Int>(ap + g * str_a, a_si, a_sj),
-            taup + g * str_t, make_view<T, V, Int>(cp + g * str_c, c_si, c_sj));
+            dir, len, npanel, k,
+            make_const_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t,
+            C);
+    }
 }
 
 } /* namespace detail */

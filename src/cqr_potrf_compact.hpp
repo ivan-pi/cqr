@@ -17,11 +17,11 @@
  *     A(i,j) *= invd              for i > j             (scale pivot column)
  *     A(i,jj)-= A(i,j)*A(jj,j)    for jj > j, i >= jj   (rank-1 trailing update)
  *
- * Only the lower trapezoid of the *view* is touched. The four (layout, uplo)
- * cases pair by transpose duality: the view presents the named triangle's
- * storage as a lower triangle (column-major lower and row-major upper are the
- * contiguous pairs, si = 1; the other two have si = ldap), so the strictly-
- * opposite triangle passes through untouched as ?potrf requires.
+ * Only the lower trapezoid of the *view* is touched: the kernel gets A for uplo
+ * lower and A^T for upper (A symmetric, so U = L(A^T)^T lands in the upper
+ * storage), and the strictly-opposite triangle passes through untouched as
+ * ?potrf requires. Column-major lower and row-major upper are the contiguous
+ * cases (unit row stride); the other two are strided.
  *
  * Positive-definiteness is assumed, not enforced (design section 6.2): a
  * non-SPD lane gets NaN/Inf in its factor; there is no info = j early exit.
@@ -102,16 +102,16 @@ void potrf_compact(bool rowmajor, bool upper, Int n, T *ap, Int ldap, Int nm)
 {
     assert(nm >= 1 && n >= 0);
 
-    /* The kernel factors the view's lower triangle. Column-major lower is the
-     * view itself; each other case is its transpose dual (A symmetric), so the
-     * view of the named triangle's storage is built by swapping the strides. */
-    const bool lower_colmajor = (rowmajor == upper);
-    const Int si = lower_colmajor ? 1 : ldap, sj = lower_colmajor ? ldap : 1;
-    const std::size_t str_a = (std::size_t)ldap * n * V;
+    const std::size_t str_a = group_stride(rowmajor, ldap, n, n, V);
 
     const Int ngroups = (nm + V - 1) / V;
-    for (Int g = 0; g < ngroups; ++g)
-        potrf_compact_group<T, V, Int>(n, make_view<T, V, Int>(ap + g * str_a, si, sj));
+    for (Int g = 0; g < ngroups; ++g) {
+        /* The kernel factors the lower triangle of the view it is given: A
+         * itself for uplo lower, A^T for upper (U^T U = A is L L^T of A^T = A). */
+        auto A = make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap);
+        if (upper) A = A.transposed();
+        potrf_compact_group<T, V, Int>(n, A);
+    }
 }
 
 } /* namespace detail */

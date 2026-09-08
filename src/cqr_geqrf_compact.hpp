@@ -126,14 +126,13 @@ void geqrf_compact(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm
     assert(nm >= 1 && m >= 0 && n >= 0);
 
     const Int k = (m < n) ? m : n;
-    const Int si = rowmajor ? ldap : 1, sj = rowmajor ? 1 : ldap;
-    const std::size_t str_a = (std::size_t)ldap * (rowmajor ? m : n) * V;
+    const std::size_t str_a = group_stride(rowmajor, ldap, m, n, V);
     const std::size_t str_t = (std::size_t)k * V;
 
     const Int ngroups = (nm + V - 1) / V;
     for (Int g = 0; g < ngroups; ++g)
-        geqrf_compact_group<T, V, Int>(m, n, make_view<T, V, Int>(ap + g * str_a, si, sj),
-                                       taup + g * str_t);
+        geqrf_compact_group<T, V, Int>(
+            m, n, make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t);
 }
 
 } /* namespace detail */

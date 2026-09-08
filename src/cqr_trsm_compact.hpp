@@ -237,19 +237,9 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
     /* A is the order-s triangular factor: s = m (left) or n (right). */
     const Int s = left ? m : n;
 
-    /* element strides (in VT units). Column-major: a row step is 1 and a column
-     * step is ld; row-major flips that. A is s x s, B is m x n. */
-    const Int a_row = rowmajor ? ldap : 1;
-    const Int a_col = rowmajor ? 1 : ldap;
-    const Int b_row = rowmajor ? ldbp : 1;
-    const Int b_col = rowmajor ? 1 : ldbp;
-
-    /* group strides (in scalar T units): elements packed per matrix is
-     * ld*(complementary extent) -- for A (s x s) that is ldap*s either way;
-     * for B (m x n) it is ldbp*n column-major, ldbp*m row-major. */
-    const std::size_t str_a = (std::size_t)ldap * s * V;
-    const std::size_t str_b =
-        (rowmajor ? (std::size_t)ldbp * m : (std::size_t)ldbp * n) * V;
+    /* A is s x s, B is m x n. */
+    const std::size_t str_a = group_stride(rowmajor, ldap, s, s, V);
+    const std::size_t str_b = group_stride(rowmajor, ldbp, m, n, V);
 
     const Int ngroups = (nm + V - 1) / V;
 
@@ -259,7 +249,7 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
     if (alpha == T(0)) {
         using VT = typename pack<T, V>::type;
         for (Int g = 0; g < ngroups; ++g) {
-            auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, b_row, b_col);
+            auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
             for (Int j = 0; j < n; ++j)
                 for (Int i = 0; i < m; ++i)
                     B(i, j) = VT{};
@@ -275,8 +265,8 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
         else
             trsm_compact_group_strided<T, V, Int>(
                 left, upper, tran, unit, m, n, alpha,
-                make_const_view<T, V, Int>(a, a_row, a_col),
-                make_view<T, V, Int>(b, b_row, b_col));
+                make_const_view<T, V, Int>(a, rowmajor, ldap),
+                make_view<T, V, Int>(b, rowmajor, ldbp));
     }
 }
 
