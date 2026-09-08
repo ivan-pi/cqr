@@ -142,10 +142,7 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
     const std::size_t str_t = (std::size_t)k * V;
     const std::size_t str_c = group_stride(rowmajor, ldcp, m, n, V);
 
-    const Int ngroups = (nm + V - 1) / V;
-    const double flops = 4.0 * k * len * npanel * V * ngroups; /* ~orm2r, all lanes */
-    CQR_OMP_PARALLEL_GROUPS(ngroups, flops)
-    for (Int g = 0; g < ngroups; ++g) {
+    for_each_group<V>(nm, 4.0 * k * len * npanel * V /* ~orm2r */, [&](Int g) {
         /* A is swept down its columns. For side='R' the reflectors act on the
          * rows of C, so the kernel is handed C^T. */
         auto C = make_view<T, V, Int>(cp + g * str_c, rowmajor, ldcp);
@@ -154,7 +151,7 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
             dir, len, npanel, k,
             make_const_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t,
             C);
-    }
+    });
 }
 
 } /* namespace detail */

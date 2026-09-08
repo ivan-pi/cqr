@@ -66,11 +66,11 @@ and compact one-liners that clang-format would expand are fenced with
   `aligned(alignof(T))`; always name it as `typename pack<T,V>::type` and never
   pass it as a template *argument* (clang strips typedef alignment there and
   emits aligned loads that fault on 16-byte-aligned buffers -- issue #34).
-- **Threading over groups.** Every all-groups driver wraps its group loop in
-  `CQR_OMP_PARALLEL_GROUPS(ngroups, flops)` (a static-schedule `omp parallel
-  for` on a team of at most one thread per group, gated by `parallel_groups`,
-  all in `cqr_compact_common.hpp`); `flops` is the driver's one-line estimate
-  of the call's total work. Keep new drivers on that macro; do not add
+- **Threading over groups.** Every all-groups driver is a call to
+  `for_each_group<V>(nm, flops_per_group, body)` (`cqr_compact_common.hpp`):
+  a static-schedule `omp parallel for` on a team of at most one thread per
+  group when `parallel_groups` says the call is worth a fork, otherwise a plain
+  loop that never enters the OpenMP runtime. Keep new drivers on it; do not add
   threading inside a group kernel. The gate refuses when nesting is exhausted
   (that is what makes the library compose with a caller's outer parallel
   loop), when there is a single group, or below `parallel_min_flops`.

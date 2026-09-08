@@ -10,7 +10,7 @@
  *   make_view / make_const_view -- view a packed T buffer for a layout and ld.
  *   group_stride          -- scalars per group of V interleaved matrices.
  *   for_vlen              -- runtime interleave width -> compile-time V.
- *   parallel_groups / CQR_OMP_PARALLEL_GROUPS -- OpenMP over the group loop.
+ *   for_each_group        -- the loop over groups, threaded with OpenMP.
  *
  * V is the compact-format interleave width (the number of matrices whose
  * element (i,j) is stored contiguously). It does NOT need to match the hardware
@@ -186,22 +186,26 @@ template <typename F> bool for_vlen(int V, F &&f)
 }
 
 /* ------------------------------------------------------------------ */
-/* Threading over groups.                                              */
+/* for_each_group: the loop over groups, threaded with OpenMP.         */
 /*                                                                     */
-/* Every all-groups driver runs its group loop as                      */
-/*     CQR_OMP_PARALLEL_GROUPS(ngroups, flops)                         */
-/*     for (Int g = 0; g < ngroups; ++g) ...                           */
-/* which, built with OpenMP, is a static-schedule `omp parallel for`   */
-/* over a team of min(ngroups, omp_get_max_threads()) threads -- no    */
-/* thread ever idles on a group count -- gated by parallel_groups():   */
-/* at least two groups, more than one thread available, and enough    */
-/* work in the whole call to pay for the fork/join. `flops` is the     */
-/* driver's estimate of the call's total arithmetic, all lanes. The    */
-/* threshold parallel_min_flops comes from a measured sweep (4 cores,  */
-/* AVX-512, gcc -O3): a fork/join costs 2-3 us, calls below ~1e5 flops */
-/* ran slower in parallel, and everything above 2e5 gained >= 1.4x, so */
-/* 2e5 is the default; override with -DCQR_OMP_MIN_FLOPS=... if your   */
-/* machine's fork cost differs.                                        */
+/* Every all-groups driver is                                          */
+/*     for_each_group<V>(nm, flops_per_group, [&](Int g) { ... });     */
+/* which runs body(g) for g = 0 .. ceil(nm/V)-1. Built with OpenMP the */
+/* loop is a static-schedule `omp parallel for` on a team of           */
+/* min(ngroups, omp_get_max_threads()) threads -- groups are           */
+/* independent and equal-sized, so a static schedule balances exactly  */
+/* and no thread ever idles -- but only when parallel_groups() says    */
+/* the call is worth a fork: at least two groups, more than one thread */
+/* available, and total work above parallel_min_flops. Otherwise it is */
+/* a plain serial loop that never enters the OpenMP runtime (a single  */
+/* group costs nothing beyond the gate's few ICV reads).               */
+/*                                                                     */
+/* parallel_min_flops was measured, not guessed: a fork/join costs     */
+/* 2-3 us on the 4-core AVX-512 box this was tuned on (gcc, libgomp);  */
+/* dgeqrf calls below ~1e5 flops ran slower in parallel and everything */
+/* above 2e5 gained 1.4-3.6x. The constant scales with fork cost times */
+/* single-core flop rate, so override -DCQR_OMP_MIN_FLOPS for a        */
+/* different runtime or machine.                                       */
 /*                                                                     */
 /* Composition: the gate first asks whether one more nesting level may */
 /* be active at all, then uses omp_get_max_threads(), the team size at */
@@ -218,11 +222,13 @@ template <typename F> bool for_vlen(int V, F &&f)
 #endif
 constexpr double parallel_min_flops = CQR_OMP_MIN_FLOPS;
 
+/* Is a call of `ngroups` groups and `flops` total work worth a parallel
+ * region here and now? Always false without OpenMP. */
 template <typename Int> inline bool parallel_groups(Int ngroups, double flops) noexcept
 {
 #ifdef _OPENMP
-    if (omp_get_active_level() >= omp_get_max_active_levels()) return false;
-    return ngroups >= 2 && omp_get_max_threads() > 1 && flops >= parallel_min_flops;
+    return omp_get_active_level() < omp_get_max_active_levels() && ngroups >= 2 &&
+           omp_get_max_threads() > 1 && flops >= parallel_min_flops;
 #else
     (void)ngroups;
     (void)flops;
@@ -230,28 +236,25 @@ template <typename Int> inline bool parallel_groups(Int ngroups, double flops) n
 #endif
 }
 
-/* Team size for the group loop: one thread per group at most. */
-template <typename Int> inline int parallel_team(Int ngroups) noexcept
+template <int V, typename Int, typename Body>
+void for_each_group(Int nm, double flops_per_group, Body &&body)
 {
+    const Int ngroups = (nm + V - 1) / V;
 #ifdef _OPENMP
-    const Int nthreads = omp_get_max_threads();
-    return static_cast<int>(ngroups < nthreads ? ngroups : nthreads);
+    if (parallel_groups(ngroups, flops_per_group * ngroups)) {
+        const Int team =
+            ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
+#pragma omp parallel for schedule(static) num_threads(team)
+        for (Int g = 0; g < ngroups; ++g)
+            body(g);
+        return;
+    }
 #else
-    (void)ngroups;
-    return 1;
+    (void)flops_per_group;
 #endif
+    for (Int g = 0; g < ngroups; ++g)
+        body(g);
 }
-
-#ifdef _OPENMP
-#define CQR_PRAGMA(x) _Pragma(#x)
-#define CQR_OMP_PARALLEL_GROUPS(ngroups, flops)                                          \
-    CQR_PRAGMA(omp parallel for schedule(static)                                         \
-                   if (::cqr::detail::parallel_groups(ngroups, flops))                   \
-                       num_threads(::cqr::detail::parallel_team(ngroups)))
-#else
-/* No OpenMP: consume the arguments so the drivers' estimates are not "unused". */
-#define CQR_OMP_PARALLEL_GROUPS(ngroups, flops) ((void)(ngroups), (void)(flops));
-#endif
 
 } /* namespace detail */
 } /* namespace cqr */

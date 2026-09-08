@@ -129,12 +129,10 @@ void geqrf_compact(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm
     const std::size_t str_a = group_stride(rowmajor, ldap, m, n, V);
     const std::size_t str_t = (std::size_t)k * V;
 
-    const Int ngroups = (nm + V - 1) / V;
-    const double flops = 2.0 * m * n * k * V * ngroups; /* ~geqr2, all lanes */
-    CQR_OMP_PARALLEL_GROUPS(ngroups, flops)
-    for (Int g = 0; g < ngroups; ++g)
+    for_each_group<V>(nm, 2.0 * m * n * k * V /* ~geqr2 */, [&](Int g) {
         geqrf_compact_group<T, V, Int>(
             m, n, make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t);
+    });
 }
 
 } /* namespace detail */

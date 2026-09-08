@@ -241,27 +241,22 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
     const std::size_t str_a = group_stride(rowmajor, ldap, s, s, V);
     const std::size_t str_b = group_stride(rowmajor, ldbp, m, n, V);
 
-    const Int ngroups = (nm + V - 1) / V;
-    /* ~substitution, all lanes: s^2 times the other extent; alpha = 0 is a store */
-    const double flops = (double)s * s * (left ? n : m) * V * ngroups;
-
     /* alpha == 0 is the BLAS ?trsm fast path: B := 0 with A untouched. Handle it
      * once here -- both group kernels then assume alpha != 0 -- zeroing each
      * group's m x n block through the same strided B view the solve uses. */
     if (alpha == T(0)) {
         using VT = typename pack<T, V>::type;
-        CQR_OMP_PARALLEL_GROUPS(ngroups, (double)m * n * V * ngroups)
-        for (Int g = 0; g < ngroups; ++g) {
+        for_each_group<V>(nm, (double)m * n * V /* stores */, [&](Int g) {
             auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
             for (Int j = 0; j < n; ++j)
                 for (Int i = 0; i < m; ++i)
                     B(i, j) = VT{};
-        }
+        });
         return;
     }
 
-    CQR_OMP_PARALLEL_GROUPS(ngroups, flops)
-    for (Int g = 0; g < ngroups; ++g) {
+    /* ~substitution: s^2 times the other extent, all lanes */
+    for_each_group<V>(nm, (double)s * s * (left ? n : m) * V, [&](Int g) {
         const T *a = ap + (std::size_t)g * str_a;
         T *b = bp + (std::size_t)g * str_b;
         if (left && !rowmajor)
@@ -271,7 +266,7 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
                 left, upper, tran, unit, m, n, alpha,
                 make_const_view<T, V, Int>(a, rowmajor, ldap),
                 make_view<T, V, Int>(b, rowmajor, ldbp));
-    }
+    });
 }
 
 } /* namespace detail */
