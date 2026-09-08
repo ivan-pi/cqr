@@ -69,7 +69,10 @@ pre-commit run --hook-stage manual clang-tidy --all-files
 ```
 
 Use the clang-tidy of the same LLVM release as that clang++. Only the
-translation units are listed; the headers are checked through them.
+translation units are listed; the headers are checked through them. CI runs
+this only on manual dispatch (`.github/workflows/clang-tidy.yml`), since the
+runner has to install MKL and an LLVM toolchain first; run it locally before
+pushing changes to the kernels.
 
 Hand-aligned tables and compact one-liners that clang-format would expand are
 fenced with `// clang-format off` / `// clang-format on`; leave those fences in

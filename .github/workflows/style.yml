@@ -3,10 +3,11 @@ name: Style
 # The hooks of .pre-commit-config.yaml over the whole tree: clang-format
 # for the C++ and the generic checks (whitespace, line endings, file
 # sizes). Kept apart from the build so that a stray blank line fails fast
-# and on its own.
+# and on its own; the job needs nothing but Python and takes seconds.
 #
-# clang-tidy is a second job: it needs a configured build tree for its
-# compile database, and takes longer.
+# clang-tidy lives in clang-tidy.yml and runs on manual dispatch only: it
+# needs a configured build tree, which means installing MKL and an LLVM
+# toolchain on the runner every time.
 on:
   push:
     branches: [main]
@@ -33,34 +34,3 @@ jobs:
 
       - name: Check
         run: pre-commit run --all-files --show-diff-on-failure
-
-  clang-tidy:
-    name: clang-tidy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # clang, clang-tidy and libomp-dev from the same LLVM release, so
-      # clang-tidy finds the omp.h of the compiler that configured the
-      # tree (.pre-commit-config.yaml explains); libmkl-dev so the MKL
-      # extension and its tests are in the compile database too.
-      - name: Install
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang clang-tidy libomp-dev libmkl-dev ninja-build
-          pip install pre-commit
-
-      # The compile database, not a build
-      - name: Configure
-        run: >
-          CXX=clang++ cmake -S . -B build-tidy -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DBLA_VENDOR=Intel10_64lp_seq
-
-      - name: Check
-        run: pre-commit run --hook-stage manual clang-tidy --all-files
