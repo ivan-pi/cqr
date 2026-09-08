@@ -55,12 +55,21 @@ shell that runs your binaries.
 
 Choose **B** when binaries must run *without* a sourced environment — CMake/ctest,
 CI jobs, scripts, anything spawned by a harness that does not inherit your shell.
-This is a real and verified difference, not a preference: a conda-built binary with
-`-Wl,-rpath,$CONDA_PREFIX/lib` runs in a completely clean environment, while an
-apt/oneAPI binary fails device discovery even with `-rpath` *and* `LD_LIBRARY_PATH`
-set, because `setvars.sh` also wires up OpenCL ICD registration and half a dozen
-component library directories (tcm, umf, tbb under a versioned `intel64/gcc4.8`
-subdirectory, debugger, …). Reproducing that by hand is a rabbit hole; don't try.
+
+The difference is measured, not stylistic. A conda-built binary linked with
+`-Wl,-rpath,$CONDA_PREFIX/lib` runs in a completely empty environment (`env -i`):
+one flag, done. An apt/oneAPI binary needs more than an rpath, because `setvars.sh`
+supplies two separate things — library paths *and* OpenCL ICD registration. Adding
+`-rpath` alone gets you past the loader error and straight into `No device of
+requested type available`.
+
+It *can* be made to work without sourcing: replicating the full `LD_LIBRARY_PATH`
+that `setvars.sh` sets — seven version-pinned directories (compiler, tbb under an
+`intel64/gcc4.8` subdirectory, tcm, umf, debugger, …) — does run correctly. The
+argument against it is brittleness, not impossibility: those paths carry component
+version numbers that shift on every toolkit update, so anything hard-coding them
+breaks silently at the next upgrade. If you go this route, source `setvars.sh` in the
+shell that runs the tests rather than reconstructing its environment by hand.
 
 The bundled script probes and installs whichever route is available:
 

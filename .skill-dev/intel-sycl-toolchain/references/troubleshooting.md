@@ -61,12 +61,20 @@ libraries loaded fine, but no SYCL device was discovered. Device discovery goes
 through OpenCL ICD registration, which is environment state, not a link-time
 property.
 
-The distinction matters most on the apt/oneAPI route: adding `-rpath` *and*
-`LD_LIBRARY_PATH` for the compiler and TBB directories is **not** sufficient — the
-binary still fails here. `setvars.sh` sets `OCL_ICD_FILENAMES` plus half a dozen
-component library directories (`tcm`, `umf`, `tbb/.../lib/intel64/gcc4.8`,
-`debugger`, …) and the versioned paths shift between releases. Reproducing it by
-hand is not worth the effort:
+The distinction matters most on the apt/oneAPI route, where the dependency is wider
+than it looks. Measured on a 2026.1 install, adding directories one at a time:
+
+| `LD_LIBRARY_PATH` contains | result |
+|---|---|
+| compiler `lib` only | fails |
+| + `tbb` | still fails |
+| + `tcm`, `umf` (the full setvars set, 7 entries) | **works** |
+
+So it is possible without sourcing — but each of those paths carries a component
+version number that changes on every toolkit update, so anything hard-coding them
+breaks silently at the next upgrade. `OCL_ICD_FILENAMES` alone does not help, since
+`libintelocl.so` itself needs `libtbb.so.12` resolvable. Source the environment
+instead of reconstructing it:
 
 ```bash
 source /opt/intel/oneapi/setvars.sh      # then run the binary in that shell
