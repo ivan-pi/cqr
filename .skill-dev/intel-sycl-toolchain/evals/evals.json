@@ -1,0 +1,26 @@
+{
+  "skill_name": "intel-sycl-toolchain",
+  "evals": [
+    {
+      "id": 0,
+      "name": "rpath-ctest-failure",
+      "prompt": "My SYCL tests compile fine but when I run them under ctest they all fail with: error while loading shared libraries: libsycl.so.9: cannot open shared object file: No such file or directory. Running the binary by hand in my terminal works. What's going on and how do I fix it properly so CI works too?",
+      "expected_output": "Diagnoses that the toolchain libs aren't on the default loader path and ctest doesn't inherit the activated shell; fixes with a baked-in -Wl,-rpath (not just LD_LIBRARY_PATH), ideally via target_link_options. Bonus: notes the route difference.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "esimd-cpu-reality",
+      "prompt": "Write me a small Intel ESIMD example (just a vector add is fine), compile it with icpx and run it here so I can confirm my setup works.",
+      "expected_output": "Compiles successfully, attempts to run, and correctly reports that ESIMD cannot run on this CPU-only box because it requires the ext_intel_esimd aspect (Intel GPU only) - rather than thrashing on the error or claiming success. Should verify with sycl-ls / an aspect query.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "route-choice-writeup",
+      "prompt": "A colleague is spinning up a fresh container for this project and needs icpx working. Write them a short setup note: exactly what to run, and if there's more than one way to install it, which one they should pick and why. Our tests run under ctest in CI.",
+      "expected_output": "Presents both routes (Intel apt repo and conda-forge), and recommends conda-forge BECAUSE ctest/CI runs binaries without a sourced environment and only the conda route produces relocatable binaries via -rpath. Mentions verifying with sycl-ls.",
+      "files": []
+    }
+  ]
+}
