@@ -108,13 +108,14 @@ underflow-safe scaling are out of scope for all of them.
   `LAPACKE_?geqrf`/`?gelqf`), and a cross-check vs the `mkl_?geqrf_compact ->
   cqr_mkl_?ormqr_compact -> mkl_?trsm_compact` pipeline on the same packed input.
 - **Benchmarked:** the `cqr-gels` path of `bench_qr_compact` (one call per
-  group in the caller's loop, next to the three-step chain). With the
-  benchmark's single right-hand side it matches the chain (`1.00x` geometric
-  mean over `n = 10..100`, 4 threads, AVX-512): the `O(n^3)` factorization
-  dominates and the fused apply-`Q^T` saves only an `O(n^2)` sweep, so the
-  fusion's gain scales with `nrhs`, not with `n`. What `gels` buys at `nrhs = 1`
-  is the one-call interface, the rectangular cases, and library-side threading
-  of the whole solve.
+  group in the caller's loop, next to the three-step chain), against per-matrix
+  `LAPACKE_dgels` as the one-call baseline: `3.2x` geometric mean over
+  `n = 10..100` (4 threads, AVX-512; `8.5x` at `n = 10`, `1.9x` at `n = 100`).
+  With the benchmark's single right-hand side it matches the three-step chain
+  (`1.00x`): the `O(n^3)` factorization dominates and the fused apply-`Q^T`
+  saves only an `O(n^2)` sweep, so the fusion's gain scales with `nrhs`, not
+  with `n`. What `gels` buys at `nrhs = 1` is the one-call interface, the
+  rectangular cases, and library-side threading of the whole solve.
 - **Scoped out (design 6.7):** no rank-deficiency test (`?gels`'s `info > 0`;
   a zero diagonal of `R` divides to `Inf`/`NaN` in that lane), no
   overflow/underflow rescaling of `A`/`B`, no pivoting.

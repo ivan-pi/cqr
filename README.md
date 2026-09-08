@@ -95,8 +95,10 @@ Results are independent of the thread count.
   -> `cqr_mkl_dtrsm_compact`) and with the one-call `cqr_mkl_dgels_compact`,
   both cross-checked against per-matrix `LAPACKE_dgels`.
 * `bench_qr_compact [nmat] [reps]` - throughput of the fully open compact *solve*
-  pipeline vs. MKL's batched pipeline and the one-matrix-at-a-time LAPACK path,
-  over pools of small matrices (order 10-100), reporting geometric-mean speedups.
+  pipeline (the three-step chain and the one-call `cqr_mkl_dgels_compact`) vs.
+  MKL's batched pipeline and the one-matrix-at-a-time LAPACK paths (the chain
+  and `LAPACKE_dgels`), over pools of small matrices (order 10-100), reporting
+  geometric-mean speedups.
   As for `bench_geqrf_compact`, build with host-tuned flags (`-march=native`) for
   a fair comparison against MKL. All paths are checked against the known solution.
 * `bench_geqrf_compact [nmat] [reps]` - throughput of the QR *factorization*:
