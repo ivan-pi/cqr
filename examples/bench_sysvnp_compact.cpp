@@ -71,9 +71,9 @@ double sysv_gflop(int n, int nrhs)
            1e-9;
 }
 
-/* A pool of `nmat` dense column-major n x n symmetric *indefinite* matrices,
- * back to back in `a`, each with the right-hand sides B = A X (n x nrhs,
- * column-major) back to back in `b`, for the known X(:,j) = j + 1.
+/* The batch of systems: `nmat` n x n symmetric *indefinite* matrices in `a`,
+ * each with its right-hand sides B = A X (n x nrhs) in `b`, for the known
+ * X(:,j) = j + 1.
  *
  * Each A is symmetric with random off-diagonals in [-1,1] and a diagonal of
  * magnitude 2n with alternating sign, so it is strictly diagonally dominant
@@ -84,14 +84,10 @@ double sysv_gflop(int n, int nrhs)
  * needs ?sysv, not ?posv). O(n^2) to build, no O(n^3) product. The full matrix
  * is stored (both triangles) so the per-matrix LAPACK path and the compact pack
  * see identical symmetric input; each routine reads only the lower triangle. */
-struct Pool {
-    int n, nmat, nrhs;
-    aligned_vector<double> a; /* nmat * n*n,    64 B-aligned */
-    aligned_vector<double> b; /* nmat * n*nrhs, 64 B-aligned */
+struct Systems {
+    MatrixPool a, b;
 
-    Pool(int n_, int nmat_, int nrhs_)
-        : n(n_), nmat(nmat_), nrhs(nrhs_), a((size_t)nmat_ * n_ * n_),
-          b((size_t)nmat_ * n_ * nrhs_)
+    Systems(int n, int nmat, int nrhs) : a(nmat, n, n), b(nmat, n, nrhs)
     {
         std::mt19937_64 rng(2025);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
@@ -101,34 +97,19 @@ struct Pool {
             for (int i = 0; i < n; ++i)
                 X(i, j) = j + 1;
         for (int v = 0; v < nmat; ++v) {
-            const auto Av = A(v), Bv = B(v);
+            const auto A = a.matrix(v), B = b.matrix(v);
             for (int j = 0; j < n; ++j) {
                 for (int i = j + 1; i < n; ++i) {
                     double x = dist(rng);
-                    Av(i, j) = x; /* lower */
-                    Av(j, i) = x; /* mirror to upper (symmetric) */
+                    A(i, j) = x; /* lower */
+                    A(j, i) = x; /* mirror to upper (symmetric) */
                 }
-                Av(j, j) = (j % 2 ? -2.0 : 2.0) * n; /* dominant, mixed sign */
+                A(j, j) = (j % 2 ? -2.0 : 2.0) * n; /* dominant, mixed sign */
             }
             /* B = A X for this matrix */
             cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0,
-                        Av.data, Av.ld(), X.data, X.ld(), 0.0, Bv.data, Bv.ld());
+                        A.data, A.ld(), X.data, X.ld(), 0.0, B.data, B.ld());
         }
-    }
-
-    /* Matrix v of the pool and its right-hand side block, as dense views. */
-    MatrixView<double> A(int v) { return mat_view(a.data() + (size_t)v * n * n, n, n); }
-    MatrixView<double> B(int v)
-    {
-        return mat_view(b.data() + (size_t)v * n * nrhs, n, nrhs);
-    }
-    MatrixView<const double> A(int v) const
-    {
-        return mat_view(a.data() + (size_t)v * n * n, n, n);
-    }
-    MatrixView<const double> B(int v) const
-    {
-        return mat_view(b.data() + (size_t)v * n * nrhs, n, nrhs);
     }
 };
 
@@ -178,18 +159,15 @@ struct Packed {
     MKL_INT sz_a, sz_b;
     cqr::detail::mkl_buffer<double> ap, bp;
 
-    Packed(const Pool &P, MKL_COMPACT_PACK fmt)
-        : sz_a(mkl_dget_size_compact(P.n, P.n, fmt, P.nmat)),
-          sz_b(mkl_dget_size_compact(P.n, P.nrhs, fmt, P.nmat)),
+    Packed(const Systems &P, MKL_COMPACT_PACK fmt)
+        : sz_a(mkl_dget_size_compact(P.a.rows, P.a.cols, fmt, P.a.nmat)),
+          sz_b(mkl_dget_size_compact(P.b.rows, P.b.cols, fmt, P.b.nmat)),
           ap(cqr::detail::mkl_alloc_bytes<double>(sz_a)),
           bp(cqr::detail::mkl_alloc_bytes<double>(sz_b))
     {
-        const int n = P.n, nmat = P.nmat, nrhs = P.nrhs;
-        std::vector<const double *> Ap(nmat), Bp(nmat);
-        for (int v = 0; v < nmat; ++v) {
-            Ap[v] = P.A(v).data;
-            Bp[v] = P.B(v).data;
-        }
+        const int n = P.a.rows, nmat = P.a.nmat, nrhs = P.b.cols;
+        auto Ap = P.a.base_ptrs();
+        auto Bp = P.b.base_ptrs();
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
         mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bp.data(), n, bp.get(), n, fmt, nmat);
     }
@@ -204,9 +182,9 @@ struct Packed {
 
 /* Forward error of the compact path: solve fresh copies of the packed pool,
  * unpack X, compare to the known solution. Untimed correctness gate. */
-double compact_error(const Pool &P, const Packed &pk, MKL_COMPACT_PACK fmt)
+double compact_error(const Systems &P, const Packed &pk, MKL_COMPACT_PACK fmt)
 {
-    const int n = P.n, nmat = P.nmat, nrhs = P.nrhs;
+    const int n = P.a.rows, nmat = P.a.nmat, nrhs = P.b.cols;
     auto ap = cqr::detail::mkl_alloc_bytes<double>(pk.sz_a);
     auto bp = cqr::detail::mkl_alloc_bytes<double>(pk.sz_b);
     pk.restore_into(ap.get(), bp.get());
@@ -238,7 +216,7 @@ void run_sweep(int nmat, int reps, int nrhs, int nmin, int nmax, int stride,
     std::printf("-----+------------+-------------+-------------\n");
 
     for (int n = nmin; n <= nmax; n += stride) {
-        Pool P(n, nmat, nrhs);
+        const Systems P(n, nmat, nrhs);
         Packed pk(P, fmt);
         auto ap = cqr::detail::mkl_alloc_bytes<double>(pk.sz_a);
         auto bp = cqr::detail::mkl_alloc_bytes<double>(pk.sz_b);
@@ -296,7 +274,7 @@ int main(int argc, char **argv)
                               *std::max_element(sizes.begin(), sizes.end()));
     double log_speed = 0.0;
     for (int n : sizes) {
-        Pool P(n, nmat, nrhs);
+        const Systems P(n, nmat, nrhs);
         Packed pk(P, fmt);
 
         /* working copies: compact (cqr) and standard layout (LAPACK) */
@@ -308,8 +286,8 @@ int main(int argc, char **argv)
          * each timed pass */
         auto restore_compact = [&] { pk.restore_into(ap.get(), bp.get()); };
         auto restore_dense = [&] {
-            a_work = P.a;
-            b_work = P.b;
+            a_work = P.a.storage;
+            b_work = P.b.storage;
         };
 
         double t_cqr = best_time(reps, restore_compact, [&] {

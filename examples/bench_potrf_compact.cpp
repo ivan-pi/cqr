@@ -69,38 +69,32 @@ double potrf_gflop(int n)
     return (dn * dn * dn / 3.0 + dn * dn / 2.0 + dn / 6.0) * 1e-9;
 }
 
-/* A pool of `nmat` dense column-major n x n symmetric positive-definite matrices,
- * back to back in `a` (n*n per matrix). Each is built symmetric with random
- * off-diagonals in [-1,1] and a diagonal of 2n, so it is strictly diagonally
- * dominant (row off-diagonal magnitudes sum to at most n-1 < 2n) and therefore
- * SPD and well conditioned -- the O(n^2) analogue of the geqrf pool's diagonal
- * boost, without an O(n^3) M^T M product. The full matrix is stored (both
- * triangles) so the per-matrix LAPACK path and the compact pack see identical
- * symmetric input; each routine reads only the lower triangle. */
-struct Pool {
-    int n, nmat;
-    aligned_vector<double> a; /* nmat * n*n, 64 B-aligned */
-
-    /* Matrix v of the pool, as a dense view over its slice of the buffer. */
-    MatrixView<double> A(int v) { return mat_view(a.data() + (size_t)v * n * n, n, n); }
-
-    Pool(int n_, int nmat_) : n(n_), nmat(nmat_), a((size_t)nmat_ * n_ * n_)
-    {
-        std::mt19937_64 rng(2025);
-        std::uniform_real_distribution<double> dist(-1.0, 1.0);
-        for (int v = 0; v < nmat; ++v) {
-            const auto Av = A(v);
-            for (int j = 0; j < n; ++j) {
-                for (int i = j + 1; i < n; ++i) {
-                    double x = dist(rng);
-                    Av(i, j) = x; /* lower */
-                    Av(j, i) = x; /* mirror to upper (symmetric) */
-                }
-                Av(j, j) = 2.0 * n; /* diagonal dominant -> SPD */
+/* A pool of `nmat` n x n symmetric positive-definite matrices. Each is built
+ * symmetric with random off-diagonals in [-1,1] and a diagonal of 2n, so it is
+ * strictly diagonally dominant (row off-diagonal magnitudes sum to at most
+ * n-1 < 2n) and therefore SPD and well conditioned -- the O(n^2) analogue of
+ * the geqrf pool's diagonal boost, without an O(n^3) M^T M product. The full
+ * matrix is stored (both triangles) so the per-matrix LAPACK path and the
+ * compact pack see identical symmetric input; each routine reads only the
+ * lower triangle. */
+MatrixPool make_pool(int n, int nmat)
+{
+    MatrixPool P(nmat, n, n);
+    std::mt19937_64 rng(2025);
+    std::uniform_real_distribution<double> dist(-1.0, 1.0);
+    for (int v = 0; v < nmat; ++v) {
+        const auto A = P.matrix(v);
+        for (int j = 0; j < n; ++j) {
+            for (int i = j + 1; i < n; ++i) {
+                double x = dist(rng);
+                A(i, j) = x; /* lower */
+                A(j, i) = x; /* mirror to upper (symmetric) */
             }
+            A(j, j) = 2.0 * n; /* diagonal dominant -> SPD */
         }
     }
-};
+    return P;
+}
 
 /* Factor a pre-packed compact pool of nmat matrices in place, column-major
  * lower (A = L L^T). cqr: one call on the whole pool, threaded inside the
@@ -135,17 +129,15 @@ void factor_unbatched(double *a, int n, int nmat)
  * LAPACKE_dpotrf, scaled by the factor's L1 norm. The SPD Cholesky factor is
  * unique (positive diagonal), so this elementwise difference is a sharp signal.
  * Untimed correctness gate. */
-double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
+double factor_error(const MatrixPool &P, MKL_COMPACT_PACK fmt, int V)
 {
-    const int n = P.n, nmat = P.nmat;
-    const size_t sA = (size_t)n * n;
+    const int n = P.rows, nmat = P.nmat;
+    const size_t sA = P.stride();
 
     MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
     auto ap = cqr::detail::mkl_alloc_bytes<double>(sz_a);
 
-    std::vector<double *> Ap(nmat);
-    for (int v = 0; v < nmat; ++v)
-        Ap[v] = const_cast<double *>(P.a.data()) + v * sA;
+    auto Ap = P.base_ptrs();
     mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
 
     factor_compact(true, ap.get(), n, nmat, V, fmt);
@@ -159,7 +151,7 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
     double worst = 0;
     std::vector<double> Href(sA);
     for (int v = 0; v < nmat; ++v) {
-        const double *Av = P.a.data() + v * sA;
+        const double *Av = P.matrix(v).data;
         std::copy(Av, Av + sA, Href.begin());
         LAPACKE_dpotrf(LAPACK_COL_MAJOR, 'L', n, Href.data(), n);
         /* compare only the lower triangle (i >= j): the factor L, uniquely
@@ -195,14 +187,12 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
     std::printf("-----+------------+-------------+-------------\n");
 
     for (int n = nmin; n <= nmax; n += stride) {
-        Pool P(n, nmat);
+        const MatrixPool P = make_pool(n, nmat);
 
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
         auto pristine = cqr::detail::mkl_alloc_bytes<double>(sz_a);
         auto work_ap = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-        std::vector<double *> Ap(nmat);
-        for (int v = 0; v < nmat; ++v)
-            Ap[v] = P.a.data() + (size_t)v * n * n;
+        auto Ap = P.base_ptrs();
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, pristine.get(), n, fmt,
                             nmat);
 
@@ -259,15 +249,13 @@ int main(int argc, char **argv)
 
     double log_speed_vs_lapack = 0.0;
     for (int n : sizes) {
-        Pool P(n, nmat);
+        const MatrixPool P = make_pool(n, nmat);
 
         /* pristine packed buffer + two working copies (cqr, mkl) */
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
         auto pristine = cqr::detail::mkl_alloc_bytes<double>(sz_a);
         auto work_ap = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-        std::vector<double *> Ap(nmat);
-        for (int v = 0; v < nmat; ++v)
-            Ap[v] = P.a.data() + (size_t)v * n * n;
+        auto Ap = P.base_ptrs();
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, pristine.get(), n, fmt,
                             nmat);
 
@@ -283,7 +271,7 @@ int main(int argc, char **argv)
             factor_compact(false, work_ap.get(), n, nmat, V, fmt);
         });
         double t_lap = best_time(
-            reps, [&] { pool_work = P.a; },
+            reps, [&] { pool_work = P.storage; },
             [&] { factor_unbatched(pool_work.data(), n, nmat); });
 
         const double rel = factor_error(P, fmt, V);

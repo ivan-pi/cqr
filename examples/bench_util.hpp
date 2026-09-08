@@ -1,11 +1,10 @@
 /* bench_util.hpp
  *
  * The harness shared by the benchmark programs: abort-on-failure checks, the
- * MKL compact-format lookups, the dense MatrixView the pools are addressed
- * through, pack-aligned std::vector storage, best-of-N
- * timing, the OpenMP thread count, and the factorization / solve benchmarks'
- * command line (--size-sweep, --simdlen, --nrhs, [nmat] [reps]). Needs MKL
- * headers only.
+ * MKL compact-format lookups, pack-aligned std::vector storage, MatrixPool (the
+ * batch of dense matrices every benchmark measures on), best-of-N timing, the
+ * OpenMP thread count, and the factorization / solve benchmarks' command line
+ * (--size-sweep, --simdlen, --nrhs, [nmat] [reps]). Needs MKL headers only.
  *
  * Assisted-by: Claude:claude-opus-4.8
  */
@@ -64,6 +63,59 @@ template <typename T> struct aligned_allocator {
     bool operator!=(const aligned_allocator &) const noexcept { return false; }
 };
 template <typename T> using aligned_vector = std::vector<T, aligned_allocator<T>>;
+
+/* The batch every benchmark measures on: `nmat` column-major rows x cols
+ * matrices, back to back in one pack-aligned buffer, matrix v starting at
+ * v*rows*cols with leading dimension rows.
+ *
+ * The benchmarks differ only in what they put in their matrices (diagonally
+ * dominant, SPD, symmetric indefinite, ...), so the fill stays with each of
+ * them and this holds what they all need: the storage, the per-matrix view to
+ * write it through, and the array of per-matrix base pointers the compact
+ * pack/unpack routines take. A right-hand-side block is the same thing with
+ * cols = nrhs, so the benchmarks that solve keep two of these. */
+struct MatrixPool {
+    int nmat, rows, cols;
+    aligned_vector<double> storage; /* nmat * rows*cols, 64 B-aligned */
+
+    MatrixPool(int nmat_, int rows_, int cols_)
+        : nmat(nmat_), rows(rows_), cols(cols_),
+          storage((std::size_t)nmat_ * rows_ * cols_)
+    {
+    }
+
+    /* Scalars per matrix, and the buffer the compact routines pack from. */
+    std::size_t stride() const { return (std::size_t)rows * cols; }
+    double *data() { return storage.data(); }
+    const double *data() const { return storage.data(); }
+
+    /* Matrix v: rows x cols, column-major, leading dimension rows. */
+    MatrixView<double> matrix(int v)
+    {
+        return mat_view(data() + v * stride(), rows, cols);
+    }
+    MatrixView<const double> matrix(int v) const
+    {
+        return mat_view(data() + v * stride(), rows, cols);
+    }
+
+    /* One base pointer per matrix -- the array form mkl_?gepack_compact and
+     * mkl_?geunpack_compact take (the const overload is the packing one). */
+    std::vector<double *> base_ptrs()
+    {
+        std::vector<double *> p(nmat);
+        for (int v = 0; v < nmat; ++v)
+            p[v] = matrix(v).data;
+        return p;
+    }
+    std::vector<const double *> base_ptrs() const
+    {
+        std::vector<const double *> p(nmat);
+        for (int v = 0; v < nmat; ++v)
+            p[v] = matrix(v).data;
+        return p;
+    }
+};
 
 /* Best (minimum) wall time over `reps` timed passes, in seconds. `reset` runs
  * untimed before every pass (e.g. to restore input the timed work destroys);

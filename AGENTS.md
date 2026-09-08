@@ -147,6 +147,15 @@ argument, which cannot be parenthesized, so they also sit between
   transpose is a stride swap. Do not hand-write `A[i + (size_t)j * lda]` in
   new tests, benchmarks or examples -- take a view. `MatrixView` asserts its
   bounds, so run the suites once in a `Debug` build when adding indexing code.
+  The tests use both: the pack/unpack helpers in `test_compact_util.hpp` write
+  the interleaved side through `BatchView` (`for_vlen` turns their runtime `V`
+  into its compile-time one) and the dense side through `MatrixBatch`. The
+  library and its tests are one internal codebase and share these views on
+  purpose; what keeps the suites honest is that they compute the *answers*
+  independently -- scalar LAPACK references, dense LAPACK/MKL cross-checks.
+  The benchmarks' batch is `MatrixPool` (`examples/bench_util.hpp`): storage,
+  the per-matrix view, and the base-pointer array the compact pack routines
+  take; each benchmark only fills it.
 - **One kernel per routine.** Every kernel addresses its operands through
   `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
   `side='R'` are the same code with different strides. Register blocking is
