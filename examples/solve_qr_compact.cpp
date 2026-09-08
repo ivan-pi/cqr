@@ -38,12 +38,13 @@
 #include <cmath>
 #include <limits>
 #include <random>
-#include <utility>
 #include <vector>
 #include <algorithm>
 
 namespace {
 
+using cqr::detail::ConstMatrixView;
+using cqr::detail::mat_view;
 using cqr::detail::MatrixView;
 
 /* Deterministic uniform reals in [-1, 1), seeded once for reproducibility. */
@@ -70,66 +71,56 @@ void check_info(MKL_INT info, const char *what)
     check(info == 0, what);
 }
 
-/* Minimal column-major dense matrix: MatrixView (src/cqr_matrix_view.hpp) --
- * the non-owning strided view the library's tests and benchmarks address their
- * dense matrices with -- plus the storage it points at, i.e. an owning view.
- * Inheriting the view is what supplies element access, the extents, the
- * leading dimension BLAS/LAPACK want (ld()) and the base pointer the compact
- * pack/unpack routines take (data), so nothing here restates them. Leading
- * dimension == row count (contiguous storage, no padding). Indices are assumed
- * to stay in int32 range.
- *
- * Note that const rides on the element type of a view, not on the view: a
- * `const Matrix` is a const MatrixView<double>, whose elements stay writable. */
-class Matrix : public MatrixView<double> {
+/* Minimal column-major dense matrix: owns its storage and hands raw pointers
+ * (data(), ld()) to BLAS/LAPACK and the compact pack/unpack routines.
+ * Leading dimension == row count (contiguous storage, no padding). Indices are
+ * assumed to stay in int32 range. */
+class Matrix {
   public:
-    /* Base classes are initialized before members, so the view starts null and
-     * is pointed at the storage here. */
-    Matrix(int rows, int cols)
-        : MatrixView<double>{nullptr, 1, rows, rows, cols}, a_((size_t)rows * cols)
-    {
-        data = a_.data();
-    }
+    Matrix(int rows, int cols) : rows_(rows), cols_(cols), a_(rows * cols) {}
 
-    /* Rule of five, spelled out for one reason: the inherited `data` points
-     * into a_, so a copy or a move has to re-point it at its own storage --
-     * the defaulted versions would leave the new matrix addressing the old
-     * one's buffer. The destructor stays implicit; std::vector owns. */
-    Matrix(const Matrix &o) : MatrixView<double>(o), a_(o.a_) { data = a_.data(); }
-    Matrix(Matrix &&o) noexcept : MatrixView<double>(o), a_(std::move(o.a_))
-    {
-        data = a_.data();
-    }
-    Matrix &operator=(const Matrix &o)
-    {
-        MatrixView<double>::operator=(o);
-        a_ = o.a_;
-        data = a_.data();
-        return *this;
-    }
-    Matrix &operator=(Matrix &&o) noexcept
-    {
-        MatrixView<double>::operator=(o);
-        a_ = std::move(o.a_);
-        data = a_.data();
-        return *this;
-    }
+    /* Plain value type (rule of five, all defaulted): std::vector already
+     * manages the storage, so no destructor is needed -- but once we spell
+     * out the copy operations we also spell out the moves, otherwise declaring
+     * the copies would suppress the implicit move members. */
+    Matrix(const Matrix &) = default;
+    Matrix(Matrix &&) = default;
+    Matrix &operator=(const Matrix &) = default;
+    Matrix &operator=(Matrix &&) = default;
+
+    // clang-format off
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
+    int ld()   const { return rows_; }
+    double       *data()       { return a_.data(); }
+    const double *data() const { return a_.data(); }
+    double &operator()(int i, int j)       { return a_[i + j * rows_]; }
+    double  operator()(int i, int j) const { return a_[i + j * rows_]; }
+    // clang-format on
+
+    /* The same storage as a MatrixView (src/cqr_matrix_view.hpp), for handing
+     * to anything that takes the library's dense view -- the strided element
+     * access the test suites and benchmarks address their matrices through.
+     * The view owns nothing: it stays valid only while this Matrix does. */
+    MatrixView<double> view() { return mat_view(a_.data(), rows_, cols_); }
+    ConstMatrixView<double> view() const { return mat_view(a_.data(), rows_, cols_); }
 
   private:
+    int rows_, cols_;
     std::vector<double> a_;
 };
 
 /* 1-norm of a matrix, ||A||_1 (max column sum). */
 double norm1(const Matrix &A)
 {
-    return LAPACKE_dlange(LAPACK_COL_MAJOR, '1', A.rows, A.cols, A.data, A.ld());
+    return LAPACKE_dlange(LAPACK_COL_MAJOR, '1', A.rows(), A.cols(), A.data(), A.ld());
 }
 
 /* Relative 1-norm difference ||A - B||_1 / ||B||_1 (A, B same shape). */
 double rel_diff(const Matrix &A, const Matrix &B)
 {
-    Matrix D = A;                                             /* D <- A */
-    cblas_daxpy(D.rows * D.cols, -1.0, B.data, 1, D.data, 1); /* D <- A - B */
+    Matrix D = A;                                                     /* D <- A */
+    cblas_daxpy(D.rows() * D.cols(), -1.0, B.data(), 1, D.data(), 1); /* D <- A - B */
     return norm1(D) / std::max(norm1(B), 1e-300);
 }
 
@@ -142,7 +133,7 @@ std::vector<double *> base_ptrs(std::vector<Matrix> &batch)
     std::vector<double *> p;
     p.reserve(batch.size());
     for (Matrix &M : batch)
-        p.push_back(M.data);
+        p.push_back(M.data());
     return p;
 }
 
@@ -168,8 +159,8 @@ void batch_solve(int nm, int n, int nrhs)
                 A[v](i, j) = frand();
         for (int i = 0; i < n; ++i)
             A[v](i, i) += 2.0; /* tame conditioning */
-        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0, A[v].data,
-                    A[v].ld(), X.data, X.ld(), 0.0, B[v].data,
+        cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0,
+                    A[v].data(), A[v].ld(), X.data(), X.ld(), 0.0, B[v].data(),
                     B[v].ld()); /* B_v = A_v X */
     }
 
@@ -232,8 +223,8 @@ void batch_solve(int nm, int n, int nrhs)
     std::vector<Matrix> Xd = B;
     for (int v = 0; v < nm; ++v) {
         Matrix Acopy = A[v];
-        lapack_int info1 = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Acopy.data,
-                                         Acopy.ld(), Xd[v].data, Xd[v].ld());
+        lapack_int info1 = LAPACKE_dgels(LAPACK_COL_MAJOR, 'N', n, n, nrhs, Acopy.data(),
+                                         Acopy.ld(), Xd[v].data(), Xd[v].ld());
         check(info1 == 0, "LAPACKE_dgels");
     }
 
