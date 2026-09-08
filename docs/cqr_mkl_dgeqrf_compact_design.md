@@ -149,15 +149,16 @@ is `O(1)` per column -- the `O(n^2)` reductions and the `O(n^3)` trailing update
 are pure vector arithmetic. This was validated against scalar `dlarfg` before
 committing to the design.
 
-### 6.3 Layouts: tuned column-major, strided row-major
+### 6.3 Layouts: one strided kernel
 
-Column-major is the tuned path: a matrix column is contiguous in the compact
-buffer (consecutive rows are one `V`-wide pack apart), so the `larfg` reduction,
-the reflector scaling, and the trailing-column update all walk contiguous
-pointers, register-blocked `JB = 4` trailing columns at a time so each reflector
-load is reused. Row-major is supported for MKL compatibility through a
-stride-generalized kernel over the same math (correctness-first; the strided
-inner sweep is not separately SIMD-tuned).
+The kernel addresses `A` through a strided view (`A(i,j) = data[i*si + j*sj]`,
+strides in packs). Column-major has `si = 1`: a matrix column is contiguous in
+the compact buffer (consecutive rows one `V`-wide pack apart), so the `larfg`
+reduction, the reflector scaling, and the trailing-column update all walk
+contiguous packs, register-blocked `JB = 4` trailing columns at a time so each
+reflector load is reused. Row-major is the same code with `si = ldap`, `sj = 1`
+(supported for MKL compatibility; correctness-first, the strided sweep is not
+separately tuned).
 
 ### 6.4 Padding and SIMD semantics
 
@@ -276,8 +277,9 @@ exposed through `extern "C"` for the FFI-stable surfaces, reusing the existing
   (alongside the `?ormqr_compact` entry points), taking an explicit interleave
   width `V` and no MKL dependency, with LAPACK-style `info = -j` argument
   validation.
-* **Templated kernel** (`cqr_geqrf_compact.hpp`): per-group kernels
-  `geqrf_compact_group<T,V>` (tuned col-major) and
-  `geqrf_compact_group_strided<T,V>` (general, via `BatchView`), driven over all
-  packs by `geqrf_compact_general<T,V>` (either layout; the entry point both C
-  adapters call) and the col-major convenience driver `geqrf_compact<T,V>`.
+* **Templated kernel** (`src/cqr_geqrf_compact.hpp`): the per-group kernel
+  `geqrf_compact_group<T,V>` over a `BatchView` (either layout: column-major has
+  unit row stride, row-major unit column stride -- same code), driven over all
+  packs by `geqrf_compact<T,V>`, the entry point both C adapters
+  (`src/cqr_compact.cpp`, `src/cqr_mkl_ext.cpp`) call. The trailing-column
+  update is ormqr's `larf`.

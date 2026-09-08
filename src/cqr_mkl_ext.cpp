@@ -1,0 +1,179 @@
+/* cqr_mkl_ext.cpp
+ *
+ * The MKL-style API (cqr_mkl_ext.h): thin C-linkage adapters that unwrap the
+ * MKL enums to the kernels' flags and MKL_COMPACT_PACK to the interleave width
+ * V (vlen_for_format + for_vlen), then forward to the templated kernels
+ * instantiated on MKL_INT so ILP64 dimensions are not narrowed.
+ *
+ * Following the MKL Compact convention the routines validate NO arguments:
+ * compact routines skip error checking for vectorization and make the caller
+ * responsible for consistent parameters. MKL leaves the compact `info` reserved;
+ * here it is a single scalar status, 0 on success, or -1 for an unrecognized
+ * format (the one failure dispatch can detect). ?geqrf and ?ormqr answer the
+ * lwork = -1 workspace query with 1: the kernels need no scratch. ?trsm has no
+ * info and no workspace, like the BLAS ?trsm it batches.
+ *
+ * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
+ */
+
+#include "cqr_mkl_ext.h"
+#include "cqr_geqrf_compact.hpp"
+#include "cqr_ormqr_compact.hpp"
+#include "cqr_potrf_compact.hpp"
+#include "cqr_trsm_compact.hpp"
+
+namespace {
+
+using cqr::detail::for_vlen;
+using cqr::detail::vlen_for_format;
+
+/* Run f<V> for the interleave width of `format`; the scalar status. */
+template <typename T, typename F> MKL_INT run_format(MKL_COMPACT_PACK format, F &&f)
+{
+    return for_vlen(vlen_for_format<T>(format), f) ? 0 : -1;
+}
+
+inline void set_info(MKL_INT *info, MKL_INT status)
+{
+    if (info) *info = status;
+}
+
+/* Workspace query (lwork = -1): the kernels need no scratch, so the optimal and
+ * minimum lwork is 1. Returns true when the call was a query. */
+template <typename T> bool workspace_query(T *work, MKL_INT lwork, MKL_INT *info)
+{
+    if (lwork != -1) return false;
+    if (work) work[0] = T(1);
+    set_info(info, 0);
+    return true;
+}
+
+template <typename T>
+void geqrf(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap, MKL_INT ldap, T *taup, T *work,
+           MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    if (workspace_query(work, lwork, info)) return;
+    if (m == 0 || n == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::geqrf_compact<T, decltype(v)::value, MKL_INT>(
+                     rowmajor, m, n, ap, ldap, taup, nm);
+             }));
+}
+
+template <typename T>
+void ormqr(MKL_LAYOUT layout, char side, char trans, MKL_INT m, MKL_INT n, MKL_INT k,
+           const T *ap, MKL_INT ldap, const T *taup, T *cp, MKL_INT ldcp, T *work,
+           MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    if (workspace_query(work, lwork, info)) return;
+    if (m == 0 || n == 0 || k == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool left = (side == 'L' || side == 'l');
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::ormqr_compact<T, decltype(v)::value, MKL_INT>(
+                     left, rowmajor, trans, m, n, k, ap, ldap, taup, cp, ldcp, nm);
+             }));
+}
+
+template <typename T>
+void potrf(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap,
+           MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    if (n == 0 || nm == 0) return set_info(info, 0);
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool upper = (uplo == MKL_UPPER);
+    set_info(info, run_format<T>(format, [&](auto v) {
+                 cqr::detail::potrf_compact<T, decltype(v)::value, MKL_INT>(
+                     rowmajor, upper, n, ap, ldap, nm);
+             }));
+}
+
+template <typename T>
+void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE transa,
+          MKL_DIAG diag, MKL_INT m, MKL_INT n, T alpha, const T *ap, MKL_INT ldap, T *bp,
+          MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    /* alpha == 0 is NOT empty -- it means B := 0 -- so it flows to the kernel. */
+    if (m == 0 || n == 0 || nm == 0) return;
+
+    const bool rowmajor = (layout == MKL_ROW_MAJOR);
+    const bool left = (side == MKL_LEFT);
+    const bool upper = (uplo == MKL_UPPER);
+    const bool tran = (transa != MKL_NOTRANS); /* MKL_CONJTRANS folds to T (real) */
+    const bool unit = (diag == MKL_UNIT);
+    /* An unrecognized format selects no kernel; with no info that is a no-op. */
+    run_format<T>(format, [&](auto v) {
+        cqr::detail::trsm_compact<T, decltype(v)::value, MKL_INT>(
+            left, upper, rowmajor, tran, unit, m, n, alpha, ap, ldap, bp, ldbp, nm);
+    });
+}
+
+} /* anonymous namespace */
+
+extern "C" {
+
+void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, double *ap,
+                            MKL_INT ldap, double *taup, double *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    geqrf(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);
+}
+void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, float *ap,
+                            MKL_INT ldap, float *taup, float *work, MKL_INT lwork,
+                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    geqrf(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);
+}
+
+void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const double *ap, MKL_INT ldap,
+                            const double *taup, double *cp, MKL_INT ldcp, double *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm)
+{
+    ormqr(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
+          format, nm);
+}
+void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
+                            MKL_INT n, MKL_INT k, const float *ap, MKL_INT ldap,
+                            const float *taup, float *cp, MKL_INT ldcp, float *work,
+                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm)
+{
+    ormqr(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
+          format, nm);
+}
+
+void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
+                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm)
+{
+    potrf(layout, uplo, n, ap, ldap, info, format, nm);
+}
+void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
+                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
+                            MKL_INT nm)
+{
+    potrf(layout, uplo, n, ap, ldap, info, format, nm);
+}
+
+void cqr_mkl_dtrsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
+                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
+                           double alpha, const double *ap, MKL_INT ldap, double *bp,
+                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, format, nm);
+}
+void cqr_mkl_strsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
+                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
+                           float alpha, const float *ap, MKL_INT ldap, float *bp,
+                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
+{
+    trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, format, nm);
+}
+
+} /* extern "C" */

@@ -16,11 +16,12 @@
  * Cholesky data flow. To measure the factorization kernels rather than data
  * movement, the pool is packed into compact form once, up front; only the
  * factorization is timed, and the destroyed input is restored (untimed) before
- * each pass. The two compact paths are driven from an OpenMP outer loop over the
- * groups of V interleaved matrices -- the intended "outer multi-threaded loop"
- * usage -- with MKL's own threading pinned to 1; the per-matrix path parallelizes
- * over matrices the same way. The factorization is checked (untimed) against
- * per-matrix LAPACK, so the benchmark doubles as an integration test.
+ * each pass. The cqr path is one call on the whole pool -- the routine threads
+ * its own loop over groups. MKL's compact kernel is not threaded here
+ * (sequential MKL; its threading is pinned to 1 in any case), so it and the
+ * per-matrix LAPACK path are driven from an OpenMP loop of the same thread
+ * count. The factorization is checked (untimed) against per-matrix LAPACK, so
+ * the benchmark doubles as an integration test.
  *
  * Unlike ?geqrf, ?potrf needs no workspace, so there is no lwork query and no
  * per-thread work array (as in mkl_?potrf_compact / LAPACKE_dpotrf).
@@ -44,39 +45,20 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "cqr_mkl_ext.h"
 #include "cqr_mkl_alloc.h"
+#include "bench_util.hpp"
 
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <limits>
-#include <new>
 #include <random>
 #include <vector>
 #include <algorithm>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 namespace {
 
-using clk = std::chrono::steady_clock;
-using cqr::detail::compact_format_name; /* format -> "SSE"/"AVX"/"AVX512" */
-using cqr::detail::format_for_vlen;     /* interleave width -> pack format */
-using cqr::detail::vlen_for_format;     /* pack format -> interleave width */
-
-void check(bool cond, const char *what)
-{
-    if (!cond) {
-        std::printf("FAILED: %s\n", what);
-        std::exit(1);
-    }
-}
+using namespace cqr::bench;
 
 /* Standard LAPACK ?potrf flop count in GFLOP: n^3/3 + n^2/2 + n/6 (adds +
  * mults, the classic LAWN 41 count; the n square roots are not counted, as in
@@ -86,27 +68,6 @@ double potrf_gflop(int n)
     const double dn = n;
     return (dn * dn * dn / 3.0 + dn * dn / 2.0 + dn / 6.0) * 1e-9;
 }
-
-/* std::vector storage aligned to the compact pack width (64 B covers every
- * format), so the dense pool and its LAPACK working copy start pack-aligned like
- * the compact buffers -- no cache-line splits in the packing reads or the
- * per-matrix LAPACK path. Keeping the allocator a stateless, type-only template
- * is what keeps it small: allocator_traits then defaults rebind, construct, and
- * the rest, and std::vector's copy-assign is the only reason equality is spelled
- * out (aligned_alloc needs the size rounded up to the alignment). */
-template <typename T> struct aligned_allocator {
-    using value_type = T;
-    T *allocate(std::size_t n)
-    {
-        void *p = std::aligned_alloc(64, (n * sizeof(T) + 63) & ~std::size_t(63));
-        if (!p) throw std::bad_alloc();
-        return static_cast<T *>(p);
-    }
-    void deallocate(T *p, std::size_t) noexcept { std::free(p); }
-    bool operator==(const aligned_allocator &) const noexcept { return true; }
-    bool operator!=(const aligned_allocator &) const noexcept { return false; }
-};
-template <typename T> using aligned_vector = std::vector<T, aligned_allocator<T>>;
 
 /* A pool of `nmat` dense column-major n x n symmetric positive-definite matrices,
  * back to back in `a` (n*n per matrix). Each is built symmetric with random
@@ -138,42 +99,23 @@ struct Pool {
     }
 };
 
-/* Best (minimum) wall time over `reps` timed passes, in seconds; `reset` runs
- * untimed before every pass to restore the input the factorization destroys. */
-template <typename Reset, typename Timed>
-double best_time(int reps, Reset &&reset, Timed &&timed)
-{
-    reset();
-    timed(); /* warm-up (untimed) */
-    double best = std::numeric_limits<double>::infinity();
-    for (int r = 0; r < reps; ++r) {
-        reset();
-        auto t0 = clk::now();
-        timed();
-        best = std::min(best, std::chrono::duration<double>(clk::now() - t0).count());
-    }
-    return best;
-}
-
-/* Factor a pre-packed compact pool in place, one group of V per OpenMP iteration
- * (the intended outer-loop usage), column-major lower (A = L L^T). `use_cqr`
- * selects our kernel or MKL's; both see the identical compact buffer. No
- * workspace is needed (unlike geqrf), so there is no per-thread work array. */
-void factor_compact(bool use_cqr, double *ap, int n, int ngroups, int V,
+/* Factor a pre-packed compact pool of nmat matrices in place, column-major
+ * lower (A = L L^T). cqr: one call on the whole pool, threaded inside the
+ * library. MKL: an OpenMP loop over the groups of V (its compact kernel is not
+ * threaded in this build), so both paths run on the same thread count. */
+void factor_compact(bool use_cqr, double *ap, int n, int nmat, int V,
                     MKL_COMPACT_PACK fmt)
 {
-#pragma omp parallel
-    {
-        MKL_INT info;
-#pragma omp for schedule(static)
-        for (int g = 0; g < ngroups; ++g) {
-            double *apg = ap + (size_t)g * n * n * V; /* group stride n*n*V */
-            if (use_cqr)
-                cqr_mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt,
-                                       V);
-            else
-                mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt, V);
-        }
+    MKL_INT info;
+    if (use_cqr) {
+        cqr_mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, ap, n, &info, fmt, nmat);
+        return;
+    }
+    const int ngroups = (nmat + V - 1) / V;
+#pragma omp parallel for schedule(static) private(info)
+    for (int g = 0; g < ngroups; ++g) {
+        double *apg = ap + (size_t)g * n * n * V; /* group stride n*n*V */
+        mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt, V);
     }
 }
 
@@ -203,8 +145,7 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
         Ap[v] = const_cast<double *>(P.a.data()) + v * sA;
     mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
 
-    const int ngroups = (nmat + V - 1) / V;
-    factor_compact(true, ap.get(), n, ngroups, V, fmt);
+    factor_compact(true, ap.get(), n, nmat, V, fmt);
 
     std::vector<double> H(nmat * sA);
     std::vector<double *> Hp(nmat);
@@ -252,7 +193,6 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
 
     for (int n = nmin; n <= nmax; n += stride) {
         Pool P(n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
         auto pristine = cqr::detail::mkl_alloc_bytes<double>(sz_a);
@@ -264,83 +204,27 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
                             nmat);
 
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
-        const double t = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), n, ngroups, V, fmt);
-        });
+        const double t = best_time(
+            reps, restore, [&] { factor_compact(true, work_ap.get(), n, nmat, V, fmt); });
         std::printf("%4d | %10.3e | %11.2f | %11.2e\n", n, t, nmat * potrf_gflop(n) / t,
                     nmat / t);
     }
     std::printf("-----+------------+-------------+-------------\n");
 }
 
-/* Parsed command line: positional [nmat] [reps], plus the optional flags
- * --size-sweep=nmin:nmax[:stride] (cqr-only scan) and --simdlen=2|4|8 (force the
- * interleave width instead of the host default). The constructor parses and
- * validates; hold the object const so the values cannot change afterward.
- * simdlen == 0 means "use the host's widest". */
-struct CmdArgs {
-    int nmat = 512;
-    int reps = 3;
-    int simdlen = 0; /* forced interleave width, or 0 for the host default */
-    bool sweep = false;
-    int sweep_min = 0, sweep_max = 0, sweep_step = 1;
-
-    CmdArgs(int argc, char **argv)
-    {
-        std::vector<const char *> pos;
-        for (int i = 1; i < argc; ++i) {
-            if (std::strncmp(argv[i], "--size-sweep=", 13) == 0) {
-                int got = std::sscanf(argv[i] + 13, "%d:%d:%d", &sweep_min, &sweep_max,
-                                      &sweep_step);
-                check(got >= 2, "usage: --size-sweep=nmin:nmax[:stride]");
-                if (got == 2) sweep_step = 1;
-                sweep = true;
-            }
-            else if (std::strncmp(argv[i], "--simdlen=", 10) == 0)
-                simdlen = std::atoi(argv[i] + 10);
-            else
-                pos.push_back(argv[i]);
-        }
-        if (pos.size() > 0) nmat = std::atoi(pos[0]);
-        if (pos.size() > 1) reps = std::atoi(pos[1]);
-        check(nmat > 0 && reps > 0,
-              "usage: bench_potrf_compact [--size-sweep=nmin:nmax[:stride]] "
-              "[--simdlen=2|4|8] [nmat>0] [reps>0]");
-        check(!sweep || (sweep_min > 0 && sweep_max >= sweep_min && sweep_step > 0),
-              "usage: --size-sweep needs 0 < nmin <= nmax and stride > 0");
-        /* Double compact widths are 2/4/8 (SSE/AVX/AVX512); 16 is float's AVX512
-         * width and has no double format, so it is rejected here. */
-        check(simdlen == 0 || simdlen == 2 || simdlen == 4 || simdlen == 8,
-              "usage: --simdlen must be 2, 4, or 8 (16 is float-only; this is double)");
-    }
-};
-
 } /* anonymous namespace */
 
 int main(int argc, char **argv)
 {
-    const CmdArgs args(argc, argv);
-    const int nmat = args.nmat, reps = args.reps;
+    const CmdArgs args(argc, argv, "bench_potrf_compact");
+    const int nmat = args.nmat, reps = args.reps, V = args.V;
+    const MKL_COMPACT_PACK fmt = args.fmt;
 
-    /* Use the host's widest compact format unless --simdlen forces a narrower one.
-     * A wider interleave than the host's native SIMD cannot execute, so reject it
-     * (mkl_get_format_compact reports the widest the architecture supports). */
-    const MKL_COMPACT_PACK native = mkl_get_format_compact();
-    const MKL_COMPACT_PACK fmt =
-        args.simdlen ? format_for_vlen<double>(args.simdlen) : native;
-    const int V = vlen_for_format<double>(fmt);
-    check(V > 0 && V <= vlen_for_format<double>(native),
-          "requested --simdlen exceeds the host's native SIMD width");
-
+    /* Pin MKL's internal threading: the OpenMP outer loop is the only
+     * parallelism. LAPACKE NaN-checking off so the per-matrix path is timed clean. */
     mkl_set_num_threads(1);
     LAPACKE_set_nancheck(0);
-
-    int nthreads = 1;
-#ifdef _OPENMP
-#pragma omp parallel
-#pragma omp single
-    nthreads = omp_get_num_threads();
-#endif
+    const int nthreads = omp_threads();
 
     if (args.sweep) {
         run_sweep(nmat, reps, args.sweep_min, args.sweep_max, args.sweep_step, fmt, V,
@@ -373,7 +257,6 @@ int main(int argc, char **argv)
     double log_speed_vs_lapack = 0.0;
     for (int n : sizes) {
         Pool P(n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         /* pristine packed buffer + two working copies (cqr, mkl) */
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
@@ -391,11 +274,10 @@ int main(int argc, char **argv)
          * (untimed) before each timed pass */
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
 
-        double t_cqr = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), n, ngroups, V, fmt);
-        });
+        double t_cqr = best_time(
+            reps, restore, [&] { factor_compact(true, work_ap.get(), n, nmat, V, fmt); });
         double t_mkl = best_time(reps, restore, [&] {
-            factor_compact(false, work_ap.get(), n, ngroups, V, fmt);
+            factor_compact(false, work_ap.get(), n, nmat, V, fmt);
         });
         double t_lap = best_time(
             reps, [&] { pool_work = P.a; },

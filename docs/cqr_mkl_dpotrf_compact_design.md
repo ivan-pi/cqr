@@ -165,24 +165,26 @@ detects it by inspecting the unpacked diagonal, exactly as with MKL's compact
 `potrf`. Early-exit with `info = j` is intentionally not provided -- it is
 precisely the per-lane branch that does not vectorize across a pack.
 
-### 6.3 Layouts and triangles: one tuned contiguous kernel, one strided
+### 6.3 Layouts and triangles: one kernel over transposed views
 
-There are four `(layout, uplo)` combinations, and they pair up by transpose
-duality into two contiguous cases and two strided ones:
+The kernel factors the *lower* triangle of a strided view
+`A(i,j) = data[i*si + j*sj]` (strides in packs). Since `A` is symmetric, the four
+`(layout, uplo)` combinations pair by transpose duality and are all the same code
+with different strides:
 
-* **Contiguous (tuned).** Column-major + `MKL_LOWER`: a factor column is
-  contiguous in the compact buffer (consecutive rows are one `V`-wide pack
-  apart), so the pivot `sqrt`, the column scaling, and the rank-1 update all walk
-  contiguous packs. Its transpose dual, row-major + `MKL_UPPER`, is the same
-  memory access pattern with `(i,j)` roles swapped, so it routes to the same
-  tuned kernel by index transposition (`A = U^T U` on the row-major upper triangle
-  is `A^T = L L^T` on the reinterpreted column-major lower triangle, and `A` is
-  symmetric).
-* **Strided.** Column-major + `MKL_UPPER` and row-major + `MKL_LOWER` walk the
-  factor across the non-contiguous axis; they are supported for MKL compatibility
-  through a stride-generalized kernel over the same `potf2` math
-  (correctness-first; the strided inner sweep is not separately SIMD-tuned),
-  reusing the existing `BatchView` addressing.
+* **Column-major + `MKL_LOWER`** is the view itself (`si = 1`, `sj = ldap`): a
+  factor column is contiguous in the compact buffer (consecutive rows one
+  `V`-wide pack apart), so the pivot sqrt, the column scaling, and the rank-1
+  trailing update all walk contiguous packs. Its transpose dual, **row-major +
+  `MKL_UPPER`**, has the same memory picture (`U^T` stored row-major *is* `L`
+  stored column-major), so it takes the same strides.
+* **Column-major + `MKL_UPPER`** and **row-major + `MKL_LOWER`** are the
+  transposed view (`si = ldap`, `sj = 1`): the factor runs across the
+  non-contiguous axis. Supported for MKL compatibility, correctness-first; the
+  strided sweep is not separately SIMD-tuned.
+
+Only the view's lower trapezoid is read or written, so the strictly-opposite
+triangle of the named storage passes through untouched, as `?potrf` requires.
 
 ### 6.4 Padding and SIMD semantics
 
@@ -228,7 +230,7 @@ deliberate scope of this routine:
 ## 7. Testing and Validation Methodology
 
 Correctness is checked against standard dense LAPACK. SIMD, blocking, and the
-tuned/strided split are internal strategies only: the returned factor must
+choice of view strides are internal strategies only: the returned factor must
 satisfy the same invariants as an unbatched `?potrf`.
 
 ### 7.1 Suite 1 -- Factorization invariants vs dense LAPACK
@@ -294,23 +296,18 @@ through `extern "C"` for the FFI-stable surfaces, built on the project's
   taking `char layout` (`'C'`/`'R'`), `char uplo` (`'L'`/`'U'`), an explicit
   interleave width `V`, and no MKL dependency, with LAPACK-style `info = -j`
   argument validation.
-* **Templated kernel** (`cqr_potrf_compact.hpp`): per-group kernels
-  `potrf_compact_group<T,V>` (tuned contiguous, column-major lower) and
-  `potrf_compact_group_strided<T,V>` (general, via `BatchView`), driven over all
-  packs by `potrf_compact_general<T,V>` (any `layout`/`uplo`; the entry point both
-  C adapters call) and a col-major-lower convenience driver `potrf_compact<T,V>`.
+* **Templated kernel** (`src/cqr_potrf_compact.hpp`): the per-group kernel
+  `potrf_compact_group<T,V>` factors the lower triangle of a `BatchView`; the
+  driver `potrf_compact<T,V>` (any `layout`/`uplo`; the entry point both C
+  adapters call) builds the view so that the named triangle's storage appears
+  as that lower triangle (section 6.3).
 
-### 8.2 Suggested source layout
-
-A suggested split into new source files:
+### 8.2 Source layout
 
 | File | Role |
 |------|------|
 | `src/cqr_potrf_compact.hpp` | Templated SIMD Cholesky kernel (vectorized `potf2`; scalar `T`, width `V`). |
-| `src/cqr_potrf_compact_dispatch.cpp` | Portable `?potrf_compact` C entry points (runtime `V` -> compile-time dispatch, `info = -j`). |
-| `src/cqr_mkl_potrf.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and `MKL_UPLO`/`MKL_LAYOUT`, calls the kernel. |
-| `src/test_cqr_potrf_compact.cpp` | Self-contained correctness test vs a scalar `potf2` reference (no BLAS). |
-| `src/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation (residual, uniqueness, cross-check, solve). |
-
-The `cqr_mkl_?potrf_compact` prototypes are added to `cqr_mkl_ext.h` and the
-portable `?potrf_compact` prototypes to `cqr_compact.h`.
+| `src/cqr_compact.cpp` | Portable `?potrf_compact` C entry points (runtime `V` -> compile-time dispatch, `info = -j`). |
+| `src/cqr_mkl_ext.cpp` | Unwraps `MKL_COMPACT_PACK` -> `V` and `MKL_UPLO`/`MKL_LAYOUT`, calls the kernel. |
+| `tests/test_cqr_potrf_compact.cpp` | Self-contained correctness test vs a scalar `potf2` reference (no BLAS). |
+| `tests/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation (residual, uniqueness, cross-check, solve). |

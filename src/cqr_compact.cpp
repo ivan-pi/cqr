@@ -1,0 +1,182 @@
+/* cqr_compact.cpp
+ *
+ * The portable C API (cqr_compact.h): extern "C" wrappers around the templated
+ * kernels. Each validates its arguments LAPACK-style -- returning -j for an
+ * illegal j-th argument, never inspecting pointers, never aborting the host
+ * process -- and dispatches on the runtime interleave width V to a compile-time
+ * instantiation via for_vlen.
+ *
+ * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
+ */
+
+#include "cqr_compact.h"
+#include "cqr_geqrf_compact.hpp"
+#include "cqr_ormqr_compact.hpp"
+#include "cqr_potrf_compact.hpp"
+#include "cqr_trsm_compact.hpp"
+
+#include <cassert>
+
+namespace {
+
+using cqr::detail::for_vlen;
+
+/* Case-insensitive match of a LAPACK option character. */
+inline bool opt(char c, char upper)
+{
+    return c == upper || c == upper + ('a' - 'A');
+}
+
+inline int max1(int x)
+{
+    return x < 1 ? 1 : x;
+}
+
+inline bool vlen_ok(int V)
+{
+    return V == 2 || V == 4 || V == 8 || V == 16;
+}
+
+template <typename T>
+int geqrf(char layout, int m, int n, T *ap, int ldap, T *taup, int V, int nm)
+{
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    if (!col && !row) return -1;
+    if (m < 0) return -2;
+    if (n < 0) return -3;
+    if (ldap < max1(row ? n : m)) return -5;
+    if (!vlen_ok(V)) return -7;
+    if (nm < 0) return -8;
+    if (m == 0 || n == 0 || nm == 0) return 0; /* empty: nothing to compute */
+    assert(ap != nullptr && taup != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::geqrf_compact<T, decltype(v)::value>(row, m, n, ap, ldap, taup, nm);
+    });
+    return 0;
+}
+
+template <typename T>
+int ormqr(char trans, int m, int nrhs, int k, const T *ap, int ldap, const T *taup, T *bp,
+          int ldbp, int V, int nm)
+{
+    if (!opt(trans, 'T') && !opt(trans, 'N')) return -1;
+    if (m < 0) return -2;
+    if (nrhs < 0) return -3;
+    if (k < 0 || k > m) return -4;
+    if (ldap < max1(m)) return -6;
+    if (ldbp < max1(m)) return -9;
+    if (!vlen_ok(V)) return -10;
+    if (nm < 0) return -11;
+    if (m == 0 || nrhs == 0 || k == 0 || nm == 0) return 0;
+    assert(ap != nullptr && taup != nullptr && bp != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::ormqr_compact<T, decltype(v)::value>(true, false, trans, m, nrhs, k,
+                                                          ap, ldap, taup, bp, ldbp, nm);
+    });
+    return 0;
+}
+
+template <typename T>
+int potrf(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
+{
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    const bool lo = opt(uplo, 'L'), up = opt(uplo, 'U');
+    if (!col && !row) return -1;
+    if (!lo && !up) return -2;
+    if (n < 0) return -3;
+    if (ldap < max1(n)) return -5;
+    if (!vlen_ok(V)) return -6;
+    if (nm < 0) return -7;
+    if (n == 0 || nm == 0) return 0;
+    assert(ap != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::potrf_compact<T, decltype(v)::value>(row, up, n, ap, ldap, nm);
+    });
+    return 0;
+}
+
+template <typename T>
+int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n, T alpha,
+         const T *ap, int ldap, T *bp, int ldbp, int V, int nm)
+{
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    const bool left = opt(side, 'L'), right = opt(side, 'R');
+    const bool up = opt(uplo, 'U'), lo = opt(uplo, 'L');
+    const bool tran = opt(transa, 'T') || opt(transa, 'C');
+    const bool unit = opt(diag, 'U');
+    const int s = left ? m : n; /* A is the order-s triangular factor */
+
+    if (!col && !row) return -1;
+    if (!left && !right) return -2;
+    if (!up && !lo) return -3;
+    if (!tran && !opt(transa, 'N')) return -4;
+    if (!unit && !opt(diag, 'N')) return -5;
+    if (m < 0) return -6;
+    if (n < 0) return -7;
+    /* -8 alpha: every value (including 0, which means B := 0) is legal */
+    if (ldap < max1(s)) return -10;
+    if (ldbp < max1(row ? n : m)) return -12;
+    if (!vlen_ok(V)) return -13;
+    if (nm < 0) return -14;
+    if (m == 0 || n == 0 || nm == 0) return 0;
+    assert(ap != nullptr && bp != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::trsm_compact<T, decltype(v)::value>(left, up, row, tran, unit, m, n,
+                                                         alpha, ap, ldap, bp, ldbp, nm);
+    });
+    return 0;
+}
+
+} /* anonymous namespace */
+
+extern "C" {
+
+int dgeqrf_compact(char layout, int m, int n, double *ap, int ldap, double *taup, int V,
+                   int nm)
+{
+    return geqrf(layout, m, n, ap, ldap, taup, V, nm);
+}
+int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, float *taup, int V,
+                   int nm)
+{
+    return geqrf(layout, m, n, ap, ldap, taup, V, nm);
+}
+
+int dormqr_compact(char trans, int m, int nrhs, int k, const double *ap, int ldap,
+                   const double *taup, double *bp, int ldbp, int V, int nm)
+{
+    return ormqr(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
+}
+int sormqr_compact(char trans, int m, int nrhs, int k, const float *ap, int ldap,
+                   const float *taup, float *bp, int ldbp, int V, int nm)
+{
+    return ormqr(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
+}
+
+int dpotrf_compact(char layout, char uplo, int n, double *ap, int ldap, int V, int nm)
+{
+    return potrf(layout, uplo, n, ap, ldap, V, nm);
+}
+int spotrf_compact(char layout, char uplo, int n, float *ap, int ldap, int V, int nm)
+{
+    return potrf(layout, uplo, n, ap, ldap, V, nm);
+}
+
+int dtrsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
+                  double alpha, const double *ap, int ldap, double *bp, int ldbp, int V,
+                  int nm)
+{
+    return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, V, nm);
+}
+int strsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
+                  float alpha, const float *ap, int ldap, float *bp, int ldbp, int V,
+                  int nm)
+{
+    return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, V, nm);
+}
+
+} /* extern "C" */

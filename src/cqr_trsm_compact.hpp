@@ -18,8 +18,8 @@
  * format stores element (i,j) of all V contiguously, so it lifts verbatim with
  * double -> V-wide vector, one lane per matrix (no data-dependent branch). The
  * tuned side='L', column-major path is templated on the RHS block width and on
- * uplo/trans/diag; the per-kernel notes and cqr_mkl_dtrsm_compact_design.md have
- * the details.
+ * uplo/trans/diag; the other side/layout combinations go through one strided
+ * kernel over BatchViews (docs/cqr_mkl_dtrsm_compact_design.md has the details).
  *
  * Compact storage (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V,
  * A the order-s (s = m left / n right) triangular batch, B the m x n batch:
@@ -33,7 +33,7 @@
 #ifndef CQR_TRSM_COMPACT_HPP
 #define CQR_TRSM_COMPACT_HPP
 
-#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
+#include "cqr_compact_common.hpp"
 
 #include <cstddef>
 #include <cassert>
@@ -174,17 +174,14 @@ inline void trsm_left_dot(bool upper, bool tran, bool unit, Int m, Int n, T alph
  * two BatchViews). side='L' sweeps a row of X at a time, side='R' a column. */
 template <typename T, int V, typename Int = int>
 void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int m, Int n,
-                                T alpha,
-                                BatchView<const typename pack<T, V>::type, Int> A,
-                                BatchView<typename pack<T, V>::type, Int> B)
+                                T alpha, ConstBatchView<T, V, Int> A,
+                                BatchView<T, V, Int> B)
 {
     using VT = typename pack<T, V>::type;
     static_assert(std::is_floating_point<T>::value,
                   "trsm_compact is defined for real float/double");
 
-    /* Strides must be non-degenerate so distinct (i,j) map to distinct pack
-     * elements -- an invariant the driver upholds for every side/layout. */
-    assert(A.special && A.panel && B.special && B.panel);
+    assert(A.si && A.sj && B.si && B.sj);
 
     VT va;
     broadcast<T, V>(va, alpha);
@@ -232,56 +229,51 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
  * side='L' column-major routes to the tuned trsm_left_dot; the other three
  * side/layout combinations use the strided kernel. */
 template <typename T, int V, typename Int = int>
-void trsm_compact_general(bool left, bool upper, bool rowmajor, bool tran, bool unit,
-                          Int m, Int n, T alpha, const T *ap, Int ldap, T *bp, Int ldbp,
-                          Int nm)
+void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, Int m,
+                  Int n, T alpha, const T *ap, Int ldap, T *bp, Int ldbp, Int nm)
 {
     assert(nm >= 1 && m >= 0 && n >= 0);
 
     /* A is the order-s triangular factor: s = m (left) or n (right). */
     const Int s = left ? m : n;
 
-    /* element strides (in VT units). Column-major: a row step is 1 and a column
-     * step is ld; row-major flips that. A is s x s, B is m x n. */
-    const Int a_row = rowmajor ? ldap : 1;
-    const Int a_col = rowmajor ? 1 : ldap;
-    const Int b_row = rowmajor ? ldbp : 1;
-    const Int b_col = rowmajor ? 1 : ldbp;
-
-    /* group strides (in scalar T units): elements packed per matrix is
-     * ld*(complementary extent) -- for A (s x s) that is ldap*s either way;
-     * for B (m x n) it is ldbp*n column-major, ldbp*m row-major. */
-    const std::size_t str_a = (std::size_t)ldap * s * V;
-    const std::size_t str_b =
-        (rowmajor ? (std::size_t)ldbp * m : (std::size_t)ldbp * n) * V;
-
-    const Int ngroups = (nm + V - 1) / V;
+    /* A is s x s, B is m x n. */
+    const std::size_t str_a = group_stride(rowmajor, ldap, s, s, V);
+    const std::size_t str_b = group_stride(rowmajor, ldbp, m, n, V);
 
     /* alpha == 0 is the BLAS ?trsm fast path: B := 0 with A untouched. Handle it
      * once here -- both group kernels then assume alpha != 0 -- zeroing each
      * group's m x n block through the same strided B view the solve uses. */
     if (alpha == T(0)) {
         using VT = typename pack<T, V>::type;
-        for (Int g = 0; g < ngroups; ++g) {
-            auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, b_row, b_col);
-            for (Int j = 0; j < n; ++j)
-                for (Int i = 0; i < m; ++i)
-                    B(i, j) = VT{};
-        }
+        for_each_group<V>(
+            nm,
+            [&](Int g) {
+                auto B =
+                    make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
+                for (Int j = 0; j < n; ++j)
+                    for (Int i = 0; i < m; ++i)
+                        B(i, j) = VT{};
+            },
+            (double)m * n * V /* stores per group */);
         return;
     }
 
-    for (Int g = 0; g < ngroups; ++g) {
-        const T *a = ap + (std::size_t)g * str_a;
-        T *b = bp + (std::size_t)g * str_b;
-        if (left && !rowmajor)
-            trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b, ldbp);
-        else
-            trsm_compact_group_strided<T, V, Int>(
-                left, upper, tran, unit, m, n, alpha,
-                make_const_view<T, V, Int>(a, a_row, a_col),
-                make_view<T, V, Int>(b, b_row, b_col));
-    }
+    for_each_group<V>(
+        nm,
+        [&](Int g) {
+            const T *a = ap + (std::size_t)g * str_a;
+            T *b = bp + (std::size_t)g * str_b;
+            if (left && !rowmajor)
+                trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b,
+                                         ldbp);
+            else
+                trsm_compact_group_strided<T, V, Int>(
+                    left, upper, tran, unit, m, n, alpha,
+                    make_const_view<T, V, Int>(a, rowmajor, ldap),
+                    make_view<T, V, Int>(b, rowmajor, ldbp));
+        },
+        (double)s * s * (left ? n : m) * V /* ~substitution flops per group */);
 }
 
 } /* namespace detail */

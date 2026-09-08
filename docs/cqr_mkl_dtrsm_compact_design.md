@@ -251,7 +251,7 @@ CTest-registered.
 
 ### 7.1 Suite 1 -- Portable, vs a scalar `?trsm` reference (no BLAS)
 
-`test_cqr_trsm_compact.cpp` validates the templated kernel directly against a
+`tests/test_cqr_trsm_compact.cpp` validates the templated kernel directly against a
 scalar `?trsm` (the same algorithm, one matrix at a time) over the full
 `side x uplo x transa x diag` matrix, across precisions (FP32/FP64), interleave
 widths, and padded final packs, column-major. The row-dot kernels run the
@@ -268,7 +268,7 @@ the `geqrf`/`potrf` self-tests apply).
 
 ### 7.2 Suite 2 -- MKL cross-check, vs `mkl_?trsm_compact`
 
-`test_cqr_trsm_mkl.cpp` packs a diagonal-boosted triangular batch and a random
+`tests/test_cqr_trsm_mkl.cpp` packs a diagonal-boosted triangular batch and a random
 RHS with the genuine MKL Compact API, then has `cqr_mkl_?trsm_compact` and
 `mkl_?trsm_compact` each solve their own copy. The two compact result buffers are
 compared elementwise over the full feature matrix

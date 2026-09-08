@@ -7,20 +7,20 @@ an Intel MKL-style API:
 * **`cqr_mkl_?geqrf_compact`** - the QR *factorization* itself: an open,
   vectorized alternative to `mkl_?geqrf_compact`. On this project's AVX-512 test
   machine it outruns MKL's own compact `geqrf` and per-matrix LAPACK across the
-  small-size range. See its [design document](cqr_mkl_dgeqrf_compact_design.md).
+  small-size range. See its [design document](docs/cqr_mkl_dgeqrf_compact_design.md).
 * **`cqr_mkl_?ormqr_compact`** - the *apply-Q* step MKL omits: MKL ships
   `mkl_?geqrf_compact` and `mkl_?trsm_compact` but no `?ormqr_compact`, so there
   is no supported way to apply `Q` (or `Q^T`) to a batch. cqr fills that gap. See
-  its [design document](cqr_mkl_dormqr_compact_design.md).
+  its [design document](docs/cqr_mkl_dormqr_compact_design.md).
 * **`cqr_mkl_?potrf_compact`** - the batched **Cholesky factorization**
   (`A = L L^T` / `U^T U`) of symmetric-positive-definite matrices: a portable,
   vectorized alternative to `mkl_?potrf_compact`. Paired with
   `cqr_mkl_?trsm_compact` it factors and solves batched SPD systems. See its
-  [design document](cqr_mkl_dpotrf_compact_design.md).
+  [design document](docs/cqr_mkl_dpotrf_compact_design.md).
 * **`cqr_mkl_?trsm_compact`** - an open drop-in for
   `mkl_?trsm_compact` (the batched triangular solve), so the whole `AX = B`
   pipeline runs with no MKL compute kernel. See its
-  [design document](cqr_mkl_dtrsm_compact_design.md).
+  [design document](docs/cqr_mkl_dtrsm_compact_design.md).
 
 All routines come in single and double precision. Together they factor and
 solve batched systems entirely in the compact format, with no MKL compute kernel.
@@ -59,7 +59,26 @@ cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_FLAGS="-O3 -march=native"
 ```
 
-Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
+Useful options: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL) and
+`-DCQR_WITH_OPENMP=OFF` (single-threaded routines; see below).
+
+## Threading
+
+Every routine threads its loop over the *groups* of `V` interleaved matrices
+with OpenMP (static schedule over a team of at most one thread per group; the
+groups are independent and equal-sized), but only when the call has at least two
+groups and enough work to pay for the fork/join -- about `2e5` flops, the
+measured break-even (`-DCQR_OMP_MIN_FLOPS=...` overrides it). Because the
+thread count is OpenMP's team size *at the current nesting level*, the routines
+compose with a caller's own parallel loop: called from inside it they run
+serially by default (no competing thread pools), and the standard per-level
+thread list enables nested splitting when wanted, e.g.
+
+```sh
+OMP_NUM_THREADS=8,2 OMP_MAX_ACTIVE_LEVELS=2 ./my_app   # 8 outer x 2 inner threads
+```
+
+Results are independent of the thread count.
 
 ## Examples
 
@@ -92,53 +111,40 @@ detail in [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).
 
 ## Layout
 
+```
+include/   public headers
+src/       kernels and the two adapter sources
+tests/     portable (no BLAS) and MKL-backed test suites
+examples/  worked solve + benchmarks (see examples/BENCHMARKS.md)
+docs/      one design document per routine
+```
+
 ### Public interface
 
-These headers are the project's API - the only files most users need to
-include:
+The headers under `include/` are the project's API, the only files users need:
 
 | File | Role |
 |------|------|
-| `src/cqr_mkl_ext.h` | The MKL-style public API: `cqr_mkl_?geqrf_compact` (QR factorization, drop-in for `mkl_?geqrf_compact`), `cqr_mkl_?ormqr_compact` (apply `Q`/`Q^T`, the missing `mkl_?ormqr_compact`), `cqr_mkl_?potrf_compact` (Cholesky, drop-in for `mkl_?potrf_compact`), and `cqr_mkl_?trsm_compact` (triangular solve, drop-in for `mkl_?trsm_compact`). Takes `MKL_COMPACT_PACK` formats. |
-| `src/cqr_compact.h` | The portable C API, all eight exported functions: `dgeqrf_compact` / `sgeqrf_compact` (QR factorization), `dormqr_compact` / `sormqr_compact` (apply `Q` / `Q^T`), `dpotrf_compact` / `spotrf_compact` (Cholesky), and `dtrsm_compact` / `strsm_compact` (triangular solve), with an explicit interleave width `V` and no MKL dependency. |
+| `include/cqr_mkl_ext.h` | The MKL-style API: `cqr_mkl_?geqrf_compact`, `cqr_mkl_?ormqr_compact`, `cqr_mkl_?potrf_compact`, `cqr_mkl_?trsm_compact`, taking `MKL_COMPACT_PACK` formats. Also the C++ helpers `vlen_for_format` / `format_for_vlen` / `compact_format_name`. |
+| `include/cqr_compact.h` | The portable C API: `?geqrf_compact`, `?ormqr_compact`, `?potrf_compact`, `?trsm_compact` (`d`/`s`), with an explicit interleave width `V`, LAPACK-style `info = -j` validation, and no MKL dependency. |
+| `include/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 
-Everything else under `src/` is internal - implementation details and tests,
-not part of the supported interface:
-
-| File | Role |
-|------|------|
-| `src/cqr_compact_common.hpp` | Shared machinery for the compact kernels: the `pack<T,V>` packed vector type plus the `BatchView` / `vsqrt` / `broadcast` helpers, included by every routine header below. |
-| `src/cqr_geqrf_compact.hpp` | Templated SIMD QR-factorization kernel (vectorized `geqr2`; scalar `T`, interleave width `V`). |
-| `src/cqr_potrf_compact.hpp` | Templated SIMD Cholesky-factorization kernel (vectorized `potf2`; scalar `T`, interleave width `V`). |
-| `src/cqr_ormqr_compact.hpp` | Templated SIMD kernel `B := op(Q)*B` (scalar `T`, interleave width `V`). |
-| `src/cqr_trsm_compact.hpp` | Templated compact triangular-solve kernels (tuned column-major/left + general strided) and group driver (scalar `T`, interleave width `V`). |
-| `src/cqr_geqrf_compact_dispatch.cpp` | Portable geqrf C entry points (runtime `V` -> compile-time dispatch). |
-| `src/cqr_potrf_compact_dispatch.cpp` | Portable potrf C entry points (runtime `V` -> compile-time dispatch). |
-| `src/cqr_ormqr_compact_dispatch.cpp` | Portable ormqr C entry points (runtime `V` -> compile-time dispatch). |
-| `src/cqr_trsm_compact_dispatch.cpp` | Portable trsm C entry points with LAPACK/BLAS-style `info = -j` validation (runtime `V` -> compile-time dispatch). |
-| `src/cqr_mkl_geqrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_LAYOUT`, then calls the geqrf kernel. |
-| `src/cqr_mkl_potrf.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `MKL_UPLO`/`MKL_LAYOUT`, then calls the potrf kernel. |
-| `src/cqr_mkl_ormqr.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps `side`/`trans`/`MKL_LAYOUT`, then calls the ormqr kernel. |
-| `src/cqr_mkl_trsm.cpp` | Dispatches on `MKL_COMPACT_PACK` directly and maps the MKL enums (`MKL_SIDE`/`MKL_UPLO`/`MKL_TRANSPOSE`/`MKL_DIAG`/`MKL_LAYOUT`), then calls the trsm kernel (drop-in for `mkl_?trsm_compact`; no `work`/`info`). |
-| `src/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
-| `src/test_compact_util.hpp` | Shared test helpers (seeded RNG, error metrics, SPD generation, Compact pack/unpack); header-only, no MKL. |
-| `src/test_cqr_geqrf_compact.cpp` | Self-contained geqrf correctness test vs a scalar `geqr2` reference (no BLAS). |
-| `src/test_cqr_geqrf_mkl.cpp` | MKL + dense-LAPACK validation of `cqr_mkl_dgeqrf_compact` (residual, orthogonality, solve). |
-| `src/test_cqr_potrf_compact.cpp` | Self-contained potrf correctness test vs a scalar `potf2` reference (no BLAS). |
-| `src/test_cqr_potrf_mkl.cpp` | MKL + dense-LAPACK validation of `cqr_mkl_dpotrf_compact` (residual, untouched triangle, uniqueness, cross-check, solve). |
-| `src/test_cqr_ormqr_compact.cpp` | Self-contained ormqr correctness/bench test (no BLAS). |
-| `src/test_cqr_ormqr_mkl.cpp` | MKL-backed validation through the real compact pipeline. |
-| `src/test_cqr_trsm_compact.cpp` | Self-contained trsm test (no BLAS): C API validation + numerical vs a scalar `?trsm` reference. |
-| `src/test_cqr_trsm_mkl.cpp` | MKL-backed cross-check of `cqr_mkl_?trsm_compact` vs `mkl_?trsm_compact` + an end-to-end MKL-compute-free solve. |
-
-### Examples
+### Internals
 
 | File | Role |
 |------|------|
-| `examples/solve_qr_compact.cpp` | Worked batched `AX=B` solve, cross-checked against `LAPACKE_dgels`. |
-| `examples/bench_qr_compact.cpp` | Throughput benchmark of the batched *solve* vs. per-matrix LAPACK. |
-| `examples/bench_geqrf_compact.cpp` | Throughput benchmark of the QR *factorization* vs. `mkl_dgeqrf_compact` and per-matrix `LAPACKE_dgeqrf`. |
-| `examples/bench_potrf_compact.cpp` | Throughput benchmark of the SPD Cholesky *factorization* vs. `mkl_dpotrf_compact` and per-matrix `LAPACKE_dpotrf`. |
+| `src/cqr_compact_common.hpp` | The `pack<T,V>` SIMD element, the `BatchView` strided group view every kernel addresses its operands through, `vsqrt`/`broadcast`, and the runtime-`V` dispatch helper `for_vlen`. |
+| `src/cqr_geqrf_compact.hpp` | QR factorization kernel: vectorized `geqr2` with a branch-free `larfg`, reusing ormqr's `larf` for the trailing update. |
+| `src/cqr_ormqr_compact.hpp` | Apply-Q kernel (vectorized `dorm2r`) and the shared one-reflector update `larf`. |
+| `src/cqr_potrf_compact.hpp` | Cholesky kernel (vectorized `potf2`); the four `(layout, uplo)` cases are one kernel over transposed views. |
+| `src/cqr_trsm_compact.hpp` | Triangular-solve kernels: the tuned column-major `side='L'` row-dot path and the general strided kernel. |
+| `src/cqr_compact.cpp` | The portable C API: argument validation and `V` dispatch for all eight entry points. |
+| `src/cqr_mkl_ext.cpp` | The MKL-style API: MKL enum / `MKL_COMPACT_PACK` unwrapping for all eight entry points. |
+| `tests/test_compact_util.hpp` | Shared test helpers: RNG, error metrics, input generation, scalar reference kernels, Compact pack/unpack, and `compact<T>` (the portable C API dispatched on the scalar type); header-only, no MKL. |
+| `tests/test_mkl_util.hpp` | Scalar-type dispatch for the MKL-backed suites: `cqr_mkl<T>` (routines under test), `mkl<T>` (MKL's compact API and kernels), `lapack<T>` (LAPACKE/CBLAS references). |
+| `tests/test_cqr_*_compact.cpp` | Portable self-contained suites (no BLAS): each kernel vs its scalar reference, plus C API validation, in FP64 and FP32. |
+| `tests/test_cqr_*_mkl.cpp` | MKL + dense-LAPACK validation, templated on the scalar type and run in FP64 and FP32: invariants vs LAPACK, cross-checks vs MKL's compact kernels, end-to-end solves. |
+| `examples/bench_util.hpp` | The benchmarks' shared harness (timing, aligned storage, command line). |
 
 ## Related work
 

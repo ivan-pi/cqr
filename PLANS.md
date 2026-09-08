@@ -1,165 +1,121 @@
 # PLANS
 
+Status of each routine against its design document (`docs/`), plus the open
+items. All four routines ship both API surfaces -- the MKL-style
+`cqr_mkl_?*_compact` (no argument checking, scalar `info`) and the portable
+`?*_compact` C API (LAPACK-style `info = -j` validation) -- in FP64 and FP32,
+over one `BatchView`-based kernel each that covers every layout (and, for
+`ormqr`/`trsm`, every side). Complex precisions, pivoting, and overflow/
+underflow-safe scaling are out of scope for all of them.
+
 ## geqrf (`cqr_mkl_dgeqrf_compact`)
 
-The compact QR *factorization* (`cqr_mkl_dgeqrf_compact_design.md`): a portable,
-vectorized `mkl_?geqrf_compact`. Status vs. its design document:
+- **Implemented (design 6-8):** vectorized unblocked `geqr2` with a branch-free
+  masked `larfg`; the trailing update is `ormqr`'s `larf`. Column-major is the
+  contiguous case (unit row stride); row-major is the same kernel with the
+  strides swapped.
+- **Validated (design 7):** a BLAS-free test vs a scalar `geqr2`, and an
+  MKL/LAPACK test gating the factorization residual (`20 n eps`) and
+  orthogonality (`100 n eps`) against dense `LAPACKE_dorgqr`/`dgeqrf`,
+  cross-checking vs `mkl_dgeqrf_compact` (both layouts), closing the `AX = B`
+  solve, and covering rank-deficient / near-collinear structures.
+- **Benchmarked:** `bench_geqrf_compact` (see `examples/BENCHMARKS.md`).
+- **Scoped out (design 6.6):** no `dlarfg` rescaling near `1e+/-150`, no column
+  pivoting; blocked (`larft`/`larfb`) factorization is deliberately not used at
+  the target sizes.
+- **Open: one-pass solve on the fused system `[A | B]`.** Factoring the
+  `m x (n + nrhs)` matrix `[A | B]` with `geqrf` applies every reflector to the
+  `B` block as it is built, so `Q^T B` comes out of the factorization and the
+  separate `ormqr` pass disappears. The current API only partly supports this:
+  `geqrf` always builds `min(m, ncols)` reflectors, which is exactly `n` for a
+  square `A` (correct, one pass) but `min(m, n + nrhs) > n` for a tall `A`
+  (extra reflectors over the `B` block -- harmless for the least-squares
+  solution, wasted work); and `trsm` cannot address the `R` and `Q^T B` blocks
+  inside the fused buffer, because it derives the group stride from its own
+  `ldap*s` / `ldbp*n`, not from the fused column count `n + nrhs`, so it only
+  works while the batch is a single group (`nm <= V`). Closing this needs either
+  a reflector-count argument on `geqrf` plus explicit group strides on `trsm`,
+  or a fused driver (`?gels`-style: per group, factor `[A | B]` to `n`
+  reflectors and back-substitute the `B` block in place) built on the existing
+  view-based kernels.
+- **Deferred:** a benchmark against the open-source `batmat` `geqrf` (same
+  interleaved format).
 
-- **Implemented (design sections 6-8):** the vectorized unblocked `geqr2` with a
-  branch-free masked `larfg` (FP64 + FP32), the portable C API
-  `dgeqrf_compact`/`sgeqrf_compact` (LAPACK-style `info=-j` validation) and the
-  MKL-style `cqr_mkl_?geqrf_compact` (no checking, scalar `info`, `lwork`
-  query). Column-major is the tuned contiguous path; row-major routes through
-  the stride-generalized kernel.
-- **Validated (design section 7):** a BLAS-free test vs. a scalar `geqr2`
-  reference, and an MKL/LAPACK test gating the factorization residual
-  (`20 n eps`) and orthogonality (`100 n eps`) against dense
-  `LAPACKE_dorgqr`/`dgeqrf`, cross-checking vs. `mkl_dgeqrf_compact` (both
-  layouts), closing the `AX=B` solve, and covering rank-deficient / near-collinear
-  stress structures. All match LAPACK/MKL to machine precision.
-- **Benchmarked (see [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md)):**
-  `bench_geqrf_compact` (vs. `mkl_dgeqrf_compact` and per-matrix
-  `LAPACKE_dgeqrf`) is built and CTest-gated, reporting GFLOP/s and a
-  geometric-mean speedup.
-- **Known gaps / scoped out (design section 6.6):** no overflow/underflow-safe
-  `dlarfg` rescaling (matters only near `1e+/-150`), no column pivoting, and the
-  row-major sweep is correctness-first, not separately SIMD-tuned (mirroring
-  `ormqr`). Blocked (`larft`/`larfb`) factorization is intentionally not used at
-  the target sizes. Complex precisions are out of scope, as for `ormqr`.
-- **Deferred:** a comparison benchmark against the open-source `batmat` project's
-  `geqrf` (same interleaved format) is left for a future change.
+## ormqr (`cqr_mkl_dormqr_compact`)
+
+- **Implemented (design 2-6, 8.1):** vectorized unblocked `dorm2r`;
+  `side in {L, R}`, both layouts, `trans in {N, T}` (`C` folds to `T`). The
+  reflector sweep is the shared `larf`, register-blocked four slices at a time;
+  `side = 'R'` is the same kernel over the transposed view of `C`.
+- **Validated (design 7):** a BLAS-free test vs a scalar `dorm2r` (including a
+  column-pivoted-QR + back-permutation solve), and an MKL test running
+  `op(Q) C` vs dense `LAPACKE_dormqr` over the full `layout x side x trans`
+  matrix (gate `20 s eps`) plus the end-to-end `mkl_dgeqrf_compact ->
+  cqr_mkl_dormqr_compact -> mkl_dtrsm_compact` solve (`100 n eps`).
+- **Padding (design 6.4):** padded slots carry identity factorizations
+  (`tau = 0`), so applying them is a no-op.
+- **Known gaps:** the stress-test structures of design 7.3/7.4 (the `cond`
+  scaling knob, banded / row-scaled / clustered-scale inputs) are only partly
+  covered -- `geqrf`'s suite has the rank-deficient and near-collinear cases.
 
 ## potrf (`cqr_mkl_dpotrf_compact`)
 
-The compact Cholesky *factorization* (`cqr_mkl_dpotrf_compact_design.md`): a
-portable, vectorized `mkl_?potrf_compact` for symmetric positive-definite
-batches. Status vs. its design document:
-
-- **Implemented (design sections 6-8):** the vectorized unblocked `potf2` with a
-  branch-free unconditional-`sqrt` pivot (FP64 + FP32) and a `JB = 4`
-  register-blocked rank-1 trailing update, the portable C API
-  `dpotrf_compact`/`spotrf_compact` (LAPACK-style `info = -j` validation) and the
-  MKL-style `cqr_mkl_?potrf_compact` (no checking, scalar `info`, no `work`).
-  Column-major lower is the tuned contiguous path; row-major upper folds onto it
-  by transpose duality, and the other two `(layout, uplo)` combinations route
-  through the stride-generalized kernel. The shared `vsqrt<T,V>` helper now lives
-  in `cqr_compact_common.hpp` alongside `pack`/`BatchView`.
-- **Validated (design section 7):** a BLAS-free test vs. a scalar `potf2`
-  reference (both `uplo`, all layouts, padded final packs, and a non-SPD
-  lane-isolation case gating that a poisoned lane never contaminates its
-  siblings), and an MKL/LAPACK test gating the reconstruction residual
-  (`20 n eps`), the untouched triangle (bit-for-bit), and -- since the SPD factor
-  is unique -- the elementwise factor vs. `LAPACKE_dpotrf` (`20 n eps`),
-  cross-checking vs. `mkl_dpotrf_compact` (both layouts, both `uplo`; observed
-  bit-exact), and closing the SPD `AX = B` solve (`potrf` + two
-  `mkl_dtrsm_compact`). All match LAPACK/MKL to machine precision.
-- **Benchmarked (see [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md)):**
-  `bench_potrf_compact` (vs. `mkl_dpotrf_compact` and per-matrix `LAPACKE_dpotrf`,
-  over pools of SPD matrices) is built and CTest-gated, reporting GFLOP/s and a
-  geometric-mean speedup; it factors on the tuned col-major lower path and gates
-  the compact factor elementwise against `LAPACKE_dpotrf` (the SPD factor being
-  unique).
-- **Known gaps / scoped out (design section 6.6):** positive-definiteness is
-  assumed, not enforced (a non-SPD lane poisons itself with `NaN`/`Inf` instead
-  of `info = j`, mirroring MKL's reserved `info`); no overflow/underflow-safe
-  scaling; no pivoting; and the strided (column-major upper / row-major lower)
-  inner sweep is correctness-first, not separately SIMD-tuned. Blocked
-  (`syrk`/`trsm`) factorization is intentionally not used at the target sizes.
-  Complex (`c`/`z`) Hermitian variants are out of scope, as for the QR routines.
+- **Implemented (design 6-8):** vectorized unblocked `potf2` with an
+  unconditional `sqrt` pivot and a `JB = 4` register-blocked rank-1 trailing
+  update. The four `(layout, uplo)` cases are one kernel over transposed views
+  (design 6.3).
+- **Validated (design 7):** a BLAS-free test vs a scalar `potf2` (both `uplo`,
+  both layouts, padded groups, and a non-SPD lane-isolation case), and an
+  MKL/LAPACK test gating the reconstruction residual (`20 n eps`), the untouched
+  triangle (bit-for-bit), the elementwise factor vs `LAPACKE_dpotrf`
+  (`20 n eps`; the SPD factor is unique), the cross-check vs `mkl_dpotrf_compact`
+  (observed bit-exact), and the SPD `AX = B` solve.
+- **Benchmarked:** `bench_potrf_compact`.
+- **Scoped out (design 6.6):** positive-definiteness is assumed (a non-SPD lane
+  poisons itself with `NaN`/`Inf` instead of `info = j`); blocked
+  (`syrk`/`trsm`) factorization is not used at the target sizes.
 
 ## trsm (`cqr_mkl_dtrsm_compact`)
 
-The compact batched triangular solve (`cqr_mkl_dtrsm_compact_design.md`): a
-portable, vectorized `mkl_?trsm_compact`, the step that closes the batched
-`AX = B` solve so it needs no MKL compute kernel. Status vs. its design document:
+- **Implemented (design 2-6, 8.1):** full `side x uplo x transa x diag`,
+  `alpha = 0` as the BLAS `B := 0` fast path. Column-major `side = 'L'` is the
+  tuned path (4/2/1 register-blocked row-dot, contiguous column-axpy for the
+  single `op(A) = A` leftover column); the other side/layout combinations use
+  the strided kernel.
+- **Validated (design 7):** a BLAS-free test vs a scalar `?trsm` gating the
+  forward error and the solve's own residual `||op(A) X - alpha B||`, and an
+  MKL test cross-checking vs `mkl_?trsm_compact` over the full feature matrix
+  plus the end-to-end MKL-compute-free solve.
+- **Performance vs `mkl_?trsm_compact`** (single thread, AVX-512, orders
+  10-148): `nrhs = 1` ~`1.0x`, `nrhs` a multiple of 4 ~`1.3-1.5x`, mixed counts
+  ~`1.0-1.3x`. Remaining opportunities: the small-`n` (~10) per-group overhead
+  (~`0.6-0.9x`), reciprocal-multiplying the diagonal in the blocked paths, and
+  tuning the strided kernel.
+- **Scoped out:** no singularity check (a zero non-unit diagonal divides to
+  `Inf`/`NaN`, as in BLAS).
 
-- **Implemented (design sections 2-6, 8.1):** both API surfaces -- the MKL-style
-  `cqr_mkl_?trsm_compact` (drop-in, no `work`/`info`) and the portable
-  `dtrsm_compact`/`strsm_compact` (LAPACK-style `info = -j` validation) -- over
-  the vectorized substitution. Column-major `side='L'` is the tuned path: a 4/2/1
-  register-blocked row-dot, with a contiguous column-axpy for the single
-  `op(A)=A` leftover column; the other side/layout combinations route through a
-  stride-generalized kernel. Full `side x uplo x transa x diag` in FP64/FP32,
-  `alpha = 0` handled as the BLAS `B := 0` fast path.
-- **Validated (design section 7):** a BLAS-free test vs. a scalar `?trsm`
-  reference over the full feature matrix, gating both the forward error and the
-  solve's own residual `||op(A) X - alpha B||` (from an independent triangular
-  multiply, so a bug shared by the reference and the kernel cannot pass); plus an
-  MKL test cross-checking vs. `mkl_?trsm_compact` over the full
-  `layout x side x uplo x transa x diag` matrix and closing the end-to-end
-  `AX = B` solve (`cqr_mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact ->
-  cqr_mkl_dtrsm_compact`). Both are CTest-registered.
-- **Wired into the pipeline:** `examples/solve_qr_compact.cpp` and the
-  `bench_qr_compact` benchmark call `cqr_mkl_dtrsm_compact`, so the batched solve
-  path uses no MKL compute kernel (MKL only packs/unpacks).
-- **Known gaps / scoped out (design section 6.6):** no singularity check (a zero
-  diagonal of a non-unit factor divides to Inf/NaN, as in BLAS `?trsm`), no
-  overflow/underflow-safe scaling, and the strided (right-side / row-major) inner
-  sweep is correctness-first, not separately SIMD-tuned (mirroring `ormqr`).
-  Complex precisions are out of scope.
+## Project-wide
 
-### trsm performance vs `mkl_?trsm_compact`
-
-Isolated single-thread micro-benchmark (`L/U/N/N`, AVX-512, matrix orders 10-148,
-on both GCC and Clang); speedup = MKL time / cqr time:
-
-- **Single RHS** (`nrhs = 1`, the QR solve `R x = Q^T b`): ~`1.0x` -- the
-  column-axpy tail streams `A` down columns, matching MKL bit-for-bit.
-- **`nrhs` a multiple of 4:** ~`1.3-1.5x` -- the `JB = 4` row-dot block reuses
-  each strided `A` load four times.
-- **Mixed counts** (`nrhs = 2, 3, 5, 6, ...`): the 4/2/1 tail blocking lifts them
-  to parity-or-better (~`1.0-1.3x`).
-
-The strided row-load is specific to `trsm` (`geqrf`/`ormqr` already sweep down
-columns). Remaining performance-only opportunities: the small-`n` (`~10`)
-per-group overhead (~`0.6-0.9x`), reciprocal-multiplying the diagonal in the
-blocked paths, and SIMD-tuning the strided kernel.
-
-## Known gaps
-
-Gaps between the `ormqr` implementation and its design document
-(`cqr_mkl_dormqr_compact_design.md`), verified against the source tree.
-
-- **Complex precisions (`cunmqr`/`zunmqr`).** Only real precisions exist; the
-  family is real-only and `trans='C'` is folded to `'T'`
-  (in `src/cqr_mkl_ormqr.cpp`). Document the real-only scope, or
-  add genuine complex specializations.
-- **Stress-test matrix (sections 7.3/7.4) absent.** Tests use only
-  well-conditioned `frand` + diagonal boost. Missing: the `cond` scaling knob
-  (`logspace(0,-cond,n)`), the rank-deficient / near-rank-deficient / banded /
-  row-scaled / near-collinear / clustered-scale structures, and the
-  geometric-mean benchmark-ranking harness.
+- **Precision coverage.** Every suite is templated on the scalar type and runs
+  in FP64 and FP32; the MKL-backed ones reach MKL and LAPACK through the
+  `cqr_mkl<T>` / `mkl<T>` / `lapack<T>` dispatch structs of
+  `tests/test_mkl_util.hpp`. The FP32 cross-checks agree with
+  `mkl_s*_compact` to ~1e-6 (potrf bit-exact), gated at 1e-4.
+- **Threading.** Each routine's group loop is an OpenMP `parallel for`
+  (static schedule, at most one thread per group) gated on two or more groups
+  and a per-call work estimate above the measured fork/join break-even
+  (`2e5` flops), so it stays serial for small calls and inside a caller's own
+  parallel region unless nested parallelism is enabled (`OMP_NUM_THREADS=8,2`).
+  The factorization benchmarks' cqr paths hand the whole pool to one call; the
+  MKL and LAPACK reference paths keep an outer OpenMP loop (sequential MKL is
+  not threaded). The solve benchmark keeps its pipeline per group in the
+  caller's loop: whole-pool geqrf/ormqr/trsm calls stream the pool three times
+  and measured 15-55% slower than the cache-resident per-group pipeline. A
+  fused per-group solve driver (the `?gels`-style entry above) is the way to
+  get library-side threading for the whole solve without that penalty.
 - **No install/export.** `CMakeLists.txt` defines no `install()`/package-config
-  rules, so the project isn't consumable via `find_package(cqr)`.
-
-## Accordance with the design document
-
-What the implementation provides, mapped to the design document:
-
-- **API (sections 2-5):** `cqr_mkl_dormqr_compact` matches the signature, the
-  `MKL_COMPACT_PACK` format abstraction, and the `lwork = -1` workspace query.
-  It performs no argument checking and writes a single scalar `info` (0 on
-  success). Both are implementation choices favoring performance -- mirroring
-  MKL's own compact routines, which skip checks and leave `info` reserved --
-  and may change in future.
-- **Dispatcher (section 8.1):** unwraps the format to the interleave width `V`
-  (SSE/AVX/AVX-512 -> 2/4/8 for FP64, 4/8/16 for FP32) and forwards to the
-  templated kernel.
-- **Validation (section 7):** `test_cqr_ormqr_mkl` runs Suite 1 (isolated
-  `op(Q)*C` vs dense LAPACK, gate `20*s*eps`) over the full feature matrix --
-  `side in {L,R} x layout in {col,row} x trans in {N,T}` -- and Suite 2
-  (end-to-end `AX=B`: `mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact ->
-  mkl_dtrsm_compact`, gates on forward error and system residual at
-  `100*n*eps`) against real MKL.
-- **Padding (section 6.4):** padded slots of the last compact pack carry
-  identity factorizations (`tau=0`), so applying them is a no-op; exercised by
-  the partial-group test cases.
-
-**Feature coverage:** `side in {'L','R'}`, `layout in {MKL_COL_MAJOR,
-MKL_ROW_MAJOR}`, `trans in {N,T}` (`C` folds to `T` for the real types) in
-FP64/FP32. The tuned contiguous kernel serves the `side='L'`, column-major
-solver path; the other three side/layout combinations run through a
-stride-generalized kernel (same unblocked `dorm2r` math, correctness-first --
-the non-contiguous inner sweep is not yet SIMD-tuned). Real types only
-(`d`/`s`); complex (`c`/`z`) is out of scope. The MKL extension does not
-validate arguments; the portable `dormqr_compact`/`sormqr_compact` C API does.
+  rules, so the project is not consumable via `find_package(cqr)`.
+- **Alignment contract.** Compact buffers are correct at any `T` alignment on
+  GCC and clang alike now that the kernels' view is templated on `(T, V)` rather
+  than on the pack type (issue #34); pack-width alignment remains a performance
+  recommendation only.

@@ -19,8 +19,8 @@
  *   fixed tolerance (1e-9). Run for both layouts and both uplo.
  *
  * Suite 3 (section 7.3) -- End-to-end SPD solve AX = B: B = A X for known X;
- *   cqr_mkl_dpotrf_compact('L') -> mkl_dtrsm_compact('L','L','N') ->
- *   mkl_dtrsm_compact('L','L','T') must recover X. Gates forward error and the
+ *   cqr_mkl<T>::potrf('L') -> mkl<T>::trsm('L','L','N') ->
+ *   mkl<T>::trsm('L','L','T') must recover X. Gates forward error and the
  *   system residual at 100 n eps.
  *
  * Build: needs Intel MKL (headers + libmkl_rt); wired up by CMakeLists.txt.
@@ -28,12 +28,7 @@
  * Assisted-by: Claude:claude-opus-4.8
  */
 
-#include <mkl.h>
-#include <mkl_compact.h>
-
-#include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
-#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, gen_spd, max_abs_diff */
+#include "test_mkl_util.hpp" /* cqr_mkl<T>, mkl<T>, lapack<T> + the MKL-free helpers */
 
 #include <cstdio>
 #include <cmath>
@@ -45,47 +40,42 @@ using namespace cqr::test;
 
 namespace {
 
-const double eps = std::numeric_limits<double>::epsilon();
-
-int vlen(MKL_COMPACT_PACK fmt)
-{
-    return cqr::detail::vlen_for_format<double>(fmt);
-}
-
 /* Logical element (i,j) of a dense n x n matrix stored in the given layout. */
-double &elem(double *a, int i, int j, int n, bool rowmajor)
+template <class T> T &elem(T *a, int i, int j, int n, bool rowmajor)
 {
     return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
 }
 
 /* ---------------- Suite 1: invariants vs dense LAPACK ------------------ */
 
+template <class T>
 int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
 {
+    const double eps = std::numeric_limits<T>::epsilon();
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int V = mkl<T>::vlen(fmt);
     const bool row = (layout == MKL_ROW_MAJOR);
     const bool up = (uplo == MKL_UPPER);
     const char ul = up ? 'U' : 'L';
     const size_t sA = (size_t)n * n;
 
-    std::vector<double> A(nm * sA);
+    std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
         gen_spd(A.data() + v * sA, n, cond);
 
     /* pack the full symmetric A, factor with the routine under test, unpack */
-    auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
-    MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nm);
-    auto ap_buf = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-    double *ap = ap_buf.get();
-    mkl_dgepack_compact(layout, n, n, Ap.data(), n, ap, n, fmt, nm);
+    auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
+    MKL_INT sz_a = mkl<T>::get_size(n, n, fmt, nm);
+    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(sz_a);
+    T *ap = ap_buf.get();
+    mkl<T>::gepack(layout, n, n, Ap.data(), n, ap, n, fmt, nm);
 
     MKL_INT info = 99;
-    cqr_mkl_dpotrf_compact(layout, uplo, n, ap, n, &info, fmt, nm);
+    cqr_mkl<T>::potrf(layout, uplo, n, ap, n, &info, fmt, nm);
 
-    std::vector<double> H(nm * sA);
-    auto Hp = batch_ptrs<double>(H.data(), nm, sA);
-    mkl_dgeunpack_compact(layout, n, n, Hp.data(), n, ap, n, fmt, nm);
+    std::vector<T> H(nm * sA);
+    auto Hp = batch_ptrs<T>(H.data(), nm, sA);
+    mkl<T>::geunpack(layout, n, n, Hp.data(), n, ap, n, fmt, nm);
 
     int fails = 0;
     if (info != 0) {
@@ -94,13 +84,13 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
     }
 
     double worst_res = 0, worst_el = 0, worst_untouched = 0;
-    std::vector<double> Rec(sA), Lref(sA);
+    std::vector<T> Rec(sA), Lref(sA);
     for (int v = 0; v < nm; ++v) {
-        const double *Av = A.data() + v * sA;
-        double *Hv = H.data() + v * sA;
+        const T *Av = A.data() + v * sA;
+        T *Hv = H.data() + v * sA;
 
         /* reconstruction residual and untouched-triangle check */
-        std::vector<double> R(sA, 0.0);
+        std::vector<T> R(sA, 0.0);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 double s = 0;
@@ -111,7 +101,7 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
                 else /* A = U^T U */
                     for (int l = 0; l <= lmax; ++l)
                         s += elem(Hv, l, i, n, row) * elem(Hv, l, j, n, row);
-                R[i + (size_t)j * n] = s - Av[i + (size_t)j * n];
+                R[i + (size_t)j * n] = (T)s - Av[i + (size_t)j * n];
             }
         worst_res = std::max(worst_res,
                              norm1(R.data(), n, n) / std::max(norm1(Av, n, n), 1e-300));
@@ -120,20 +110,20 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
             for (int j = 0; j < n; ++j) {
                 const bool named = up ? (i <= j) : (i >= j);
                 if (!named)
-                    worst_untouched =
-                        std::max(worst_untouched, std::abs(elem(Hv, i, j, n, row) -
-                                                           Av[i + (size_t)j * n]));
+                    worst_untouched = std::max<double>(
+                        worst_untouched,
+                        std::abs(elem(Hv, i, j, n, row) - Av[i + (size_t)j * n]));
             }
 
         /* elementwise vs LAPACKE_dpotrf (unique SPD factor -> a sharp signal) */
         std::copy(Av, Av + sA, Lref.begin());
-        LAPACKE_dpotrf(LAPACK_COL_MAJOR, ul, n, Lref.data(), n);
+        lapack<T>::potrf(LAPACK_COL_MAJOR, ul, n, Lref.data(), n);
         double el = 0, lref_norm = 0;
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 const bool named = up ? (i <= j) : (i >= j);
                 if (named)
-                    el = std::max(
+                    el = std::max<double>(
                         el, std::abs(elem(Hv, i, j, n, row) - Lref[i + (size_t)j * n]));
             }
         lref_norm = norm1(Lref.data(), n, n); /* triangular factor L1 norm */
@@ -152,34 +142,34 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
 
 /* ---------------- Suite 2: cross-check vs mkl_dpotrf_compact ----------- */
 
-int suite2(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
+template <class T> int suite2(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int V = mkl<T>::vlen(fmt);
     const bool row = (layout == MKL_ROW_MAJOR);
     const char ul = (uplo == MKL_UPPER) ? 'U' : 'L';
     const size_t sA = (size_t)n * n;
 
-    std::vector<double> A(nm * sA);
+    std::vector<T> A(nm * sA);
     for (int v = 0; v < nm; ++v)
         gen_spd(A.data() + v * sA, n, 0.0);
-    auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
+    auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
 
-    MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nm);
-    auto ap1 = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-    auto ap2 = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-    mkl_dgepack_compact(layout, n, n, Ap.data(), n, ap1.get(), n, fmt, nm);
-    mkl_dgepack_compact(layout, n, n, Ap.data(), n, ap2.get(), n, fmt, nm);
+    MKL_INT sz_a = mkl<T>::get_size(n, n, fmt, nm);
+    auto ap1 = cqr::detail::mkl_alloc_bytes<T>(sz_a);
+    auto ap2 = cqr::detail::mkl_alloc_bytes<T>(sz_a);
+    mkl<T>::gepack(layout, n, n, Ap.data(), n, ap1.get(), n, fmt, nm);
+    mkl<T>::gepack(layout, n, n, Ap.data(), n, ap2.get(), n, fmt, nm);
 
     MKL_INT info = 0;
-    cqr_mkl_dpotrf_compact(layout, uplo, n, ap1.get(), n, &info, fmt, nm);
-    mkl_dpotrf_compact(layout, uplo, n, ap2.get(), n, &info, fmt, nm);
+    cqr_mkl<T>::potrf(layout, uplo, n, ap1.get(), n, &info, fmt, nm);
+    mkl<T>::potrf(layout, uplo, n, ap2.get(), n, &info, fmt, nm);
 
     /* compare the two compact buffers elementwise (same input, same convention).
      * The two implementations do not share an arithmetic order, so exact
      * agreement is not required; the tolerance confirms the same factor. */
     double da = max_abs_diff(ap1.get(), ap2.get(), (size_t)sz_a / sizeof(double));
-    const double tol = 1e-9;
+    const double tol = cross_tol<T>();
     bool ok = (da <= tol);
     std::printf("  [suite2] %s uplo=%c V=%-2d nm=%-2d n=%-3d | max|ap-mkl| %.2e "
                 "(tol %.0e) %s\n",
@@ -189,55 +179,46 @@ int suite2(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
 
 /* ---------------- Suite 3: end-to-end AX = B (col-major lower) --------- */
 
-int suite3(int nm, int n, int nrhs)
+template <class T> int suite3(int nm, int n, int nrhs)
 {
+    const double eps = std::numeric_limits<T>::epsilon();
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
-
-    std::vector<double> X((size_t)n * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i)
-            X[i + (size_t)j * n] = double(j + 1);
+    const int V = mkl<T>::vlen(fmt);
+    const std::vector<T> X = known_solution<T>(n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
-    std::vector<double> A(nm * sA), B(nm * sB);
+    std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
+        T *Av = A.data() + v * sA;
         gen_spd(Av, n, 0.0);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += Av[i + (size_t)l * n] * X[l + (size_t)j * n];
-                Bv[i + (size_t)j * n] = s;
-            }
+        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
     }
-    auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
-    auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
+    auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
+    auto Bp = batch_ptrs<const T>(B.data(), nm, sB);
 
-    MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nm);
-    MKL_INT sz_b = mkl_dget_size_compact(n, nrhs, fmt, nm);
-    auto ap_buf = cqr::detail::mkl_alloc_bytes<double>(sz_a);
-    auto bp_buf = cqr::detail::mkl_alloc_bytes<double>(sz_b);
-    double *ap = ap_buf.get(), *bp = bp_buf.get();
-    mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap, n, fmt, nm);
-    mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bp.data(), n, bp, n, fmt, nm);
+    MKL_INT sz_a = mkl<T>::get_size(n, n, fmt, nm);
+    MKL_INT sz_b = mkl<T>::get_size(n, nrhs, fmt, nm);
+    auto ap_buf = cqr::detail::mkl_alloc_bytes<T>(sz_a);
+    auto bp_buf = cqr::detail::mkl_alloc_bytes<T>(sz_b);
+    T *ap = ap_buf.get(), *bp = bp_buf.get();
+    mkl<T>::gepack(MKL_COL_MAJOR, n, n, Ap.data(), n, ap, n, fmt, nm);
+    mkl<T>::gepack(MKL_COL_MAJOR, n, nrhs, Bp.data(), n, bp, n, fmt, nm);
 
     MKL_INT info = 99;
 
     /* 1. our compact Cholesky: A -> L (lower). No workspace. */
-    cqr_mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, ap, n, &info, fmt, nm);
+    cqr_mkl<T>::potrf(MKL_COL_MAJOR, MKL_LOWER, n, ap, n, &info, fmt, nm);
 
     /* 2. forward then back substitution with MKL's compact trsm:
      *    B := L^{-1} B, then B := L^{-T} B = A^{-1} B = X. */
-    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_NOTRANS, MKL_NONUNIT, n,
-                      nrhs, 1.0, ap, n, bp, n, fmt, nm);
-    mkl_dtrsm_compact(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_TRANS, MKL_NONUNIT, n, nrhs,
-                      1.0, ap, n, bp, n, fmt, nm);
+    mkl<T>::trsm(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_NOTRANS, MKL_NONUNIT, n, nrhs,
+                 T(1), ap, n, bp, n, fmt, nm);
+    mkl<T>::trsm(MKL_COL_MAJOR, MKL_LEFT, MKL_LOWER, MKL_TRANS, MKL_NONUNIT, n, nrhs,
+                 T(1), ap, n, bp, n, fmt, nm);
 
-    std::vector<double> Xhat(nm * sB);
-    auto Op = batch_ptrs<double>(Xhat.data(), nm, sB);
-    mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Op.data(), n, bp, n, fmt, nm);
+    std::vector<T> Xhat(nm * sB);
+    auto Op = batch_ptrs<T>(Xhat.data(), nm, sB);
+    mkl<T>::geunpack(MKL_COL_MAJOR, n, nrhs, Op.data(), n, bp, n, fmt, nm);
 
     int fails = 0;
     if (info != 0) {
@@ -245,19 +226,13 @@ int suite3(int nm, int n, int nrhs)
         std::printf("    info = %d (expected 0)\n", (int)info);
     }
     double worst_fwd = 0, worst_res = 0;
-    std::vector<double> AX(sB);
+    std::vector<T> AX(sB);
     for (int v = 0; v < nm; ++v) {
-        const double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const double *Xv = Xhat.data() + v * sB;
+        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
+        const T *Xv = Xhat.data() + v * sB;
         worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
                                             std::max(norm1(X.data(), n, nrhs), 1e-300));
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
-                AX[i + (size_t)j * n] = s;
-            }
+        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
         worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
                                             std::max(norm1(Bv, n, nrhs), 1e-300));
     }
@@ -272,10 +247,10 @@ int suite3(int nm, int n, int nrhs)
 
 } /* anonymous namespace */
 
-int main()
+template <class T> int run_suites()
 {
-    std::printf("MKL compact format = %d, V(double) = %d\n",
-                (int)mkl_get_format_compact(), vlen(mkl_get_format_compact()));
+    std::printf("\n== %s: MKL compact format = %d, V = %d ==\n", compact<T>::name,
+                (int)mkl_get_format_compact(), mkl<T>::vlen(mkl_get_format_compact()));
 
     int fails = 0;
 
@@ -284,26 +259,32 @@ int main()
     const MKL_UPLO ups[] = {MKL_LOWER, MKL_UPPER};
     for (MKL_LAYOUT L : lays)
         for (MKL_UPLO U : ups) {
-            fails += suite1(L, U, 8, 30, 0.0);
-            fails += suite1(L, U, 16, 60, 0.0);
-            fails += suite1(L, U, 11, 43, 0.0); /* padded partial group */
-            fails += suite1(L, U, 8, 40, 2.0);  /* dynamic range (cond knob) */
+            fails += suite1<T>(L, U, 8, 30, 0.0);
+            fails += suite1<T>(L, U, 16, 60, 0.0);
+            fails += suite1<T>(L, U, 11, 43, 0.0); /* padded partial group */
+            fails += suite1<T>(L, U, 8, 40, 2.0);  /* dynamic range (cond knob) */
         }
-    fails += suite1(MKL_COL_MAJOR, MKL_LOWER, 8, 128, 0.0);
-    fails += suite1(MKL_COL_MAJOR, MKL_LOWER, 4, 3, 0.0); /* smallest, padded */
+    fails += suite1<T>(MKL_COL_MAJOR, MKL_LOWER, 8, 128, 0.0);
+    fails += suite1<T>(MKL_COL_MAJOR, MKL_LOWER, 4, 3, 0.0); /* smallest, padded */
 
     /* Suite 2: cross-check vs mkl_dpotrf_compact, both layouts and uplo */
     for (MKL_LAYOUT L : lays)
         for (MKL_UPLO U : ups) {
-            fails += suite2(L, U, 8, 30);
-            fails += suite2(L, U, 11, 40); /* padded partial group */
+            fails += suite2<T>(L, U, 8, 30);
+            fails += suite2<T>(L, U, 11, 40); /* padded partial group */
         }
 
     /* Suite 3: end-to-end SPD solver */
-    fails += suite3(8, 30, 5);
-    fails += suite3(16, 60, 4);
-    fails += suite3(7, 32, 6); /* padded partial group */
+    fails += suite3<T>(8, 30, 5);
+    fails += suite3<T>(16, 60, 4);
+    fails += suite3<T>(7, 32, 6); /* padded partial group */
 
+    return fails;
+}
+
+int main()
+{
+    const int fails = run_suites<double>() + run_suites<float>();
     if (fails) {
         std::printf("\n%d CHECK(S) FAILED\n", fails);
         return 1;

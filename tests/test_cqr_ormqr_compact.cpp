@@ -12,9 +12,6 @@
  *   2. back substitution recovers X
  *   3. applying 'N' after 'T' recovers the original B  (Q Q^T = I)
  *
- * Build (native):   g++ -O3 -march=native -std=c++17 cqr_ormqr_compact_dispatch.cpp test_cqr_ormqr_compact.cpp -o test_cqr
- * Build (AArch64):  aarch64-linux-gnu-g++ -O3 -march=armv8.2-a -std=c++17 -static ...
- *
  * Assisted-by: Claude:claude-fable-5 Claude:claude-opus-4.8
  */
 
@@ -27,46 +24,12 @@
 #include <limits>
 #include <algorithm>
 
-#include "cqr_compact.h"
-#include "cqr_ormqr_compact.hpp"
-#include "test_compact_util.hpp" // MatrixBatch, pack/unpack, frand, max_abs_diff
+#include "test_compact_util.hpp" // compact<T>, scalar references, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
 /* ----------------------- reference kernels (scalar) ----------------- */
-
-template <class T> static void ref_larfg(int m, T *alpha, T *x, T *tau)
-{
-    T xnorm = 0;
-    for (int i = 0; i < m - 1; ++i)
-        xnorm = std::hypot(xnorm, x[i]);
-    if (xnorm == T(0)) {
-        *tau = 0;
-        return;
-    }
-    T beta = -std::copysign(std::hypot(*alpha, xnorm), *alpha);
-    *tau = (beta - *alpha) / beta;
-    T scal = T(1) / (*alpha - beta);
-    for (int i = 0; i < m - 1; ++i)
-        x[i] *= scal;
-    *alpha = beta;
-}
-
-template <class T> static void ref_geqr2(int m, int n, T *A, int lda, T *tau)
-{
-    int k = std::min(m, n);
-    for (int kk = 0; kk < k; ++kk) {
-        ref_larfg(m - kk, &A[kk + kk * lda], &A[(kk + 1) + kk * lda], &tau[kk]);
-        for (int j = kk + 1; j < n; ++j) {
-            T w = A[kk + j * lda];
-            for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * A[i + j * lda];
-            A[kk + j * lda] -= tau[kk] * w;
-            for (int i = kk + 1; i < m; ++i)
-                A[i + j * lda] -= tau[kk] * A[i + kk * lda] * w;
-        }
-    }
-}
+/* ref_larfg / ref_geqr2 / ref_orm2r / ref_trsm_upper come from test_compact_util.hpp. */
 
 /* Column-pivoted Householder QR (dgeqp3-style, greedy max trailing-column
  * norm). On exit A holds the reflectors below the diagonal and R on/above it
@@ -110,39 +73,6 @@ template <class T> static void ref_geqp3(int m, int n, T *A, int lda, int *jpvt,
     }
 }
 
-template <class T>
-static void ref_orm2r(char trans, int m, int nrhs, int k, const T *A, int lda,
-                      const T *tau, T *B, int ldb)
-{
-    bool fwd = (trans == 'T');
-    for (int s = 0; s < k; ++s) {
-        int kk = fwd ? s : k - 1 - s;
-        for (int j = 0; j < nrhs; ++j) {
-            T w = B[kk + j * ldb];
-            for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * B[i + j * ldb];
-            B[kk + j * ldb] -= tau[kk] * w;
-            for (int i = kk + 1; i < m; ++i)
-                B[i + j * ldb] -= tau[kk] * A[i + kk * lda] * w;
-        }
-    }
-}
-
-template <class T>
-static void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
-{
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = n - 1; i >= 0; --i) {
-            T s = B[i + j * ldb];
-            for (int l = i + 1; l < n; ++l)
-                s -= R[i + l * lda] * B[l + j * ldb];
-            B[i + j * ldb] = s / R[i + i * lda];
-        }
-}
-
-/* MatrixBatch, pack_compact/unpack_compact, frand and max_abs_diff live in
- * test_compact_util.hpp (shared across the compact test suites). */
-
 /* --------------------------- one test case -------------------------- */
 
 template <class T, int V> static int run_case(int nm, int m, int nrhs)
@@ -152,27 +82,14 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     const double tol_exact = 100.0 * eps;   /* same op sequence */
     const double tol_solve = 1e5 * eps * m; /* cond(A)-dependent */
 
-    std::vector<T> X((size_t)m * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < m; ++i)
-            X[i + (size_t)j * m] = T(j + 1); /* ones, twos, threes, ... */
+    const std::vector<T> X = known_solution<T>(m, nrhs);
 
     MatrixBatch<T> A(nm, m, m), Afac(nm, m, m), B(nm, m, nrhs), Bref(nm, m, nrhs),
         Bout(nm, m, nrhs), tau(nm, m, 1);
     for (int kk = 0; kk < nm; ++kk) {
         T *a = A[kk];
-        for (size_t e = 0; e < (size_t)m * m; ++e)
-            a[e] = frand<T>();
-        for (int i = 0; i < m; ++i)
-            a[i + (size_t)i * m] += T(2); /* tame cond for float */
-
-        for (int j = 0; j < nrhs; ++j) /* B = A*X */
-            for (int i = 0; i < m; ++i) {
-                T s = 0;
-                for (int l = 0; l < m; ++l)
-                    s += a[i + (size_t)l * m] * X[l + (size_t)j * m];
-                B[kk][i + (size_t)j * m] = s;
-            }
+        gen_boosted(a, m, m); /* diagonal boost tames cond for float */
+        matmul(m, nrhs, m, a, m, X.data(), m, B[kk], m); /* B = A X */
 
         std::copy(a, a + (size_t)m * m, Afac[kk]);
         ref_geqr2(m, m, Afac[kk], m, tau[kk]);
@@ -184,18 +101,11 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     std::vector<T> ap((size_t)ng * m * m * V), tp((size_t)ng * k * V),
         bp((size_t)ng * m * nrhs * V);
     pack_compact(Afac, ap.data(), m, V);
-    for (int g = 0; g < ng; ++g) /* tau as k x 1 matrices */
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int kk = 0; kk < k; ++kk)
-                tp[(size_t)g * k * V + (size_t)kk * V + v] =
-                    (idx < nm) ? tau[idx][kk] : T(0);
-        }
+    pack_tau(tau, tp.data(), V);
     pack_compact(B, bp.data(), m, V);
 
     /* check 1: compact Q^T B vs scalar */
-    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
-                                     m, nm);
+    compact<T>::ormqr('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
     double e1 = 0;
     for (int kk = 0; kk < nm; ++kk)
@@ -209,8 +119,7 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    cqr::detail::ormqr_compact<T, V>('N', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
-                                     m, nm);
+    compact<T>::ormqr('N', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
     double e3 = 0;
     for (int kk = 0; kk < nm; ++kk)
@@ -220,8 +129,8 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     bool ok1 = e1 <= tol_exact * m, ok2 = e2 <= tol_solve, ok3 = e3 <= tol_exact * m * 10;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | QtB: %.2e %s | solve X: %.2e %s "
                 "| QQt=I: %.2e %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, e1,
-                ok1 ? "OK" : "FAIL", e2, ok2 ? "OK" : "FAIL", e3, ok3 ? "OK" : "FAIL");
+                compact<T>::name, V, nm, m, nrhs, e1, ok1 ? "OK" : "FAIL", e2,
+                ok2 ? "OK" : "FAIL", e3, ok3 ? "OK" : "FAIL");
     return !ok1 + !ok2 + !ok3;
 }
 
@@ -237,27 +146,14 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
     const T eps = std::numeric_limits<T>::epsilon();
     const double tol_solve = 1e5 * eps * m; /* cond(A)-dependent */
 
-    std::vector<T> X((size_t)m * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < m; ++i)
-            X[i + (size_t)j * m] = T(j + 1); /* ones, twos, threes, ... */
+    const std::vector<T> X = known_solution<T>(m, nrhs);
 
     MatrixBatch<T> Afac(nm, m, m), B(nm, m, nrhs), Bout(nm, m, nrhs), tau(nm, m, 1);
     MatrixBatch<int> jpvt(nm, m, 1);
     for (int kk = 0; kk < nm; ++kk) {
         std::vector<T> A((size_t)m * m);
-        for (auto &x : A)
-            x = frand<T>();
-        for (int i = 0; i < m; ++i)
-            A[i + (size_t)i * m] += T(2); /* tame cond */
-
-        for (int j = 0; j < nrhs; ++j) /* B = A*X */
-            for (int i = 0; i < m; ++i) {
-                T s = 0;
-                for (int l = 0; l < m; ++l)
-                    s += A[i + (size_t)l * m] * X[l + (size_t)j * m];
-                B[kk][i + (size_t)j * m] = s;
-            }
+        gen_boosted(A.data(), m, m); /* diagonal boost tames cond */
+        matmul(m, nrhs, m, A.data(), m, X.data(), m, B[kk], m); /* B = A X */
 
         std::copy(A.begin(), A.end(), Afac[kk]);
         ref_geqp3(m, m, Afac[kk], m, jpvt[kk], tau[kk]);
@@ -267,18 +163,11 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
     std::vector<T> ap((size_t)ng * m * m * V), tp((size_t)ng * k * V),
         bp((size_t)ng * m * nrhs * V);
     pack_compact(Afac, ap.data(), m, V);
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int kk = 0; kk < k; ++kk)
-                tp[(size_t)g * k * V + (size_t)kk * V + v] =
-                    (idx < nm) ? tau[idx][kk] : T(0);
-        }
+    pack_tau(tau, tp.data(), V);
     pack_compact(B, bp.data(), m, V);
 
     /* kernel: c := Q^T b */
-    cqr::detail::ormqr_compact<T, V>('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(),
-                                     m, nm);
+    compact<T>::ormqr('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
 
     /* R y = c, then back-permute x(jpvt(j)) = y(j); compare against X */
@@ -294,8 +183,7 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
 
     bool ok = e <= tol_solve;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | pivoted solve X: %.2e %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, e,
-                ok ? "OK" : "FAIL");
+                compact<T>::name, V, nm, m, nrhs, e, ok ? "OK" : "FAIL");
     return !ok;
 }
 
@@ -316,14 +204,9 @@ template <class T> static void bench(int V, int nm, int m, int nrhs, int reps)
 
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (int r = 0; r < reps; ++r) {
-        if (sizeof(T) == 8)
-            dormqr_compact((r & 1) ? 'N' : 'T', m, nrhs, k, (const double *)ap.data(), m,
-                           (const double *)tp.data(), (double *)bp.data(), m, V, nm);
-        else
-            sormqr_compact((r & 1) ? 'N' : 'T', m, nrhs, k, (const float *)ap.data(), m,
-                           (const float *)tp.data(), (float *)bp.data(), m, V, nm);
-    }
+    for (int r = 0; r < reps; ++r)
+        compact<T>::ormqr((r & 1) ? 'N' : 'T', m, nrhs, k, ap.data(), m, tp.data(),
+                          bp.data(), m, V, nm);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double sec = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
 
@@ -331,7 +214,7 @@ template <class T> static void bench(int V, int nm, int m, int nrhs, int reps)
     for (int kk = 0; kk < k; ++kk)
         fl_mat += 4.0 * (m - kk) * nrhs;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | %8.3f us/rep | %7.2f GFLOP/s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, 1e6 * sec / reps,
+                compact<T>::name, V, nm, m, nrhs, 1e6 * sec / reps,
                 fl_mat * nm * reps / sec * 1e-9);
     volatile T sink = bp[0];
     (void)sink;
@@ -391,6 +274,8 @@ int main(int argc, char **)
     fails += run_case<double, 4>(8, m, nrhs);
     fails += run_case<double, 8>(16, m, nrhs);
     fails += run_case<double, 8>(11, m, nrhs); /* padded partial group */
+    fails +=
+        run_case<double, 4>(40, m, nrhs); /* 10 groups: OpenMP path when threads <= 10 */
     fails += run_case<float, 4>(8, m, nrhs);
     fails += run_case<float, 8>(16, m, nrhs);
     fails += run_case<float, 16>(32, m, nrhs);
