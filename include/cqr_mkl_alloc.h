@@ -20,8 +20,7 @@
 #include <memory>
 #include <new>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 struct mkl_deleter {
     void operator()(void *p) const noexcept { mkl_free(p); }
@@ -42,7 +41,6 @@ template <typename T> mkl_buffer<T> mkl_alloc_bytes(std::size_t bytes, int align
     return mkl_buffer<T>(static_cast<T *>(p));
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_MKL_ALLOC_H */

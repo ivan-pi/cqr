@@ -50,14 +50,14 @@
 #include "cqr_compact_common.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cassert>
 #include <type_traits>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* Reflector sweep order: Forward applies kk = 0..k-1, Backward k-1..0. */
-enum class Direction { Forward, Backward };
+enum class Direction : std::uint8_t { Forward, Backward };
 
 /* Apply H(kk) to the JB adjacent slices p0 .. p0+JB-1 of C (slices run along
  * C's second index; the reflector along its first, i = kk+1 .. len-1). JB is a
@@ -111,7 +111,7 @@ void ormqr_compact_group(Direction dir, Int len, Int npanel, Int k,
                          BatchView<T, V, Int> C)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(std::is_floating_point<T>::value,
+    static_assert(std::is_floating_point_v<T>,
                   "ormqr_compact is defined for real float/double");
     assert(k <= len && A.si && A.sj && C.si && C.sj);
 
@@ -154,7 +154,6 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
     });
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_ORMQR_COMPACT_HPP */

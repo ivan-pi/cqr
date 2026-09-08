@@ -1,0 +1,54 @@
+# clang-tidy, run by hand or in CI against the compile database of a
+# configured build tree:
+#
+#   CXX=clang++ cmake -S . -B build-tidy -DBLA_VENDOR=Intel10_64lp_seq
+#   pre-commit run --hook-stage manual clang-tidy --all-files
+#
+# (a clang-configured tree: see the clang-tidy entry of
+# .pre-commit-config.yaml for why).
+#
+# The set is the one most scientific C++ codes converge on: the bug
+# finders and the performance checks in full, the parts of modernize
+# and readability that do not turn into a matter of taste, and the
+# C-style cast check from the core guidelines. Checks that flag every
+# numeric constant, every short name or every unbraced one-liner are
+# left out on purpose; so are the ones that only nag.
+---
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -bugprone-unchecked-optional-access,
+  performance-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  -modernize-avoid-c-arrays,
+  -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
+  readability-container-size-empty,
+  readability-delete-null-pointer,
+  readability-duplicate-include,
+  readability-misleading-indentation,
+  readability-redundant-*,
+  readability-simplify-boolean-expr,
+  readability-static-definition-in-anonymous-namespace,
+  readability-string-compare,
+  misc-unused-using-decls,
+  misc-unused-alias-decls,
+  misc-definitions-in-headers,
+  cppcoreguidelines-pro-type-cstyle-cast
+
+# Diagnostics from the project's own headers, not from MKL's or the
+# standard library's.
+HeaderFilterRegex: '.*/(include|src|tests|examples)/.*'
+
+WarningsAsErrors: '*'
+
+CheckOptions:
+  # `CHECK(a && b)` expands to `if (!(a && b))`, which the check would
+  # rewrite as `!a || !b` inside the macro argument.
+  - key: readability-simplify-boolean-expr.SimplifyDeMorgan
+    value: false

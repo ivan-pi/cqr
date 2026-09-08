@@ -80,7 +80,7 @@ int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, double cond)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
 
     double worst_res = 0, worst_el = 0, worst_untouched = 0;
@@ -223,7 +223,7 @@ template <class T> int suite3(int nm, int n, int nrhs)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
     std::vector<T> AX(sB);

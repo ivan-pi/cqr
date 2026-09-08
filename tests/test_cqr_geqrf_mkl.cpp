@@ -31,6 +31,7 @@
 
 #include "test_mkl_util.hpp" /* cqr_mkl<T>, mkl<T>, lapack<T> + the MKL-free helpers */
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -46,7 +47,7 @@ namespace {
  * residual and orthogonality are backward-stable quantities, so they must hold
  * to working precision for every structure -- rank deficiency and near-collinear
  * columns included -- exactly as they do for dense LAPACK. */
-enum Structure { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
+enum Structure : std::uint8_t { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
 
 /* build a random m x n matrix (column-major). For DENSE, a diagonal boost tames
  * the conditioning and cond applies the competition's column scaling
@@ -112,7 +113,7 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
 
     double worst_res = 0, worst_orth = 0, worst_el = 0;
@@ -290,7 +291,7 @@ template <class T> int suite3(int nm, int n, int nrhs)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
     std::vector<T> AX(sB);

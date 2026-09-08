@@ -25,14 +25,14 @@
 #include "cqr_mkl_alloc.h"
 #include "test_compact_util.hpp"
 
-namespace cqr {
-namespace test {
+namespace cqr::test {
 
 template <class T> struct cqr_mkl;
 template <class T> struct mkl;
 template <class T> struct lapack;
 
 // clang-format off
+// NOLINTBEGIN(bugprone-macro-parentheses): T is a type name, p a token to paste
 #define CQR_TEST_MKL_DISPATCH(T, p, P)                                                     \
 template <> struct cqr_mkl<T> {                                                            \
     static void geqrf(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap, MKL_INT ldap,       \
@@ -96,6 +96,7 @@ template <> struct lapack<T> {                                                  
                      const T *b, MKL_INT ldb, T beta, T *c, MKL_INT ldc)                   \
     { cblas_##p##gemm(layout, ta, tb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc); }     \
 };
+// NOLINTEND(bugprone-macro-parentheses)
 // clang-format on
 
 CQR_TEST_MKL_DISPATCH(double, d, D)
@@ -116,7 +117,6 @@ template <> inline double cross_tol<float>()
     return 1e-4;
 }
 
-} // namespace test
-} // namespace cqr
+} // namespace cqr::test
 
 #endif // TEST_MKL_UTIL_HPP

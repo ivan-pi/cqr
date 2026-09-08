@@ -43,8 +43,7 @@
 #include <cassert>
 #include <type_traits>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* Rank-1 trailing update of the JB columns jj .. jj+JB-1 by pivot column j:
  * A(i,c) -= A(i,j) * A(c,j) for i >= c. The near-diagonal corner fills in
@@ -73,7 +72,7 @@ template <typename T, int V, typename Int = int>
 void potrf_compact_group(Int n, BatchView<T, V, Int> A)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(std::is_floating_point<T>::value,
+    static_assert(std::is_floating_point_v<T>,
                   "potrf_compact is defined for real float/double");
     assert(A.si && A.sj);
 
@@ -116,7 +115,6 @@ void potrf_compact(bool rowmajor, bool upper, Int n, T *ap, Int ldap, Int nm)
         (double)n * n * n / 3.0 * V /* ~potf2 flops per group */);
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_POTRF_COMPACT_HPP */

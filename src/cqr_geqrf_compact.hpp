@@ -35,8 +35,7 @@
 #include <cassert>
 #include <type_traits>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* Same-width signed integer for a floating type: the lane type of the masks the
  * GNU vector relational operators yield, and of the bit-blend below. */
@@ -93,7 +92,7 @@ template <typename T, int V, typename Int = int>
 void geqrf_compact_group(Int m, Int n, BatchView<T, V, Int> A, T *tau_)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(std::is_floating_point<T>::value,
+    static_assert(std::is_floating_point_v<T>,
                   "geqrf_compact is defined for real float/double");
     assert(A.si && A.sj);
 
@@ -139,7 +138,6 @@ void geqrf_compact(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm
         2.0 * m * n * k * V /* ~geqr2 flops per group */);
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_GEQRF_COMPACT_HPP */

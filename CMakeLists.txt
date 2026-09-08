@@ -7,6 +7,10 @@ project(cqr
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# compile_commands.json, which clang-tidy reads (.clang-tidy and the
+# manual-stage hook in .pre-commit-config.yaml)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 option(CQR_WITH_MKL    "Build the Intel MKL compact extension, examples and MKL tests" ON)
 option(CQR_WITH_OPENMP "Thread each routine's loop over compact groups with OpenMP"     ON)
 option(CQR_BUILD_TESTS "Build tests and register them with CTest"                     ON)
