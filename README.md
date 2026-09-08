@@ -136,8 +136,8 @@ The headers under `include/` are the project's API, the only files users need:
 
 | File | Role |
 |------|------|
-| `include/cqr_mkl_ext.h` | The MKL-style API: `cqr_mkl_?geqrf_compact`, `cqr_mkl_?ormqr_compact`, `cqr_mkl_?potrf_compact`, `cqr_mkl_?trsm_compact`, taking `MKL_COMPACT_PACK` formats. Also the C++ helpers `vlen_for_format` / `format_for_vlen` / `compact_format_name`. |
-| `include/cqr_compact.h` | The portable C API: `?geqrf_compact`, `?ormqr_compact`, `?potrf_compact`, `?trsm_compact` (`d`/`s`), with an explicit interleave width `V`, LAPACK-style `info = -j` validation, and no MKL dependency. |
+| `include/cqr_mkl_ext.h` | The MKL-style API: `cqr_mkl_?geqrf_compact`, `cqr_mkl_?ormqr_compact`, `cqr_mkl_?potrf_compact`, `cqr_mkl_?trsm_compact`, `cqr_mkl_?gels_compact`, taking `MKL_COMPACT_PACK` formats. Also the C++ helpers `vlen_for_format` / `format_for_vlen` / `compact_format_name`. |
+| `include/cqr_compact.h` | The portable C API: `?geqrf_compact`, `?ormqr_compact`, `?potrf_compact`, `?trsm_compact`, `?gels_compact` (`d`/`s`), with an explicit interleave width `V`, LAPACK-style `info = -j` validation, and no MKL dependency. |
 | `include/cqr_mkl_alloc.h` | Optional RAII buffer helpers (`mkl_alloc_bytes`, `mkl_buffer`) wrapping `mkl_malloc`/`mkl_free`. |
 
 ### Internals
@@ -149,8 +149,9 @@ The headers under `include/` are the project's API, the only files users need:
 | `src/cqr_ormqr_compact.hpp` | Apply-Q kernel (vectorized `dorm2r`) and the shared one-reflector update `larf`. |
 | `src/cqr_potrf_compact.hpp` | Cholesky kernel (vectorized `potf2`); the four `(layout, uplo)` cases are one kernel over transposed views. |
 | `src/cqr_trsm_compact.hpp` | Triangular-solve kernels: the tuned column-major `side='L'` row-dot path and the general strided kernel. |
-| `src/cqr_compact.cpp` | The portable C API: argument validation and `V` dispatch for all eight entry points. |
-| `src/cqr_mkl_ext.cpp` | The MKL-style API: MKL enum / `MKL_COMPACT_PACK` unwrapping for all eight entry points. |
+| `src/cqr_gels_compact.hpp` | The one-call least-squares / minimum-norm solve: one driver over the geqrf (with its fused right-hand-side panel), ormqr and trsm group kernels, on the tall view of `A` (transposed when `m < n`, which is the LQ case). |
+| `src/cqr_compact.cpp` | The portable C API: argument validation and `V` dispatch for all ten entry points. |
+| `src/cqr_mkl_ext.cpp` | The MKL-style API: MKL enum / `MKL_COMPACT_PACK` unwrapping for all ten entry points. |
 | `tests/test_compact_util.hpp` | Shared test helpers: RNG, error metrics, input generation, scalar reference kernels, Compact pack/unpack, and `compact<T>` (the portable C API dispatched on the scalar type); header-only, no MKL. |
 | `tests/test_mkl_util.hpp` | Scalar-type dispatch for the MKL-backed suites: `cqr_mkl<T>` (routines under test), `mkl<T>` (MKL's compact API and kernels), `lapack<T>` (LAPACKE/CBLAS references). |
 | `tests/test_cqr_*_compact.cpp` | Portable self-contained suites (no BLAS): each kernel vs its scalar reference, plus C API validation, in FP64 and FP32. |
