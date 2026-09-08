@@ -14,13 +14,17 @@
  *     cqr_mkl_dtrsm_compact   R X = (Q^T B)              (triangular solve --
  *                                                         also from this repo)
  *
- * For a square, full-rank A this recovers X = R^{-1} Q^T B. The naive baseline
- * runs LAPACKE_dgels('N') on each matrix separately (which reduces to the same
- * QR solve when m == n). We confirm both the compact batch and the per-matrix
- * driver recover the known exact solution.
+ * For a square, full-rank A this recovers X = R^{-1} Q^T B. The same solve is
+ * then run as one call, cqr_mkl_dgels_compact -- the compact form of LAPACK's
+ * dgels, which does the three steps per group of V matrices while they are
+ * cache-resident (and also handles over- and underdetermined shapes). The
+ * naive baseline runs LAPACKE_dgels('N') on each matrix separately (which
+ * reduces to the same QR solve when m == n). We confirm the compact pipeline,
+ * the one-call compact solve, and the per-matrix driver all recover the known
+ * exact solution.
  *
  * Build: needs Intel MKL (the compact API is an MKL extension) plus this
- * repo's cqr_mkl_ormqr_compact; wired up by CMakeLists.txt as the
+ * repo's cqr_mkl_ext library; wired up by CMakeLists.txt as the
  * `solve_qr_compact` target.
  *
  * Assisted-by: Claude:claude-opus-4.8
@@ -203,10 +207,35 @@ void batch_solve(int nm, int n, int nrhs)
         mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xcptr.data(), n, bp, n, fmt, nm);
     }
 
+    /* ===== Path 2: the same solve as one call, cqr_mkl_dgels_compact ==== *
+     * Repack A and B (path 1 consumed them), then one call factors, applies  *
+     * Q^T and back-substitutes each group in place: B <- X, A <- (H, R).     */
+    {
+        auto Aptr = base_ptrs(A);
+        mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Aptr.data(), n, ap, n, fmt, nm);
+        auto Bptr = base_ptrs(B);
+        mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bptr.data(), n, bp, n, fmt, nm);
+    }
+    /* gels does use its workspace -- as the tau scratch of the factorization,
+     * one slot per group (the size of a compact tau buffer) -- so query it. */
+    cqr_mkl_dgels_compact(MKL_COL_MAJOR, 'N', n, n, nrhs, ap, n, bp, n, &wq, -1, info,
+                          fmt, nm);
+    check_info(info[0], "cqr_mkl_dgels_compact (workspace query)");
+    std::vector<double> work_gels((size_t)std::max<MKL_INT>((MKL_INT)wq, 1));
+    cqr_mkl_dgels_compact(MKL_COL_MAJOR, 'N', n, n, nrhs, ap, n, bp, n, work_gels.data(),
+                          (MKL_INT)work_gels.size(), info, fmt, nm);
+    check_info(info[0], "cqr_mkl_dgels_compact");
+
+    std::vector<Matrix> Xg(nm, Matrix(n, nrhs));
+    {
+        auto Xgptr = base_ptrs(Xg);
+        mkl_dgeunpack_compact(MKL_COL_MAJOR, n, nrhs, Xgptr.data(), n, bp, n, fmt, nm);
+    }
+
     /* ap/taup/bp stay live until their RAII owners go out of scope when
      * batch_solve returns; no manual mkl_free needed. */
 
-    /* ===== Path 2: naive per-matrix forward driver LAPACKE_dgels =======
+    /* ===== Path 3: naive per-matrix forward driver LAPACKE_dgels =======
      * Xd starts as a copy of the RHS, which dgels overwrites in place. */
     std::vector<Matrix> Xd = B;
     for (int v = 0; v < nm; ++v) {
@@ -216,20 +245,21 @@ void batch_solve(int nm, int n, int nrhs)
         check(info1 == 0, "LAPACKE_dgels");
     }
 
-    /* ===== Compare both paths to the known exact solution X. Agreement
+    /* ===== Compare all three paths to the known exact solution X. Agreement
      * between them is implied: each is within rtol of X. ================ */
-    double fwd_compact = 0, fwd_dgels = 0;
+    double fwd_compact = 0, fwd_gels = 0, fwd_dgels = 0;
     for (int v = 0; v < nm; ++v) {
         fwd_compact = std::max(fwd_compact, rel_diff(Xc[v], X));
+        fwd_gels = std::max(fwd_gels, rel_diff(Xg[v], X));
         fwd_dgels = std::max(fwd_dgels, rel_diff(Xd[v], X));
     }
 
     const double eps = std::numeric_limits<double>::epsilon();
     const double rtol = 100.0 * n * eps;
-    bool ok = (fwd_compact <= rtol && fwd_dgels <= rtol);
-    std::printf("  nm=%-3d n=%-4d nrhs=%d | compact fwd %.2e  dgels fwd %.2e  "
-                "(rtol %.2e) %s\n",
-                nm, n, nrhs, fwd_compact, fwd_dgels, rtol, ok ? "OK" : "FAIL");
+    bool ok = (fwd_compact <= rtol && fwd_gels <= rtol && fwd_dgels <= rtol);
+    std::printf("  nm=%-3d n=%-4d nrhs=%d | pipeline fwd %.2e  gels fwd %.2e  dgels fwd "
+                "%.2e  (rtol %.2e) %s\n",
+                nm, n, nrhs, fwd_compact, fwd_gels, fwd_dgels, rtol, ok ? "OK" : "FAIL");
     check(ok, "compact QR solve accuracy within rtol");
 }
 
@@ -238,7 +268,8 @@ void batch_solve(int nm, int n, int nrhs)
 int main()
 {
     std::printf("Compact batch QR solve: mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact "
-                "-> cqr_mkl_dtrsm_compact  vs  per-matrix LAPACKE_dgels\n");
+                "-> cqr_mkl_dtrsm_compact,\n  the one-call cqr_mkl_dgels_compact, and "
+                "per-matrix LAPACKE_dgels\n");
     std::printf("(compact format = %d)\n", (int)mkl_get_format_compact());
 
     batch_solve(8, 32, 5);

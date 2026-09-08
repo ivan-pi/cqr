@@ -14,6 +14,7 @@
 #include "cqr_ormqr_compact.hpp"
 #include "cqr_potrf_compact.hpp"
 #include "cqr_trsm_compact.hpp"
+#include "cqr_gels_compact.hpp"
 
 #include <cassert>
 
@@ -131,6 +132,39 @@ int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n
     return 0;
 }
 
+template <typename T>
+int gels(char layout, char trans, int m, int n, int nrhs, T *ap, int ldap, T *bp,
+         int ldbp, T *work, int lwork, int V, int nm)
+{
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    const int mx = m > n ? m : n; /* B is max(m,n) x nrhs */
+    if (!col && !row) return -1;
+    if (!opt(trans, 'N') && !opt(trans, 'T') && !opt(trans, 'C')) return -2;
+    if (m < 0) return -3;
+    if (n < 0) return -4;
+    if (nrhs < 0) return -5;
+    if (ldap < max1(row ? n : m)) return -7;
+    if (ldbp < max1(row ? nrhs : mx)) return -9;
+    /* V and nm before lwork: the workspace requirement depends on them */
+    if (!vlen_ok(V)) return -12;
+    if (nm < 0) return -13;
+    const int need = cqr::detail::gels_lwork(m, n, nm, V);
+    if (lwork == -1) { /* workspace query */
+        assert(work != nullptr);
+        work[0] = T(need);
+        return 0;
+    }
+    if (lwork < need) return -11;
+    if (nrhs == 0 || nm == 0) return 0; /* empty: nothing to compute */
+    assert(ap != nullptr && bp != nullptr && work != nullptr);
+
+    for_vlen(V, [&](auto v) {
+        cqr::detail::gels_compact<T, decltype(v)::value>(row, trans, m, n, nrhs, ap, ldap,
+                                                         bp, ldbp, work, nm);
+    });
+    return 0;
+}
+
 } /* anonymous namespace */
 
 /* The C entry points: one definition per routine, instantiated for double (d)
@@ -158,6 +192,11 @@ int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n
     {                                                                                    \
         return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp,   \
                     V, nm);                                                              \
+    }                                                                                    \
+    int p##gels_compact(char layout, char trans, int m, int n, int nrhs, T *ap,          \
+                        int ldap, T *bp, int ldbp, T *work, int lwork, int V, int nm)    \
+    {                                                                                    \
+        return gels(layout, trans, m, n, nrhs, ap, ldap, bp, ldbp, work, lwork, V, nm);  \
     }
 // NOLINTEND(bugprone-macro-parentheses)
 

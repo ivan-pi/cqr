@@ -13,7 +13,7 @@ LAPACK, so it doubles as an integration test (CTest-registered on a small pool).
 |---------|----------|----------|
 | [`bench_geqrf_compact`](#bench_geqrf_compact) | QR *factorization* | `cqr_mkl_dgeqrf_compact` vs `mkl_dgeqrf_compact` vs `LAPACKE_dgeqrf` |
 | [`bench_potrf_compact`](#bench_potrf_compact) | Cholesky *factorization* (SPD) | `cqr_mkl_dpotrf_compact` vs `mkl_dpotrf_compact` vs `LAPACKE_dpotrf` |
-| [`bench_qr_compact`](#bench_qr_compact) | end-to-end QR *solve* `AX = B` | fully-open compact pipeline vs MKL's pipeline vs per-matrix LAPACK |
+| [`bench_qr_compact`](#bench_qr_compact) | end-to-end QR *solve* `AX = B` | fully-open compact pipeline (three steps, and the one-call `gels`) vs MKL's pipeline vs per-matrix LAPACK (the three-step chain, and `LAPACKE_dgels`) |
 
 The worked, self-validating solver `solve_qr_compact` (not a benchmark) lives in
 the same folder; see the top-level [README](../README.md).
@@ -82,17 +82,26 @@ bench_potrf_compact [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8] [nmat] [
 ## `bench_qr_compact`
 
 Throughput of the end-to-end solve of many systems `A_v X_v = B_v` via QR
-(`X = R^-1 Q^T B`, single RHS), three ways:
+(`X = R^-1 Q^T B`, single RHS), five ways:
 
 * **MKL batched** -- `mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact` -> `mkl_dtrsm_compact`
 * **cqr batched** -- `cqr_mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact` -> `cqr_mkl_dtrsm_compact`
+* **cqr gels** -- `cqr_mkl_dgels_compact`, the three steps as one call per group
 * **unbatched** -- `LAPACKE_dgeqrf` -> `LAPACKE_dormqr` -> `cblas_dtrsm`
+* **dgels** -- `LAPACKE_dgels`, LAPACK's own one-call driver, per matrix
 
-The two batched paths share `cqr_mkl_dormqr_compact` (MKL ships no compact
-`ormqr`), so the cqr path runs the whole solve with *no* MKL compute kernel and
-the cqr-vs-MKL ratio is the end-to-end open-vs-MKL comparison. Every path is
-checked against the known solution `X == 1`, so the reported error is a forward
-error, not a comparison to LAPACK.
+The two three-step batched paths share `cqr_mkl_dormqr_compact` (MKL ships no
+compact `ormqr`), so the cqr path runs the whole solve with *no* MKL compute
+kernel and the cqr-vs-MKL ratio is the end-to-end open-vs-MKL comparison. The
+gels path runs the same open kernels fused into one call -- the apply-`Q^T`
+folded into the factorization, no separate sweep over the reflectors -- between
+the same pack and unpack, so gels-vs-cqr-batch is what the fusion buys.
+`LAPACKE_dgels` is the like-for-like baseline for the one-call routine (it runs
+the same three steps inside, blocked, plus its norm scaling and rank test), so
+gels-vs-dgels is the headline one-call-vs-one-call batched win; the unbatched
+chain stays as the hand-rolled LAPACK reference. Every path is checked against
+the known solution `X == 1`, so the reported error is a forward error, not a
+comparison to LAPACK.
 
 ```
 bench_qr_compact [nmat] [reps]
@@ -109,6 +118,15 @@ bench_qr_compact [nmat] [reps]
 * **Size list.** The default deliberately mixes sizes that are *not* multiples of
   the interleave width `V` (30, 45, 60, 105, 168) with round powers, so the SIMD
   remainder handling stays visible across the target small-to-medium range.
+* **`gels` vs the three-step chain.** With the benchmark's single right-hand
+  side the two are equal (`1.00x` geometric mean over `n = 10..100`): the
+  `O(n^3)` factorization dominates and fusing the apply-`Q^T` into it saves an
+  `O(n^2)` sweep, so the fusion pays in proportion to `nrhs`, not `n`. The
+  column is there to show the one-call routine costs nothing over the chain.
+  Against per-matrix `LAPACKE_dgels` it measured `3.2x` (geometric mean, 4
+  threads, AVX-512, `n = 10..100`; `8.5x` at `n = 10` down to `1.9x` at
+  `n = 100`), within a few percent of its ratio to the unbatched chain --
+  `dgels`'s own bookkeeping costs little at these sizes.
 * **Reading the numbers.** On a `-march=native` build over the small-size range,
   the compact paths outrun per-matrix LAPACK and are competitive with MKL's
   compact kernels; LAPACK's cache-blocked algorithm crosses ahead only at larger

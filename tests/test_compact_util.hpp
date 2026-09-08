@@ -153,8 +153,62 @@ void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
         }
 }
 
+// Forward substitution R^T Y = B with R the upper triangle of an n x n array.
+template <class T>
+void ref_trsm_upper_trans(int n, int nrhs, const T *R, int lda, T *B, int ldb)
+{
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = 0; i < n; ++i) {
+            T s = B[i + j * ldb];
+            for (int l = 0; l < i; ++l)
+                s -= R[l + i * lda] * B[l + j * ldb];
+            B[i + j * ldb] = s / R[i + i * lda];
+        }
+}
+
+// dgels, unblocked: the least-squares (op(A) with more rows than columns) or
+// minimum-norm (more columns than rows) solution of op(A) X = B, op(A) = A
+// ('N') or A^T ('T'), A m x n column-major, B max(m,n) x nrhs (leading dim
+// ldb). Factors the tall orientation F (A, or A^T when m < n: that is the LQ of
+// A in ?gelqf storage) with ref_geqr2 -- on exit A holds the factorization and
+// tau its min(m,n) reflector scalars -- then B := Q^T B, R X = B (least
+// squares: rows n..m-1 of B keep the residual) or R^T Y = B, X = Q [Y; 0]
+// (minimum norm). The same steps the compact kernel runs V lanes at a time.
+template <class T>
+void ref_gels(char trans, int m, int n, int nrhs, T *A, int lda, T *B, int ldb, T *tau)
+{
+    const bool tran = (trans == 'T' || trans == 't' || trans == 'C' || trans == 'c');
+    const bool tall = (m >= n);
+    const int p = tall ? m : n, q = tall ? n : m;
+    const bool overdet = (tall != tran);
+
+    // F: the tall orientation, p x q, leading dim p
+    std::vector<T> F((size_t)p * q);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i)
+            F[tall ? i + (size_t)j * p : j + (size_t)i * p] = A[i + (size_t)j * lda];
+
+    ref_geqr2(p, q, F.data(), p, tau);
+    if (overdet) {
+        ref_orm2r('T', p, nrhs, q, F.data(), p, tau, B, ldb);
+        ref_trsm_upper(q, nrhs, F.data(), p, B, ldb);
+    }
+    else {
+        ref_trsm_upper_trans(q, nrhs, F.data(), p, B, ldb);
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = q; i < p; ++i)
+                B[i + (size_t)j * ldb] = T(0);
+        ref_orm2r('N', p, nrhs, q, F.data(), p, tau, B, ldb);
+    }
+
+    // hand the factorization back in A's orientation
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i)
+            A[i + (size_t)j * lda] = F[tall ? i + (size_t)j * p : j + (size_t)i * p];
+}
+
 // ----------------------- portable C API, by scalar type ------------
-// compact<T>::geqrf / ormqr / potrf / trsm forward to the d/s entry points of
+// compact<T>::geqrf / ormqr / potrf / trsm / gels forward to the d/s entry points of
 // cqr_compact.h, so the templated suites call one name for both precisions;
 // compact<T>::name labels their output.
 
@@ -175,6 +229,9 @@ template <> struct compact<T> {                                                 
     static int trsm(char lay, char si, char up, char tr, char di, int m, int n, T alpha,   \
                     const T *a, int lda, T *b, int ldb, int V, int nm)                     \
     { return p##trsm_compact(lay, si, up, tr, di, m, n, alpha, a, lda, b, ldb, V, nm); }   \
+    static int gels(char lay, char tr, int m, int n, int nrhs, T *a, int lda, T *b,       \
+                    int ldb, T *work, int lwork, int V, int nm)                            \
+    { return p##gels_compact(lay, tr, m, n, nrhs, a, lda, b, ldb, work, lwork, V, nm); }   \
 };
 // NOLINTEND(bugprone-macro-parentheses)
 // clang-format on

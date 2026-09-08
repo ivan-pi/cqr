@@ -87,14 +87,24 @@ inline void larfg_pack(const typename pack<T, V>::type &x0,
     vselect<T, V>(rdiag, has, beta, x0);
 }
 
-/* One group of V interleaved m x n matrices, through the layout-agnostic view. */
+/* One group of V interleaved m x n matrices, through the layout-agnostic view.
+ *
+ * The optional panel C (m x ncols, viewed with the reflector axis first) rides
+ * along: every H(kk) is applied to all of C right after it is built, exactly as
+ * to the trailing columns of A, so on exit C = Q^T C. That is the QR of the
+ * fused matrix [A | C] truncated to A's min(m, n) reflectors -- the one-pass
+ * least-squares reduction ?gels_compact runs, and identical arithmetic to a
+ * separate ormqr('L','T') sweep (which applies the same reflectors in the same
+ * order), but with each reflector loaded once for both panels while the group
+ * is cache-resident. With ncols = 0 (the default) C is never touched. */
 template <typename T, int V, typename Int = int>
-void geqrf_compact_group(Int m, Int n, BatchView<T, V, Int> A, T *tau_)
+void geqrf_compact_group(Int m, Int n, BatchView<T, V, Int> A, T *tau_,
+                         BatchView<T, V, Int> C = {}, Int ncols = 0)
 {
     using VT = typename pack<T, V>::type;
     static_assert(std::is_floating_point_v<T>,
                   "geqrf_compact is defined for real float/double");
-    assert(A.si && A.sj);
+    assert(A.si && A.sj && (ncols == 0 || (C.si && C.sj)));
 
     VT *tau = reinterpret_cast<VT *>(tau_);
     const auto Ac = A.as_const();
@@ -112,8 +122,9 @@ void geqrf_compact_group(Int m, Int n, BatchView<T, V, Int> A, T *tau_)
             A(i, kk) = A(i, kk) * inv; /* reflector body */
         A(kk, kk) = rdiag;             /* R diagonal */
 
-        /* apply H(kk) to the trailing columns kk+1 .. n-1 */
+        /* apply H(kk) to the trailing columns kk+1 .. n-1, and to the panel */
         larf<T, V>(kk, m, Ac, t, A, kk + 1, n);
+        larf<T, V>(kk, m, Ac, t, C, Int(0), ncols);
     }
 }
 

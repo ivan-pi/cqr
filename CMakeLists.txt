@@ -49,7 +49,7 @@ cqr_link_openmp(cqr_compact)
 add_library(cqr::compact ALIAS cqr_compact)
 
 # ---------------------------------------------------------------------------
-# Intel MKL compact extension: cqr_mkl_?{geqrf,ormqr,potrf,trsm}_compact, the
+# Intel MKL compact extension: cqr_mkl_?{geqrf,ormqr,potrf,trsm,gels}_compact, the
 # MKL-style drop-ins of include/cqr_mkl_ext.h (see docs/*_design.md)
 # ---------------------------------------------------------------------------
 if(CQR_WITH_MKL)
@@ -86,7 +86,7 @@ if(CQR_BUILD_TESTS)
 
   # Portable self-contained suites (no BLAS): each kernel vs a scalar reference
   # of the same unblocked algorithm, plus the C API's LAPACK-style validation.
-  foreach(routine geqrf ormqr potrf trsm)
+  foreach(routine geqrf ormqr potrf trsm gels)
     add_executable(test_cqr_${routine}_compact tests/test_cqr_${routine}_compact.cpp)
     target_link_libraries(test_cqr_${routine}_compact PRIVATE cqr_compact)
     add_test(NAME portable_${routine} COMMAND test_cqr_${routine}_compact)
@@ -96,7 +96,7 @@ if(CQR_BUILD_TESTS)
     # MKL + dense-LAPACK validation of each cqr_mkl_?*_compact routine (the
     # design docs' section 7): invariants vs LAPACK, cross-checks vs MKL's own
     # compact kernels, and end-to-end solves.
-    foreach(routine geqrf ormqr potrf trsm)
+    foreach(routine geqrf ormqr potrf trsm gels)
       add_executable(test_cqr_${routine}_mkl tests/test_cqr_${routine}_mkl.cpp)
       target_link_libraries(test_cqr_${routine}_mkl PRIVATE cqr_mkl_ext MKL::Compact)
       add_test(NAME mkl_${routine}_suites COMMAND test_cqr_${routine}_mkl)
