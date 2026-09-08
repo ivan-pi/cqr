@@ -11,6 +11,7 @@
 #define TEST_COMPACT_UTIL_HPP
 
 #include "cqr_compact.h"
+#include "cqr_matrix_view.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -19,6 +20,12 @@
 #include <algorithm>
 
 namespace cqr::test {
+
+// The dense strided view every suite addresses its host-side matrices through
+// (src/cqr_matrix_view.hpp); the kernels' BatchView is the compact analogue.
+using cqr::detail::ConstMatrixView;
+using cqr::detail::mat_view;
+using cqr::detail::MatrixView;
 
 // One RNG per test binary (each test is a separate executable, so there is no
 // cross-test coupling); the seed only has to be fixed, not unique.
@@ -41,13 +48,6 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     for (size_t i = 0; i < n; ++i)
         d = std::max(d, (double)std::abs(a[i] - b[i]));
     return d;
-}
-
-// Logical element (i,j) of a dense n x n matrix stored in the given layout --
-// how the MKL suites read a factor unpacked in row-major back as a matrix.
-template <class T> T &elem(T *a, int i, int j, int n, bool rowmajor)
-{
-    return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
 }
 
 // L1 (max column sum) norm of a column-major m x n matrix, leading dim m.
@@ -268,11 +268,13 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
 // triangle is mirrored from the lower so A is symmetric to the bit.
 template <class T> void gen_sym_ldlt(T *A, int n)
 {
-    std::vector<T> L((size_t)n * n, T(0)), d(n);
+    std::vector<T> Ls((size_t)n * n, T(0)), d(n);
+    const auto L = mat_view(Ls.data(), n, n);
+    const auto Av = mat_view(A, n, n);
     for (int j = 0; j < n; ++j) {
-        L[j + (size_t)j * n] = T(1);
+        L(j, j) = T(1);
         for (int i = j + 1; i < n; ++i)
-            L[i + (size_t)j * n] = T(0.5) * frand<T>();
+            L(i, j) = T(0.5) * frand<T>();
         T mag = T(0.5) + std::abs(frand<T>()) * T(2);
         d[j] = (j == 1 || frand<T>() < 0) ? -mag : mag; // mixed signs, d_1 < 0
     }
@@ -280,12 +282,12 @@ template <class T> void gen_sym_ldlt(T *A, int n)
         for (int i = j; i < n; ++i) {
             T s = 0;
             for (int l = 0; l <= j; ++l)
-                s += L[i + (size_t)l * n] * d[l] * L[j + (size_t)l * n];
-            A[i + (size_t)j * n] = s;
+                s += L(i, l) * d[l] * L(j, l);
+            Av(i, j) = s;
         }
     for (int j = 0; j < n; ++j)
         for (int i = j + 1; i < n; ++i)
-            A[j + (size_t)i * n] = A[i + (size_t)j * n];
+            Av(j, i) = Av(i, j);
 }
 
 // Element (i,j) of an n x n unpivoted LDL^T factor as stored by ?sytrfnp:
@@ -373,6 +375,8 @@ template <class T> class MatrixBatch {
     int cols()  const { return cols_; }
     T       *operator[](int idx)       { return a_.data() + (size_t)idx * rows_ * cols_; }
     const T *operator[](int idx) const { return a_.data() + (size_t)idx * rows_ * cols_; }
+    MatrixView<T>       view(int idx)       { return mat_view((*this)[idx], rows_, cols_); }
+    ConstMatrixView<T>  view(int idx) const { return mat_view((*this)[idx], rows_, cols_); }
     T       &operator()(int idx, int i, int j)       { return (*this)[idx][i + (size_t)j * rows_]; }
     const T &operator()(int idx, int i, int j) const { return (*this)[idx][i + (size_t)j * rows_]; }
     // clang-format on

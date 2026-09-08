@@ -95,25 +95,40 @@ struct Pool {
     {
         std::mt19937_64 rng(2025);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
-        std::vector<double> X((size_t)n * nrhs);
+        std::vector<double> xs((size_t)n * nrhs);
+        const auto X = mat_view(xs.data(), n, nrhs);
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i)
-                X[i + (size_t)j * n] = j + 1;
+                X(i, j) = j + 1;
         for (int v = 0; v < nmat; ++v) {
-            double *A = a.data() + (size_t)v * n * n;
+            const auto Av = A(v), Bv = B(v);
             for (int j = 0; j < n; ++j) {
                 for (int i = j + 1; i < n; ++i) {
                     double x = dist(rng);
-                    A[i + (size_t)j * n] = x; /* lower */
-                    A[j + (size_t)i * n] = x; /* mirror to upper (symmetric) */
+                    Av(i, j) = x; /* lower */
+                    Av(j, i) = x; /* mirror to upper (symmetric) */
                 }
-                A[j + (size_t)j * n] =
-                    (j % 2 ? -2.0 : 2.0) * n; /* dominant, mixed sign */
+                Av(j, j) = (j % 2 ? -2.0 : 2.0) * n; /* dominant, mixed sign */
             }
             /* B = A X for this matrix */
-            cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0, A, n,
-                        X.data(), n, 0.0, b.data() + (size_t)v * n * nrhs, n);
+            cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, nrhs, n, 1.0,
+                        Av.data, Av.ld(), X.data, X.ld(), 0.0, Bv.data, Bv.ld());
         }
+    }
+
+    /* Matrix v of the pool and its right-hand side block, as dense views. */
+    MatrixView<double> A(int v) { return mat_view(a.data() + (size_t)v * n * n, n, n); }
+    MatrixView<double> B(int v)
+    {
+        return mat_view(b.data() + (size_t)v * n * nrhs, n, nrhs);
+    }
+    MatrixView<const double> A(int v) const
+    {
+        return mat_view(a.data() + (size_t)v * n * n, n, n);
+    }
+    MatrixView<const double> B(int v) const
+    {
+        return mat_view(b.data() + (size_t)v * n * nrhs, n, nrhs);
     }
 };
 
@@ -147,13 +162,13 @@ void solve_unbatched(double *a, double *b, int n, int nrhs, int nmat, MKL_INT *i
  * solution in a dense pool-layout buffer (nmat * n*nrhs). */
 double forward_error(const double *x, int n, int nrhs, int nmat)
 {
-    const size_t sB = (size_t)n * nrhs;
     double worst = 0;
-    for (int v = 0; v < nmat; ++v)
+    for (int v = 0; v < nmat; ++v) {
+        const auto X = mat_view(x + (size_t)v * n * nrhs, n, nrhs);
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i)
-                worst =
-                    std::max(worst, std::abs(x[v * sB + i + (size_t)j * n] - (j + 1)));
+                worst = std::max(worst, std::abs(X(i, j) - (j + 1)));
+    }
     return worst / nrhs; /* max|X| = nrhs */
 }
 
@@ -172,8 +187,8 @@ struct Packed {
         const int n = P.n, nmat = P.nmat, nrhs = P.nrhs;
         std::vector<const double *> Ap(nmat), Bp(nmat);
         for (int v = 0; v < nmat; ++v) {
-            Ap[v] = P.a.data() + (size_t)v * n * n;
-            Bp[v] = P.b.data() + (size_t)v * n * nrhs;
+            Ap[v] = P.A(v).data;
+            Bp[v] = P.B(v).data;
         }
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
         mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bp.data(), n, bp.get(), n, fmt, nmat);

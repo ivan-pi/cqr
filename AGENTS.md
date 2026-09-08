@@ -36,8 +36,11 @@ include/   public headers: cqr_compact.h (portable C API), cqr_mkl_ext.h
            (MKL-style API), cqr_mkl_alloc.h (optional RAII mkl_malloc helpers)
 src/       the templated kernels (cqr_*_compact.hpp, one per routine, on the
            shared cqr_compact_common.hpp; sysvnp's is a driver over the sytrfnp
-           and sytrsnp group kernels) and the two adapter sources that
-           implement the public headers: cqr_compact.cpp, cqr_mkl_ext.cpp
+           and sytrsnp group kernels), the two adapter sources that implement
+           the public headers (cqr_compact.cpp, cqr_mkl_ext.cpp), and
+           cqr_matrix_view.hpp, the dense MatrixView the tests, benchmarks and
+           examples share (internal: src/ is on their include path, but the
+           public API stays include/)
 tests/     portable (no BLAS) and MKL-backed suites, templated on the scalar
            type; test_compact_util.hpp / test_mkl_util.hpp hold the helpers and
            the compact<T> / cqr_mkl<T> / mkl<T> / lapack<T> dispatch structs
@@ -137,6 +140,13 @@ argument, which cannot be parenthesized, so they also sit between
   kernel. The gate refuses when nesting is exhausted (that is what makes the
   library compose with a caller's outer parallel loop), when there is a single
   group, or below `parallel_min_flops`.
+- **Two views, one idea.** Compact (packed) operands are addressed through
+  `BatchView` (`src/cqr_compact_common.hpp`), dense host-side ones through
+  `MatrixView` (`src/cqr_matrix_view.hpp`). Both carry the layout as runtime
+  strides `(si, sj)`, so one body serves column-major and row-major and a
+  transpose is a stride swap. Do not hand-write `A[i + (size_t)j * lda]` in
+  new tests, benchmarks or examples -- take a view. `MatrixView` asserts its
+  bounds, so run the suites once in a `Debug` build when adding indexing code.
 - **One kernel per routine.** Every kernel addresses its operands through
   `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
   `side='R'` are the same code with different strides. Register blocking is

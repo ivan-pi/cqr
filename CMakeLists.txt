@@ -74,6 +74,9 @@ if(CQR_WITH_MKL)
                bench_sysvnp_compact)
     add_executable(${prog} examples/${prog}.cpp)
     target_link_libraries(${prog} PRIVATE cqr_mkl_ext MKL::Compact)
+    # src/ for the internal header-only helpers the examples share with the
+    # tests (cqr_matrix_view.hpp); the public API stays include/.
+    target_include_directories(${prog} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     if(prog MATCHES "^bench_")
       cqr_link_openmp(${prog})
     endif()
@@ -91,6 +94,8 @@ if(CQR_BUILD_TESTS)
   foreach(routine geqrf ormqr potrf sytrfnp trsm)
     add_executable(test_cqr_${routine}_compact tests/test_cqr_${routine}_compact.cpp)
     target_link_libraries(test_cqr_${routine}_compact PRIVATE cqr_compact)
+    target_include_directories(test_cqr_${routine}_compact
+      PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME portable_${routine} COMMAND test_cqr_${routine}_compact)
   endforeach()
 
@@ -101,6 +106,8 @@ if(CQR_BUILD_TESTS)
     foreach(routine geqrf ormqr potrf sytrfnp trsm)
       add_executable(test_cqr_${routine}_mkl tests/test_cqr_${routine}_mkl.cpp)
       target_link_libraries(test_cqr_${routine}_mkl PRIVATE cqr_mkl_ext MKL::Compact)
+      target_include_directories(test_cqr_${routine}_mkl
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
       add_test(NAME mkl_${routine}_suites COMMAND test_cqr_${routine}_mkl)
     endforeach()
 

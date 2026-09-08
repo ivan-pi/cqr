@@ -43,35 +43,24 @@ using namespace cqr::test;
 // off it. Only the named triangle is read or written. No singularity check
 // (mirrors the routine under test): a zero pivot yields Inf/NaN.
 
-template <class T> static void ref_sytf2np(char uplo, int n, T *A, int lda)
+template <class T> static void ref_sytf2np(char uplo, int n, T *a, int lda)
 {
     const bool upper = (uplo == 'U' || uplo == 'u');
-    if (!upper) {
-        for (int j = 0; j < n; ++j) {
-            T d = A[j + (size_t)j * lda];
-            T invd = T(1) / d;
-            for (int i = j + 1; i < n; ++i)
-                A[i + (size_t)j * lda] *= invd; // scale pivot column -> L(:,j)
-            for (int jj = j + 1; jj < n; ++jj)  // rank-1 trailing update, lower
-                for (int i = jj; i < n; ++i)
-                    A[i + (size_t)jj * lda] -=
-                        A[i + (size_t)j * lda] * (A[jj + (size_t)j * lda] * d);
-        }
-    }
-    else {
-        for (int j = 0; j < n; ++j) {
-            T d = A[j + (size_t)j * lda];
-            T invd = T(1) / d;
-            for (int c = j + 1; c < n; ++c)
-                A[j + (size_t)c * lda] *= invd; // scale pivot row -> U(j,:)
-            // rank-1 trailing update, upper, row at a time with w = U(j,r)*d
-            // hoisted: the same operand pairing as the kernel's transposed
-            // sweep, so the two stay bit-comparable.
-            for (int r = j + 1; r < n; ++r) {
-                const T w = A[j + (size_t)r * lda] * d;
-                for (int c = r; c < n; ++c)
-                    A[r + (size_t)c * lda] -= A[j + (size_t)c * lda] * w;
-            }
+    // One sweep serves both triangles, as in the kernel: factor the lower
+    // triangle of A for uplo lower and of A^T for upper (A is symmetric, so
+    // U^T D U of A is L D L^T of A^T). Same operand pairing either way, so the
+    // reference and the kernel stay bit-comparable.
+    const auto As = mat_view(a, n, n, lda);
+    const auto A = upper ? As.transposed() : As;
+    for (int j = 0; j < n; ++j) {
+        const T d = A(j, j);
+        const T invd = T(1) / d;
+        for (int i = j + 1; i < n; ++i)
+            A(i, j) *= invd;                 // scale pivot column -> L(:,j)
+        for (int jj = j + 1; jj < n; ++jj) { // rank-1 trailing update, lower
+            const T w = A(jj, j) * d;
+            for (int i = jj; i < n; ++i)
+                A(i, jj) -= A(i, j) * w;
         }
     }
 }
@@ -102,6 +91,7 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
 
     double e_fac = 0, e_rec = 0, e_untouched = 0, a_norm = 1;
     for (int idx = 0; idx < nm; ++idx) {
+        const auto Ain = A.view(idx), Fac = Aout.view(idx), Ref = Aref.view(idx);
         a_norm = std::max(a_norm, norm1(A[idx], n, n));
         // check 1: named-triangle factor vs scalar reference (elementwise)
         // check 3: strictly-opposite triangle unchanged from the input A
@@ -109,19 +99,17 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
             for (int i = 0; i < n; ++i) {
                 const bool named = upper ? (i <= j) : (i >= j);
                 if (named)
-                    e_fac = std::max(e_fac,
-                                     (double)std::abs(Aout(idx, i, j) - Aref(idx, i, j)));
+                    e_fac = std::max(e_fac, (double)std::abs(Fac(i, j) - Ref(i, j)));
                 else
-                    e_untouched = std::max(
-                        e_untouched, (double)std::abs(Aout(idx, i, j) - A(idx, i, j)));
+                    e_untouched =
+                        std::max(e_untouched, (double)std::abs(Fac(i, j) - Ain(i, j)));
             }
 
         // check 2: reconstruction of A from the named triangle's (D, L|U)
-        auto at = [&](int i, int j) { return Aout(idx, i, j); };
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                e_rec = std::max(e_rec, std::abs(ldlt_reconstruct(at, i, j, upper) -
-                                                 (double)A(idx, i, j)));
+                e_rec = std::max(e_rec, std::abs(ldlt_reconstruct(Fac, i, j, upper) -
+                                                 (double)Ain(i, j)));
     }
 
     const double scale = std::max(1, n);
@@ -217,21 +205,25 @@ template <class T, int V> static int run_zerodiag(char uplo, char layout)
     const bool rowmajor = (layout == 'R' || layout == 'r');
     const bool upper = (uplo == 'U' || uplo == 'u');
 
-    std::vector<T> L((size_t)n * n, T(0)), d = {T(2), T(-2), T(1), T(-1)};
+    // The factor as ?sytrfnp stores it: D on the diagonal, the unit-diagonal L
+    // strictly below it. D = diag(2, -2, 1, -1) with L(1,0) = 1 puts a zero on
+    // A's diagonal, and prod(D) != 0 keeps every leading minor nonsingular.
+    const T diag[] = {T(2), T(-2), T(1), T(-1)};
+    std::vector<T> f((size_t)n * n, T(0));
+    const auto F = mat_view(f.data(), n, n);
     for (int j = 0; j < n; ++j)
-        L[j + (size_t)j * n] = T(1);
-    L[1 + 0 * n] = T(1); // makes A(1,1) = d0 * 1 + d1 = 0
-    L[2 + 0 * n] = T(0.5);
-    L[3 + 1 * n] = T(-0.75);
-    L[3 + 2 * n] = T(0.25);
+        F(j, j) = diag[j];
+    F(1, 0) = T(1); // makes A(1,1) = d0 * 1 + d1 = 0
+    F(2, 0) = T(0.5);
+    F(3, 1) = T(-0.75);
+    F(3, 2) = T(0.25);
 
-    // (L, D) read as one stored factor: D on the diagonal, L strictly below it
-    auto ld = [&](int i, int j) { return i == j ? d[i] : L[i + (size_t)j * n]; };
     MatrixBatch<T> A(nm, n, n), Aref(nm, n, n);
     for (int idx = 0; idx < nm; ++idx) {
+        const auto Ain = A.view(idx);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                A(idx, i, j) = (T)ldlt_reconstruct(ld, i, j, false);
+                Ain(i, j) = (T)ldlt_reconstruct(F, i, j, false);
         std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
         ref_sytf2np(uplo, n, Aref[idx], n);
     }
@@ -244,14 +236,16 @@ template <class T, int V> static int run_zerodiag(char uplo, char layout)
 
     double e = 0;
     bool finite = true;
-    for (int idx = 0; idx < nm; ++idx)
+    for (int idx = 0; idx < nm; ++idx) {
+        const auto Fac = Aout.view(idx), Ref = Aref.view(idx);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 const bool named = upper ? (i <= j) : (i >= j);
                 if (!named) continue;
-                if (!std::isfinite((double)Aout(idx, i, j))) finite = false;
-                e = std::max(e, (double)std::abs(Aout(idx, i, j) - Aref(idx, i, j)));
+                if (!std::isfinite((double)Fac(i, j))) finite = false;
+                e = std::max(e, (double)std::abs(Fac(i, j) - Ref(i, j)));
             }
+    }
     const double tol = 20.0 * std::numeric_limits<T>::epsilon() * n;
     bool ok = finite && (e <= tol) && (info == 0);
     std::printf("T=%-6s V=%-2d uplo=%c lay=%c zero-diagonal A(1,1)=0 | err:%.1e "
@@ -280,11 +274,12 @@ template <class T, int V> static int run_zeropivot(int n, char uplo, char layout
         if (idx == badlane) {
             // symmetric, but the leading 1x1 minor is singular: the very first
             // pivot is A(0,0) = 0, so invd = 1/0 = Inf poisons the lane.
+            const auto Bad = A.view(idx);
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    A(idx, i, j) = (i == j) ? T(1) : T(0);
-            A(idx, 0, 0) = T(0);
-            A(idx, 0, 1) = A(idx, 1, 0) = T(1);
+                    Bad(i, j) = (i == j) ? T(1) : T(0);
+            Bad(0, 0) = T(0);
+            Bad(0, 1) = Bad(1, 0) = T(1);
         }
         else {
             gen_sym_ldlt(A[idx], n);
@@ -302,20 +297,22 @@ template <class T, int V> static int run_zeropivot(int n, char uplo, char layout
     double e_sib = 0; // worst error over the factorable sibling lanes
     bool sib_finite = true;
     bool bad_poisoned = false; // the zero-pivot lane must carry Inf/NaN
-    for (int idx = 0; idx < nm; ++idx)
+    for (int idx = 0; idx < nm; ++idx) {
+        const auto Fac = Aout.view(idx), Ref = Aref.view(idx);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 const bool named = upper ? (i <= j) : (i >= j);
                 if (!named) continue;
-                const T x = Aout(idx, i, j);
+                const T x = Fac(i, j);
                 if (idx == badlane) {
                     if (!std::isfinite((double)x)) bad_poisoned = true;
                 }
                 else {
                     if (!std::isfinite((double)x)) sib_finite = false;
-                    e_sib = std::max(e_sib, (double)std::abs(x - Aref(idx, i, j)));
+                    e_sib = std::max(e_sib, (double)std::abs(x - Ref(i, j)));
                 }
             }
+    }
 
     const double tol = 20.0 * std::numeric_limits<T>::epsilon() * std::max(1, n);
     bool ok_sib = sib_finite && (e_sib <= tol); // siblings uncontaminated & correct

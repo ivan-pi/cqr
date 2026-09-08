@@ -89,12 +89,16 @@ template <class T> int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
         const T *Av = A.data() + v * sA;
         T *Hv = H.data() + v * sA;
 
+        /* the factor is stored in `layout`; the input and the residual are the
+         * column-major dense side */
+        const auto H = mat_view(Hv, n, n, n, row);
+        const auto A = mat_view(Av, n, n);
+        const auto Res = mat_view(R.data(), n, n);
+
         /* reconstruction residual: unit factor off the diagonal, D on it */
-        auto at = [&](int i, int j) { return elem(Hv, i, j, n, row); };
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                R[i + (size_t)j * n] =
-                    (T)(ldlt_reconstruct(at, i, j, up) - (double)Av[i + (size_t)j * n]);
+                Res(i, j) = (T)(ldlt_reconstruct(H, i, j, up) - (double)A(i, j));
         worst_res = std::max(worst_res,
                              norm1(R.data(), n, n) / std::max(norm1(Av, n, n), 1e-300));
 
@@ -102,9 +106,8 @@ template <class T> int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
             for (int j = 0; j < n; ++j) {
                 const bool named = up ? (i <= j) : (i >= j);
                 if (!named)
-                    worst_untouched = std::max<double>(
-                        worst_untouched,
-                        std::abs(elem(Hv, i, j, n, row) - Av[i + (size_t)j * n]));
+                    worst_untouched =
+                        std::max<double>(worst_untouched, std::abs(H(i, j) - A(i, j)));
             }
     }
 
@@ -153,13 +156,12 @@ template <class T> int suite2(int nm, int n)
 
     double dl = 0, dd = 0;
     for (int v = 0; v < nm; ++v) {
-        const T *Fv = F.data() + v * sA, *Gv = G.data() + v * sA;
+        const auto Fv = mat_view(F.data() + v * sA, n, n); /* our (D, L)       */
+        const auto Gv = mat_view(G.data() + v * sA, n, n); /* MKL's LU (D L^T) */
         for (int j = 0; j < n; ++j) {
-            dd = std::max<double>(
-                dd, std::abs(Fv[j + (size_t)j * n] - Gv[j + (size_t)j * n]));
+            dd = std::max<double>(dd, std::abs(Fv(j, j) - Gv(j, j)));
             for (int i = j + 1; i < n; ++i)
-                dl = std::max<double>(
-                    dl, std::abs(Fv[i + (size_t)j * n] - Gv[i + (size_t)j * n]));
+                dl = std::max<double>(dl, std::abs(Fv(i, j) - Gv(i, j)));
         }
     }
     const double tol = cross_tol<T>();
@@ -200,10 +202,14 @@ template <class T> int suite3(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, i
     const T *bsrc = B.data();
     if (row) {
         Bsrc.resize(nm * sB);
-        for (int v = 0; v < nm; ++v)
+        for (int v = 0; v < nm; ++v) {
+            const auto src = mat_view(B.data() + v * sB, n, nrhs);
+            const auto dst =
+                mat_view(Bsrc.data() + v * sB, n, nrhs, nrhs, /*rowmajor=*/true);
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < n; ++i)
-                    Bsrc[v * sB + (size_t)i * nrhs + j] = B[v * sB + i + (size_t)j * n];
+                    dst(i, j) = src(i, j); /* same matrix, the other layout */
+        }
         bsrc = Bsrc.data();
     }
     auto Bp = batch_ptrs<const T>(bsrc, nm, sB);
@@ -235,11 +241,14 @@ template <class T> int suite3(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, i
     auto Op = batch_ptrs<T>(Xout.data(), nm, sB);
     mkl<T>::geunpack(layout, n, nrhs, Op.data(), ldb, bp, ldb, fmt, nm);
     if (row) { /* stage back to column-major for the checks */
-        for (int v = 0; v < nm; ++v)
+        for (int v = 0; v < nm; ++v) {
+            const auto src =
+                mat_view(Xout.data() + v * sB, n, nrhs, nrhs, /*rowmajor=*/true);
+            const auto dst = mat_view(Xhat.data() + v * sB, n, nrhs);
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < n; ++i)
-                    Xhat[v * sB + i + (size_t)j * n] =
-                        Xout[v * sB + (size_t)i * nrhs + j];
+                    dst(i, j) = src(i, j);
+        }
     }
     else {
         Xhat = Xout;

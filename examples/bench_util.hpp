@@ -1,7 +1,8 @@
 /* bench_util.hpp
  *
  * The harness shared by the benchmark programs: abort-on-failure checks, the
- * MKL compact-format lookups, pack-aligned std::vector storage, best-of-N
+ * MKL compact-format lookups, the dense MatrixView the pools are addressed
+ * through, pack-aligned std::vector storage, best-of-N
  * timing, the OpenMP thread count, and the factorization / solve benchmarks'
  * command line (--size-sweep, --simdlen, --nrhs, [nmat] [reps]). Needs MKL
  * headers only.
@@ -13,6 +14,7 @@
 #define CQR_BENCH_UTIL_HPP
 
 #include "cqr_mkl_ext.h"
+#include "cqr_matrix_view.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -31,7 +33,9 @@ namespace cqr::bench {
 
 using cqr::detail::compact_format_name; /* format -> "SSE"/"AVX"/"AVX512" */
 using cqr::detail::format_for_vlen;     /* interleave width -> pack format */
-using cqr::detail::vlen_for_format;     /* pack format -> interleave width */
+using cqr::detail::mat_view;            /* dense strided view (cqr_matrix_view.hpp) */
+using cqr::detail::MatrixView;
+using cqr::detail::vlen_for_format; /* pack format -> interleave width */
 
 /* Report and abort on the spot if cond is false. */
 inline void check(bool cond, const char *what)
