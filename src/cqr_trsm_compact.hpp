@@ -222,11 +222,26 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
     }
 }
 
+/* One group, any side / layout, alpha != 0: side='L' column-major routes to the
+ * tuned trsm_left_dot; the other three side/layout combinations use the strided
+ * kernel. The per-group entry point the LDL^T solve composes its sweeps from. */
+template <typename T, int V, typename Int = int>
+inline void trsm_compact_group(bool left, bool upper, bool rowmajor, bool tran, bool unit,
+                               Int m, Int n, T alpha, const T *a, Int ldap, T *b,
+                               Int ldbp)
+{
+    if (left && !rowmajor)
+        trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b, ldbp);
+    else
+        trsm_compact_group_strided<T, V, Int>(
+            left, upper, tran, unit, m, n, alpha,
+            make_const_view<T, V, Int>(a, rowmajor, ldap),
+            make_view<T, V, Int>(b, rowmajor, ldbp));
+}
+
 /* All groups (nm matrices). A padded partial last group is processed too, which
  * is harmless: padded slots are identity triangular factors (unit diagonal), so
- * the diagonal divide never hits zero and their X = alpha B is never read back.
- * side='L' column-major routes to the tuned trsm_left_dot; the other three
- * side/layout combinations use the strided kernel. */
+ * the diagonal divide never hits zero and their X = alpha B is never read back. */
 template <typename T, int V, typename Int = int>
 void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, Int m,
                   Int n, T alpha, const T *ap, Int ldap, T *bp, Int ldbp, Int nm)
@@ -261,16 +276,9 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
     for_each_group<V>(
         nm,
         [&](Int g) {
-            const T *a = ap + (std::size_t)g * str_a;
-            T *b = bp + (std::size_t)g * str_b;
-            if (left && !rowmajor)
-                trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b,
-                                         ldbp);
-            else
-                trsm_compact_group_strided<T, V, Int>(
-                    left, upper, tran, unit, m, n, alpha,
-                    make_const_view<T, V, Int>(a, rowmajor, ldap),
-                    make_view<T, V, Int>(b, rowmajor, ldbp));
+            trsm_compact_group<T, V, Int>(left, upper, rowmajor, tran, unit, m, n, alpha,
+                                          ap + (std::size_t)g * str_a, ldap,
+                                          bp + (std::size_t)g * str_b, ldbp);
         },
         (double)s * s * (left ? n : m) * V /* ~substitution flops per group */);
 }

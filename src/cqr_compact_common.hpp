@@ -8,6 +8,8 @@
  *                            matrices; every kernel addresses its operands
  *                            through it, so one kernel serves every layout.
  *   make_view / make_const_view -- view a packed T buffer for a layout and ld.
+ *   make_lower_view       -- the view whose lower triangle is the named (uplo)
+ *                            triangle of a symmetric batch.
  *   group_stride          -- scalars per group of V interleaved matrices.
  *   for_vlen              -- runtime interleave width -> compile-time V.
  *   for_each_group        -- the loop over groups, threaded with OpenMP.
@@ -163,6 +165,19 @@ ConstBatchView<T, V, Int> make_const_view(const T *p, bool rowmajor, Int ld) noe
 {
     return {reinterpret_cast<const typename pack<T, V>::type *>(p),
             rowmajor ? ld : Int(1), rowmajor ? Int(1) : ld};
+}
+
+/* View one group of a symmetric n x n batch so that its *lower* triangle is the
+ * storage of the named triangle: the view of A for uplo lower, its transpose for
+ * upper (A is symmetric, so a lower-triangle algorithm on A^T lands its factor
+ * in A's upper storage). The potrf and sytrfnp kernels factor the lower
+ * triangle of whatever view they are given, so this is what makes the four
+ * (layout, uplo) cases one kernel each. */
+template <typename T, int V, typename Int = int>
+BatchView<T, V, Int> make_lower_view(T *p, bool rowmajor, bool upper, Int ld) noexcept
+{
+    const auto A = make_view<T, V, Int>(p, rowmajor, ld);
+    return upper ? A.transposed() : A;
 }
 
 /* Scalars per group of V interleaved rows x cols matrices with leading dimension

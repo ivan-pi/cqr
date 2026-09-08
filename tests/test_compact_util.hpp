@@ -43,6 +43,13 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     return d;
 }
 
+// Logical element (i,j) of a dense n x n matrix stored in the given layout --
+// how the MKL suites read a factor unpacked in row-major back as a matrix.
+template <class T> T &elem(T *a, int i, int j, int n, bool rowmajor)
+{
+    return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
+}
+
 // L1 (max column sum) norm of a column-major m x n matrix, leading dim m.
 template <class T> double norm1(const T *M, int m, int n)
 {
@@ -267,9 +274,8 @@ template <class T> void gen_sym_ldlt(T *A, int n)
         for (int i = j + 1; i < n; ++i)
             L[i + (size_t)j * n] = T(0.5) * frand<T>();
         T mag = T(0.5) + std::abs(frand<T>()) * T(2);
-        d[j] = (frand<T>() >= 0 ? mag : -mag);
+        d[j] = (j == 1 || frand<T>() < 0) ? -mag : mag; // mixed signs, d_1 < 0
     }
-    if (n >= 2) d[1] = -std::abs(d[1]);
     for (int j = 0; j < n; ++j)
         for (int i = j; i < n; ++i) {
             T s = 0;

@@ -44,7 +44,7 @@ void sysvnp_compact(bool rowmajor, bool upper, Int n, Int nrhs, T *ap, Int ldap,
         [&](Int g) {
             T *a = ap + g * str_a;
             sytrfnp_compact_group<T, V, Int>(
-                n, sytrfnp_view<T, V, Int>(rowmajor, upper, a, ldap));
+                n, make_lower_view<T, V, Int>(a, rowmajor, upper, ldap));
             sytrsnp_compact_group<T, V, Int>(rowmajor, upper, n, nrhs, a, ldap,
                                              bp + g * str_b, ldbp);
         },

@@ -40,12 +40,6 @@ using namespace cqr::test;
 
 namespace {
 
-/* Logical element (i,j) of a dense n x n matrix stored in the given layout. */
-template <class T> T &elem(T *a, int i, int j, int n, bool rowmajor)
-{
-    return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
-}
-
 /* ---------------- Suite 1: invariants vs dense LAPACK ------------------ */
 
 template <class T>

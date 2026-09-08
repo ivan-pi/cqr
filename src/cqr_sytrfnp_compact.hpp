@@ -113,17 +113,8 @@ void sytrfnp_compact_group(Int n, BatchView<T, V, Int> A)
     }
 }
 
-/* The view whose lower triangle the kernel factors so that the factor lands in
- * the named triangle of the group at `a`: A itself for uplo lower, A^T for
- * upper (U^T D U = A is L D L^T of A^T = A). Shared with the fused sysvnp. */
-template <typename T, int V, typename Int = int>
-inline BatchView<T, V, Int> sytrfnp_view(bool rowmajor, bool upper, T *a, Int ldap)
-{
-    auto A = make_view<T, V, Int>(a, rowmajor, ldap);
-    return upper ? A.transposed() : A;
-}
-
-/* ~flops of the unblocked LDL^T of one group: n^3/3 per matrix, times V. */
+/* ~flops of the unblocked LDL^T of one group: n^3/3 per matrix, times V
+ * (shared with the fused sysvnp driver). */
 template <typename Int> inline double sytrfnp_flops(Int n, int V)
 {
     return (double)n * n * n / 3.0 * V;
@@ -141,8 +132,10 @@ void sytrfnp_compact(bool rowmajor, bool upper, Int n, T *ap, Int ldap, Int nm)
     for_each_group<V>(
         nm,
         [&](Int g) {
+            /* the kernel factors the lower triangle of the view it is given: A
+             * itself for uplo lower, A^T for upper (U^T D U = A is L D L^T of A^T) */
             sytrfnp_compact_group<T, V, Int>(
-                n, sytrfnp_view<T, V, Int>(rowmajor, upper, ap + g * str_a, ldap));
+                n, make_lower_view<T, V, Int>(ap + g * str_a, rowmajor, upper, ldap));
         },
         sytrfnp_flops(n, V));
 }

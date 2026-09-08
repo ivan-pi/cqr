@@ -178,6 +178,13 @@ struct Packed {
         mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
         mkl_dgepack_compact(MKL_COL_MAJOR, n, nrhs, Bp.data(), n, bp.get(), n, fmt, nmat);
     }
+
+    /* Working copies of the pristine A and B, the state every solve starts from. */
+    void restore_into(double *a, double *b) const
+    {
+        std::memcpy(a, ap.get(), sz_a);
+        std::memcpy(b, bp.get(), sz_b);
+    }
 };
 
 /* Forward error of the compact path: solve fresh copies of the packed pool,
@@ -187,8 +194,7 @@ double compact_error(const Pool &P, const Packed &pk, MKL_COMPACT_PACK fmt)
     const int n = P.n, nmat = P.nmat, nrhs = P.nrhs;
     auto ap = cqr::detail::mkl_alloc_bytes<double>(pk.sz_a);
     auto bp = cqr::detail::mkl_alloc_bytes<double>(pk.sz_b);
-    std::memcpy(ap.get(), pk.ap.get(), pk.sz_a);
-    std::memcpy(bp.get(), pk.bp.get(), pk.sz_b);
+    pk.restore_into(ap.get(), bp.get());
     solve_compact(ap.get(), bp.get(), n, nrhs, nmat, fmt);
 
     std::vector<double> X((size_t)nmat * n * nrhs);
@@ -221,10 +227,7 @@ void run_sweep(int nmat, int reps, int nrhs, int nmin, int nmax, int stride,
         Packed pk(P, fmt);
         auto ap = cqr::detail::mkl_alloc_bytes<double>(pk.sz_a);
         auto bp = cqr::detail::mkl_alloc_bytes<double>(pk.sz_b);
-        auto restore = [&] {
-            std::memcpy(ap.get(), pk.ap.get(), pk.sz_a);
-            std::memcpy(bp.get(), pk.bp.get(), pk.sz_b);
-        };
+        auto restore = [&] { pk.restore_into(ap.get(), bp.get()); };
         const double t = best_time(reps, restore, [&] {
             solve_compact(ap.get(), bp.get(), n, nrhs, nmat, fmt);
         });
@@ -238,18 +241,8 @@ void run_sweep(int nmat, int reps, int nrhs, int nmin, int nmax, int stride,
 
 int main(int argc, char **argv)
 {
-    /* --nrhs=k is this benchmark's own flag; the rest is the shared command line */
-    int nrhs = 1;
-    std::vector<char *> rest;
-    for (int i = 0; i < argc; ++i) {
-        if (i > 0 && std::strncmp(argv[i], "--nrhs=", 7) == 0)
-            nrhs = std::atoi(argv[i] + 7);
-        else
-            rest.push_back(argv[i]);
-    }
-    check(nrhs > 0, "usage: --nrhs=k needs k > 0");
-    const CmdArgs args((int)rest.size(), rest.data(), "bench_sysvnp_compact");
-    const int nmat = args.nmat, reps = args.reps, V = args.V;
+    const CmdArgs args(argc, argv, "bench_sysvnp_compact");
+    const int nmat = args.nmat, reps = args.reps, nrhs = args.nrhs, V = args.V;
     const MKL_COMPACT_PACK fmt = args.fmt;
 
     /* Pin MKL's internal threading: the OpenMP outer loop is the only
@@ -298,10 +291,7 @@ int main(int argc, char **argv)
 
         /* both paths destroy A and B, so restore the input (untimed) before
          * each timed pass */
-        auto restore_compact = [&] {
-            std::memcpy(ap.get(), pk.ap.get(), pk.sz_a);
-            std::memcpy(bp.get(), pk.bp.get(), pk.sz_b);
-        };
+        auto restore_compact = [&] { pk.restore_into(ap.get(), bp.get()); };
         auto restore_dense = [&] {
             a_work = P.a;
             b_work = P.b;

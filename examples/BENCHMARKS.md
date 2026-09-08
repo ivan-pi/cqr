@@ -130,8 +130,9 @@ forward errors. GFLOP/s uses the Cholesky-style `n^3/3 + n^2/2 + n/6` count plus
 bench_sysvnp_compact [--nrhs=k] [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8] [nmat] [reps]
 ```
 
-`--nrhs` (default 1) sets the number of right-hand sides; the other flags are the
-factorization benchmarks'.
+`--nrhs` (default 1) sets the number of right-hand sides; the flags are the shared
+command line of `bench_util.hpp`, so the factorization benchmarks accept it too
+and ignore it.
 
 Indicative run (4-core AVX-512 container, gcc `-O2 -march=native`, 512 matrices,
 one RHS): the fused compact solve outran per-matrix `LAPACKE_dsysv` by `7-9x` at

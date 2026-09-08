@@ -52,23 +52,18 @@ void sytrsnp_compact_group(bool rowmajor, bool upper, Int n, Int nrhs, const T *
     static_assert(std::is_floating_point_v<T>,
                   "sytrsnp_compact is defined for real float/double");
 
-    const auto A = make_const_view<T, V, Int>(a, rowmajor, ldap);
-    const auto B = make_view<T, V, Int>(b, rowmajor, ldbp);
-
     /* unit-triangular sweep with op(F) = F (tran false) or F^T (tran true) */
     const auto sweep = [&](bool tran) {
-        if (!rowmajor)
-            trsm_left_dot<T, V, Int>(upper, tran, /*unit=*/true, n, nrhs, T(1), a, ldap,
-                                     b, ldbp);
-        else
-            trsm_compact_group_strided<T, V, Int>(/*left=*/true, upper, tran,
-                                                  /*unit=*/true, n, nrhs, T(1), A, B);
+        trsm_compact_group<T, V, Int>(/*left=*/true, upper, rowmajor, tran, /*unit=*/true,
+                                      n, nrhs, T(1), a, ldap, b, ldbp);
     };
 
     sweep(upper); /* L z = B  or  U^T z = B */
 
     /* diagonal solve w = D^{-1} z: one reciprocal per factor row, reused
      * across the nrhs columns */
+    const auto A = make_const_view<T, V, Int>(a, rowmajor, ldap);
+    const auto B = make_view<T, V, Int>(b, rowmajor, ldbp);
     for (Int i = 0; i < n; ++i) {
         const VT invd = T(1) / A(i, i);
         for (Int j = 0; j < nrhs; ++j)

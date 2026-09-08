@@ -29,6 +29,8 @@
 #include <vector>
 #include <limits>
 #include <algorithm>
+#include <functional>
+#include <utility>
 
 #include "test_compact_util.hpp" // compact<T>, gen_sym_ldlt, ldlt_reconstruct, pack/unpack
 
@@ -150,21 +152,12 @@ static int run_solve(int nm, int n, int nrhs, char uplo, char layout)
     const bool rowmajor = (layout == 'R' || layout == 'r');
     const int ldb = rowmajor ? nrhs : n;
 
-    // known X (constant per column, plus a small row pattern), B = A X densely
+    // known X, B = A X densely
     MatrixBatch<T> A(nm, n, n), B(nm, n, nrhs);
-    std::vector<T> X((size_t)n * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i)
-            X[i + (size_t)j * n] = T(j + 1) + T(0.25) * T(i % 4);
+    const std::vector<T> X = known_solution<T>(n, nrhs);
     for (int idx = 0; idx < nm; ++idx) {
         gen_sym_ldlt(A[idx], n);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += (double)A(idx, i, l) * (double)X[l + (size_t)j * n];
-                B(idx, i, j) = (T)s;
-            }
+        matmul(n, nrhs, n, A[idx], n, X.data(), n, B[idx], n);
     }
 
     int ng = (nm + V - 1) / V;
@@ -183,24 +176,14 @@ static int run_solve(int nm, int n, int nrhs, char uplo, char layout)
     unpack_compact(Xhat, bp.data(), ldb, V, rowmajor);
 
     double e_fwd = 0, e_res = 0;
-    std::vector<double> AX((size_t)n * nrhs);
+    const size_t sB = (size_t)n * nrhs;
+    std::vector<T> AX(sB);
     for (int idx = 0; idx < nm; ++idx) {
-        const double xn = std::max(norm1(X.data(), n, nrhs), 1e-300);
-        const double bn = std::max(norm1(B[idx], n, nrhs), 1e-300);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                e_fwd = std::max(e_fwd, std::abs((double)Xhat(idx, i, j) -
-                                                 (double)X[i + (size_t)j * n]) /
-                                            xn);
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += (double)A(idx, i, l) * (double)Xhat(idx, l, j);
-                AX[i + (size_t)j * n] = s;
-            }
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i)
-                e_res = std::max(
-                    e_res, std::abs(AX[i + (size_t)j * n] - (double)B(idx, i, j)) / bn);
+        e_fwd = std::max(e_fwd, max_abs_diff(Xhat[idx], X.data(), sB) /
+                                    std::max(norm1(X.data(), n, nrhs), 1e-300));
+        matmul(n, nrhs, n, A[idx], n, Xhat[idx], n, AX.data(), n);
+        e_res = std::max(e_res, max_abs_diff(AX.data(), B[idx], sB) /
+                                    std::max(norm1(B[idx], n, nrhs), 1e-300));
     }
     // fused vs two-step, on the raw compact buffers (padded lanes included)
     const bool fused_same = (ap2 == ap) && (bp2 == bp);
@@ -242,16 +225,13 @@ template <class T, int V> static int run_zerodiag(char uplo, char layout)
     L[3 + 1 * n] = T(-0.75);
     L[3 + 2 * n] = T(0.25);
 
+    // (L, D) read as one stored factor: D on the diagonal, L strictly below it
+    auto ld = [&](int i, int j) { return i == j ? d[i] : L[i + (size_t)j * n]; };
     MatrixBatch<T> A(nm, n, n), Aref(nm, n, n);
     for (int idx = 0; idx < nm; ++idx) {
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l <= std::min(i, j); ++l)
-                    s += (double)L[i + (size_t)l * n] * (double)d[l] *
-                         (double)L[j + (size_t)l * n];
-                A(idx, i, j) = (T)s;
-            }
+            for (int i = 0; i < n; ++i)
+                A(idx, i, j) = (T)ldlt_reconstruct(ld, i, j, false);
         std::copy(A[idx], A[idx] + (size_t)n * n, Aref[idx]);
         ref_sytf2np(uplo, n, Aref[idx], n);
     }
@@ -361,18 +341,30 @@ static int test_validation()
     auto callf = [&](char lay, char up, int n_, int ldap_, int V_, int nm_) {
         return dsytrfnp_compact(lay, up, n_, ap.data(), ldap_, V_, nm_);
     };
-    auto calls = [&](char lay, char up, int n_, int nrhs_, int ldap_, int ldbp_, int V_,
-                     int nm_) {
-        return dsytrsnp_compact(lay, up, n_, nrhs_, ap.data(), ldap_, bp.data(), ldbp_,
-                                V_, nm_);
+    // ?sytrsnp and ?sysvnp share one signature and one validation, so one table
+    // of solve cases runs against both entry points
+    using solve_fn = std::function<int(char, char, int, int, int, int, int, int)>;
+    const std::pair<const char *, solve_fn> solvers[] = {
+        {"trs",
+         [&](char lay, char up, int n_, int nrhs_, int ldap_, int ldbp_, int V_,
+             int nm_) {
+             return dsytrsnp_compact(lay, up, n_, nrhs_, ap.data(), ldap_, bp.data(),
+                                     ldbp_, V_, nm_);
+         }},
+        {"sv",
+         [&](char lay, char up, int n_, int nrhs_, int ldap_, int ldbp_, int V_,
+             int nm_) {
+             return dsysvnp_compact(lay, up, n_, nrhs_, ap.data(), ldap_, bp.data(),
+                                    ldbp_, V_, nm_);
+         }},
     };
-    auto callv = [&](char lay, char up, int n_, int nrhs_, int ldap_, int ldbp_, int V_,
-                     int nm_) {
-        return dsysvnp_compact(lay, up, n_, nrhs_, ap.data(), ldap_, bp.data(), ldbp_, V_,
-                               nm_);
+    struct Case {
+        const char *what;
+        int got, want;
     };
+    std::vector<Case> t;
     // clang-format off
-    struct { const char *what; int got, want; } t[] = {
+    t.insert(t.end(), {
         {"trf valid col L", callf('C', 'L', n,  ld,  V, nm),   0},
         {"trf valid row U", callf('R', 'U', n,  ld,  V, nm),   0},
         {"trf bad layout",  callf('X', 'L', n,  ld,  V, nm),  -1},
@@ -383,39 +375,30 @@ static int test_validation()
         {"trf nm<0",        callf('C', 'L', n,  ld,  V, -1),  -7},
         {"trf empty n=0",   callf('C', 'L', 0,  1,   V, nm),   0},
         {"trf empty nm=0",  callf('C', 'L', n,  ld,  V, 0),    0},
-        {"trs valid col L", calls('C', 'L', n, nrhs, ld, n,    V, nm),   0},
-        {"trs valid row U", calls('R', 'U', n, nrhs, ld, nrhs, V, nm),   0},
-        {"trs bad layout",  calls('X', 'L', n, nrhs, ld, n,    V, nm),  -1},
-        {"trs bad uplo",    calls('C', 'X', n, nrhs, ld, n,    V, nm),  -2},
-        {"trs n<0",         calls('C', 'L', -1, nrhs, ld, n,   V, nm),  -3},
-        {"trs nrhs<0",      calls('C', 'L', n, -1,  ld, n,     V, nm),  -4},
-        {"trs ldap<n",      calls('C', 'L', n, nrhs, n-1, n,   V, nm),  -6},
-        {"trs ldbp<n",      calls('C', 'L', n, nrhs, ld, n-1,  V, nm),  -8},
-        {"trs ldbp<nrhs R", calls('R', 'L', n, nrhs, ld, nrhs-1, V, nm), -8},
-        {"trs bad V",       calls('C', 'L', n, nrhs, ld, n,    3, nm),  -9},
-        {"trs nm<0",        calls('C', 'L', n, nrhs, ld, n,    V, -1), -10},
-        {"trs empty nrhs",  calls('C', 'L', n, 0,   ld, n,     V, nm),   0},
-        {"sv valid col L",  callv('C', 'L', n, nrhs, ld, n,    V, nm),   0},
-        {"sv valid row U",  callv('R', 'U', n, nrhs, ld, nrhs, V, nm),   0},
-        {"sv bad layout",   callv('X', 'L', n, nrhs, ld, n,    V, nm),  -1},
-        {"sv bad uplo",     callv('C', 'X', n, nrhs, ld, n,    V, nm),  -2},
-        {"sv n<0",          callv('C', 'L', -1, nrhs, ld, n,   V, nm),  -3},
-        {"sv nrhs<0",       callv('C', 'L', n, -1,  ld, n,     V, nm),  -4},
-        {"sv ldap<n",       callv('C', 'L', n, nrhs, n-1, n,   V, nm),  -6},
-        {"sv ldbp<n",       callv('C', 'L', n, nrhs, ld, n-1,  V, nm),  -8},
-        {"sv bad V",        callv('C', 'L', n, nrhs, ld, n,    3, nm),  -9},
-        {"sv nm<0",         callv('C', 'L', n, nrhs, ld, n,    V, -1), -10},
-        {"sv empty nrhs",   callv('C', 'L', n, 0,   ld, n,     V, nm),   0},
-    };
+    });
+    for (const auto &[tag, calls] : solvers)
+        t.insert(t.end(), {
+            {"valid col L", calls('C', 'L', n, nrhs, ld, n,    V, nm),   0},
+            {"valid row U", calls('R', 'U', n, nrhs, ld, nrhs, V, nm),   0},
+            {"bad layout",  calls('X', 'L', n, nrhs, ld, n,    V, nm),  -1},
+            {"bad uplo",    calls('C', 'X', n, nrhs, ld, n,    V, nm),  -2},
+            {"n<0",         calls('C', 'L', -1, nrhs, ld, n,   V, nm),  -3},
+            {"nrhs<0",      calls('C', 'L', n, -1,  ld, n,     V, nm),  -4},
+            {"ldap<n",      calls('C', 'L', n, nrhs, n-1, n,   V, nm),  -6},
+            {"ldbp<n",      calls('C', 'L', n, nrhs, ld, n-1,  V, nm),  -8},
+            {"ldbp<nrhs R", calls('R', 'L', n, nrhs, ld, nrhs-1, V, nm), -8},
+            {"bad V",       calls('C', 'L', n, nrhs, ld, n,    3, nm),  -9},
+            {"nm<0",        calls('C', 'L', n, nrhs, ld, n,    V, -1), -10},
+            {"empty nrhs",  calls('C', 'L', n, 0,   ld, n,     V, nm),   0},
+        });
     // clang-format on
     int bad = 0;
     for (auto &c : t)
         bad += (c.got != c.want);
-    std::printf("C API validation: %zu checks | %s\n", sizeof(t) / sizeof(t[0]),
-                bad ? "FAIL" : "OK");
+    std::printf("C API validation: %zu checks | %s\n", t.size(), bad ? "FAIL" : "OK");
     for (auto &c : t)
         if (c.got != c.want)
-            std::printf("  %-16s got=%d want=%d\n", c.what, c.got, c.want);
+            std::printf("  %-12s got=%d want=%d\n", c.what, c.got, c.want);
     return bad ? 1 : 0;
 }
 

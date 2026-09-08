@@ -101,32 +101,17 @@ int potrf(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
     return 0;
 }
 
-/* Argument checks shared by the three symmetric "np" routines, whose common
- * arguments (layout, uplo, n, ldap, V, nm) sit at the same positions in
- * ?sytrfnp_compact, and in ?sytrsnp_compact / ?sysvnp_compact once the solve's
- * extra (nrhs, bp, ldbp) are accounted for: -1 layout, -2 uplo, -3 n, then ldap,
- * V and nm at `ld_pos`, `ld_pos + 1`, `ld_pos + 2`. Sets the kernel flags. */
-inline int sy_args(char layout, char uplo, int n, int ldap, int V, int nm, int ld_pos,
-                   bool &row, bool &up)
-{
-    const bool col = opt(layout, 'C');
-    const bool lo = opt(uplo, 'L');
-    row = opt(layout, 'R');
-    up = opt(uplo, 'U');
-    if (!col && !row) return -1;
-    if (!lo && !up) return -2;
-    if (n < 0) return -3;
-    if (ldap < max1(n)) return -ld_pos;
-    if (!vlen_ok(V)) return -(ld_pos + 1);
-    if (nm < 0) return -(ld_pos + 2);
-    return 0;
-}
-
 template <typename T>
 int sytrfnp(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
 {
-    bool row, up;
-    if (int e = sy_args(layout, uplo, n, ldap, V, nm, 5, row, up)) return e;
+    const bool col = opt(layout, 'C'), row = opt(layout, 'R');
+    const bool lo = opt(uplo, 'L'), up = opt(uplo, 'U');
+    if (!col && !row) return -1;
+    if (!lo && !up) return -2;
+    if (n < 0) return -3;
+    if (ldap < max1(n)) return -5;
+    if (!vlen_ok(V)) return -6;
+    if (nm < 0) return -7;
     if (n == 0 || nm == 0) return 0;
     assert(ap != nullptr);
 
@@ -137,14 +122,18 @@ int sytrfnp(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)
 }
 
 /* ?sytrsnp_compact and ?sysvnp_compact share one signature (layout, uplo, n,
- * nrhs, ap, ldap, bp, ldbp, V, nm) and hence one validation: -4 nrhs, -6 ldap,
- * -8 ldbp, -9 V, -10 nm. */
+ * nrhs, ap, ldap, bp, ldbp, V, nm) and hence one validation, in argument order:
+ * -1 layout, -2 uplo, -3 n, -4 nrhs, -6 ldap, -8 ldbp, -9 V, -10 nm. Sets the
+ * kernel flags. */
 inline int sytrs_args(char layout, char uplo, int n, int nrhs, int ldap, int ldbp, int V,
                       int nm, bool &row, bool &up)
 {
-    /* nrhs (-4) is checked after n (-3) and before ldap (-6), in argument order */
-    if (int e = sy_args(layout, uplo, n, ldap, V, nm, 6, row, up); e != 0 && e >= -3)
-        return e;
+    const bool col = opt(layout, 'C'), lo = opt(uplo, 'L');
+    row = opt(layout, 'R');
+    up = opt(uplo, 'U');
+    if (!col && !row) return -1;
+    if (!lo && !up) return -2;
+    if (n < 0) return -3;
     if (nrhs < 0) return -4;
     if (ldap < max1(n)) return -6;
     if (ldbp < max1(row ? nrhs : n)) return -8;

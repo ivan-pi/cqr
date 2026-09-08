@@ -47,12 +47,6 @@ using namespace cqr::test;
 
 namespace {
 
-/* Logical element (i,j) of a dense n x n matrix stored in the given layout. */
-template <class T> T &elem(T *a, int i, int j, int n, bool rowmajor)
-{
-    return rowmajor ? a[(size_t)i * n + j] : a[(size_t)j * n + i];
-}
-
 /* ---------------- Suite 1: factorization invariants ------------------- */
 
 template <class T> int suite1(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n)
@@ -143,9 +137,9 @@ template <class T> int suite2(int nm, int n)
     mkl<T>::gepack(MKL_COL_MAJOR, n, n, Ap.data(), n, ap1.get(), n, fmt, nm);
     mkl<T>::gepack(MKL_COL_MAJOR, n, n, Ap.data(), n, ap2.get(), n, fmt, nm);
 
-    MKL_INT info = 0;
-    cqr_mkl<T>::sytrfnp(MKL_COL_MAJOR, MKL_LOWER, n, ap1.get(), n, &info, fmt, nm);
-    mkl<T>::getrfnp(MKL_COL_MAJOR, n, n, ap2.get(), n, &info, fmt, nm);
+    MKL_INT info_cqr = 99, info_mkl = 99;
+    cqr_mkl<T>::sytrfnp(MKL_COL_MAJOR, MKL_LOWER, n, ap1.get(), n, &info_cqr, fmt, nm);
+    mkl<T>::getrfnp(MKL_COL_MAJOR, n, n, ap2.get(), n, &info_mkl, fmt, nm);
 
     /* unpack both; the unpivoted LU of symmetric A is A = L * (D L^T), so its
      * unit-lower L must match ours and its U diagonal must be our D. The two
@@ -169,10 +163,11 @@ template <class T> int suite2(int nm, int n)
         }
     }
     const double tol = cross_tol<T>();
-    bool ok = (dl <= tol) && (dd <= tol);
+    bool ok = (dl <= tol) && (dd <= tol) && info_cqr == 0 && info_mkl == 0;
     std::printf("  [suite2] vs getrfnp V=%-2d nm=%-2d n=%-3d | max|L-L_lu| %.2e "
-                "max|D-diag(U)| %.2e (tol %.0e) %s\n",
-                V, nm, n, dl, dd, tol, ok ? "OK" : "FAIL");
+                "max|D-diag(U)| %.2e (tol %.0e) info=%ld/%ld %s\n",
+                V, nm, n, dl, dd, tol, (long)info_cqr, (long)info_mkl,
+                ok ? "OK" : "FAIL");
     return !ok;
 }
 
@@ -186,10 +181,7 @@ template <class T> int suite3(MKL_LAYOUT layout, MKL_UPLO uplo, int nm, int n, i
     const bool row = (layout == MKL_ROW_MAJOR);
     const char ul = (uplo == MKL_UPPER) ? 'U' : 'L';
 
-    std::vector<T> X((size_t)n * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i)
-            X[i + (size_t)j * n] = T(j + 1) + T(0.25) * T(i % 4);
+    const std::vector<T> X = known_solution<T>(n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
