@@ -78,7 +78,12 @@ template <typename T, int V> struct pack {
 /* Vectors are passed by reference: passing a GNU vector by value would */
 /* commit the base-ISA vector argument ABI without -march, which GCC   */
 /* and Clang flag via -Wpsabi. Once inlined the codegen is identical.  */
-/* Results are written through an out-parameter (named first).        */
+/* Results are written through an out-parameter (named first). These   */
+/* helpers are small enough to always inline; a pack passed by         */
+/* reference across a call clang does NOT inline is loaded there with   */
+/* the natural vector alignment (the typedef's relaxed alignment is    */
+/* lost on the referent) and faults on an under-aligned buffer or      */
+/* local -- larger helpers re-read the value from the view instead.    */
 /* ------------------------------------------------------------------ */
 
 /* r := sqrt(x), lane-wise. The short loop lowers to one vsqrt* on GCC/Clang. */

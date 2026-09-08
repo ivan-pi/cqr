@@ -1,11 +1,12 @@
 # PLANS
 
 Status of each routine against its design document (`docs/`), plus the open
-items. All four routines ship both API surfaces -- the MKL-style
+items. All routines ship both API surfaces -- the MKL-style
 `cqr_mkl_?*_compact` (no argument checking, scalar `info`) and the portable
 `?*_compact` C API (LAPACK-style `info = -j` validation) -- in FP64 and FP32,
 over one `BatchView`-based kernel each that covers every layout (and, for
-`ormqr`/`trsm`, every side). Complex precisions, pivoting, and overflow/
+`ormqr`/`trsm`, every side); the LDL^T trio shares one factorization kernel and
+one solve kernel. Complex precisions, pivoting, and overflow/
 underflow-safe scaling are out of scope for all of them.
 
 ## geqrf (`cqr_mkl_dgeqrf_compact`)
@@ -75,6 +76,50 @@ underflow-safe scaling are out of scope for all of them.
   poisons itself with `NaN`/`Inf` instead of `info = j`); blocked
   (`syrk`/`trsm`) factorization is not used at the target sizes.
 
+## sytrfnp / sytrsnp / sysvnp (`cqr_mkl_dsytrfnp_compact`, `cqr_mkl_dsytrsnp_compact`, `cqr_mkl_dsysvnp_compact`)
+
+The compact **unpivoted LDL^T** factorization, its solve, and the fused
+factor-and-solve (`docs/cqr_mkl_dsytrfnp_compact_design.md`): the
+square-root-free sibling of `potrf` for symmetric batches -- indefinite
+included -- the three-sweep solve (unit `trsm`, diagonal solve, unit `trsm^T`)
+that closes `AX = B`, and the `?sysv`-style driver that runs both per group. MKL
+has no compact `sytrf`, so these fill a gap; the `np` naming follows MKL's own
+unpivoted `mkl_?getrfnp_compact`. Status vs. the design document:
+
+- **Implemented (design 6-8):** the vectorized square-root-free sweep (FP64 +
+  FP32) with the `JB = 4` register-blocked trailing update, structured exactly
+  like the potrf kernel (one kernel over transposed `BatchView`s for the four
+  `(layout, uplo)` cases; column-major lower and row-major upper contiguous);
+  the solve group kernel composing two unit-diagonal `trsm` group sweeps
+  (tuned row-dot path for column-major, strided otherwise) around the diagonal
+  solve; the fused `sysvnp` driver that factors and solves each group while its
+  factor is cache-resident -- bit-identical to the two calls, threaded as one
+  group loop. Portable C APIs `?sytrfnp_compact` / `?sytrsnp_compact` /
+  `?sysvnp_compact` (LAPACK-style `info = -j`) and the MKL-style
+  `cqr_mkl_?*_compact` (no checking, scalar `info`). The upper convention is the
+  transpose dual `A = U^T D U` (design 6.3), not LAPACK `?sytrf`'s `U D U^T`.
+- **Validated (design 7):** a BLAS-free test vs. a scalar reference over the
+  full `(T, V, uplo, layout)` matrix with padded groups, the portable end-to-end
+  indefinite solve (two-step, and fused bit-identical to it), the section-6.2
+  semantics (zero *diagonal* with nonsingular minors factors exactly; a
+  zero-*pivot* lane poisons itself without contaminating pack siblings), and
+  C-API validation of all three entry points; plus an MKL test, in FP64 and
+  FP32, gating the reconstruction residual (`20 n eps`), the untouched
+  triangle, an elementwise `(L, D)` cross-check vs `mkl_?getrfnp_compact`
+  (unpivoted LU of a symmetric matrix shares `L`, and `diag(U) = D`; observed
+  agreement `~3e-15` FP64), the end-to-end indefinite solve over both `uplo`
+  and layouts, and the fused driver's bit-identity. Both are CTest-registered.
+- **Known gaps / scoped out (design 6.2, 6.7):** no pivoting -- a singular (or
+  ill-conditioned) leading principal minor poisons its lane, by design, and
+  Bunch-Kaufman-style robustness for general indefinite input is explicitly out
+  of scope (per-lane pivot decisions do not vectorize; MKL's own compact LU
+  makes the same trade). No overflow/underflow-safe scaling; complex Hermitian
+  variants out of scope; the strided (column-major upper / row-major lower)
+  sweep is correctness-first, as for `potrf`. No benchmark yet: the potrf
+  benchmark harness ports directly for the factorization, and a `sysvnp` vs.
+  `sytrfnp + sytrsnp` comparison on out-of-cache pools is the measurement that
+  would quantify the fusion (design 6.8).
+
 ## trsm (`cqr_mkl_dtrsm_compact`)
 
 - **Implemented (design 2-6, 8.1):** full `side x uplo x transa x diag`,
@@ -112,7 +157,8 @@ underflow-safe scaling are out of scope for all of them.
   caller's loop: whole-pool geqrf/ormqr/trsm calls stream the pool three times
   and measured 15-55% slower than the cache-resident per-group pipeline. A
   fused per-group solve driver (the `?gels`-style entry above) is the way to
-  get library-side threading for the whole solve without that penalty.
+  get library-side threading for the whole solve without that penalty;
+  `sysvnp` is that driver for the symmetric LDL^T pipeline.
 - **No install/export.** `CMakeLists.txt` defines no `install()`/package-config
   rules, so the project is not consumable via `find_package(cqr)`.
 - **Alignment contract.** Compact buffers are correct at any `T` alignment on

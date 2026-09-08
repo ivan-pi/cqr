@@ -3,7 +3,8 @@
 // Scalar-type dispatch for the MKL-backed suites, so each suite is written once
 // as a template and runs in FP64 and FP32:
 //
-//   cqr_mkl<T>  the routines under test, cqr_mkl_?{geqrf,ormqr,potrf,trsm}_compact
+//   cqr_mkl<T>  the routines under test,
+//               cqr_mkl_?{geqrf,ormqr,potrf,sytrfnp,sytrsnp,sysvnp,trsm}_compact
 //   mkl<T>      MKL's Compact API: sizes, pack/unpack, and MKL's own compact
 //               kernels as references
 //   lapack<T>   dense LAPACKE / CBLAS references
@@ -48,6 +49,19 @@ template <> struct cqr_mkl<T> {                                                 
     static void potrf(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap,   \
                       MKL_INT *info, MKL_COMPACT_PACK fmt, MKL_INT nm)                     \
     { cqr_mkl_##p##potrf_compact(layout, uplo, n, ap, ldap, info, fmt, nm); }              \
+    static void sytrfnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap, \
+                        MKL_INT *info, MKL_COMPACT_PACK fmt, MKL_INT nm)                   \
+    { cqr_mkl_##p##sytrfnp_compact(layout, uplo, n, ap, ldap, info, fmt, nm); }            \
+    static void sytrsnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs,        \
+                        const T *ap, MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_INT *info,     \
+                        MKL_COMPACT_PACK fmt, MKL_INT nm)                                  \
+    { cqr_mkl_##p##sytrsnp_compact(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, info, fmt,   \
+                                   nm); }                                                  \
+    static void sysvnp(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, MKL_INT nrhs, T *ap,  \
+                       MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_INT *info,                   \
+                       MKL_COMPACT_PACK fmt, MKL_INT nm)                                   \
+    { cqr_mkl_##p##sysvnp_compact(layout, uplo, n, nrhs, ap, ldap, bp, ldbp, info, fmt,    \
+                                  nm); }                                                   \
     static void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE tr,   \
                      MKL_DIAG diag, MKL_INT m, MKL_INT n, T alpha, const T *ap,            \
                      MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_COMPACT_PACK fmt, MKL_INT nm)  \
@@ -72,6 +86,9 @@ template <> struct mkl<T> {                                                     
     static void potrf(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap, MKL_INT ldap,   \
                       MKL_INT *info, MKL_COMPACT_PACK fmt, MKL_INT nm)                     \
     { mkl_##p##potrf_compact(layout, uplo, n, ap, ldap, info, fmt, nm); }                  \
+    static void getrfnp(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap, MKL_INT ldap,     \
+                        MKL_INT *info, MKL_COMPACT_PACK fmt, MKL_INT nm)                   \
+    { mkl_##p##getrfnp_compact(layout, m, n, ap, ldap, info, fmt, nm); }                   \
     static void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE tr,   \
                      MKL_DIAG diag, MKL_INT m, MKL_INT n, T alpha, const T *ap,            \
                      MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_COMPACT_PACK fmt, MKL_INT nm)  \
