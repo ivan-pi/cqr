@@ -146,6 +146,13 @@ The headers under `include/` are the project's API, the only files users need:
 | `tests/test_cqr_*_mkl.cpp` | MKL + dense-LAPACK validation, templated on the scalar type and run in FP64 and FP32: invariants vs LAPACK, cross-checks vs MKL's compact kernels, end-to-end solves. |
 | `examples/bench_util.hpp` | The benchmarks' shared harness (timing, aligned storage, command line). |
 
+## Contributing
+
+The C++ is formatted with clang-format and linted with clang-tidy, both driven
+by [pre-commit](https://pre-commit.com/) (`pip install pre-commit && pre-commit
+install`); CI checks the same hooks. [AGENTS.md](AGENTS.md) has the details,
+including the clang-configured tree clang-tidy needs.
+
 ## Related work
 
 Batched / compact dense linear algebra for many small matrices:

@@ -1,0 +1,43 @@
+name: clang-tidy
+
+# The manual clang-tidy stage of .pre-commit-config.yaml over every
+# translation unit. Run by hand from the Actions tab (or with
+# `gh workflow run clang-tidy.yml --ref <branch>`), not on every push: it
+# has to configure a build tree first, and installing MKL plus a matching
+# clang / clang-tidy / libomp on the runner costs minutes each time. The
+# same check runs locally in seconds against an existing build-tidy tree
+# (AGENTS.md).
+on:
+  workflow_dispatch:
+
+jobs:
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # clang, clang-tidy and libomp-dev from the same LLVM release, so
+      # clang-tidy finds the omp.h of the compiler that configured the
+      # tree (.pre-commit-config.yaml explains); libmkl-dev so the MKL
+      # extension and its tests are in the compile database too.
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang clang-tidy libomp-dev libmkl-dev ninja-build
+          pip install pre-commit
+
+      # The compile database, not a build
+      - name: Configure
+        run: >
+          CXX=clang++ cmake -S . -B build-tidy -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBLA_VENDOR=Intel10_64lp_seq
+
+      - name: Check
+        run: pre-commit run --hook-stage manual clang-tidy --all-files

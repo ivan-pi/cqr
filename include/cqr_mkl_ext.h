@@ -132,8 +132,7 @@ void cqr_mkl_strsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
 
 #include <cstddef>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* Interleave width V for a given MKL Compact pack format and scalar type T.
  * MKL packs V = (SIMD register bytes) / sizeof(T):
@@ -177,8 +176,7 @@ inline const char *compact_format_name(MKL_COMPACT_PACK format)
     }
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* __cplusplus */
 

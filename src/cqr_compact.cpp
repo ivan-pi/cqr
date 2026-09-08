@@ -133,50 +133,37 @@ int trsm(char layout, char side, char uplo, char transa, char diag, int m, int n
 
 } /* anonymous namespace */
 
+/* The C entry points: one definition per routine, instantiated for double (d)
+ * and float (s). T is a type name and p a token to paste, so neither can be
+ * parenthesized. */
+// NOLINTBEGIN(bugprone-macro-parentheses)
+#define CQR_DEFINE_COMPACT_ENTRY_POINTS(T, p)                                            \
+    int p##geqrf_compact(char layout, int m, int n, T *ap, int ldap, T *taup, int V,     \
+                         int nm)                                                         \
+    {                                                                                    \
+        return geqrf(layout, m, n, ap, ldap, taup, V, nm);                               \
+    }                                                                                    \
+    int p##ormqr_compact(char trans, int m, int nrhs, int k, const T *ap, int ldap,      \
+                         const T *taup, T *bp, int ldbp, int V, int nm)                  \
+    {                                                                                    \
+        return ormqr(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);                \
+    }                                                                                    \
+    int p##potrf_compact(char layout, char uplo, int n, T *ap, int ldap, int V, int nm)  \
+    {                                                                                    \
+        return potrf(layout, uplo, n, ap, ldap, V, nm);                                  \
+    }                                                                                    \
+    int p##trsm_compact(char layout, char side, char uplo, char transa, char diag,       \
+                        int m, int n, T alpha, const T *ap, int ldap, T *bp, int ldbp,   \
+                        int V, int nm)                                                   \
+    {                                                                                    \
+        return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp,   \
+                    V, nm);                                                              \
+    }
+// NOLINTEND(bugprone-macro-parentheses)
+
 extern "C" {
-
-int dgeqrf_compact(char layout, int m, int n, double *ap, int ldap, double *taup, int V,
-                   int nm)
-{
-    return geqrf(layout, m, n, ap, ldap, taup, V, nm);
-}
-int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, float *taup, int V,
-                   int nm)
-{
-    return geqrf(layout, m, n, ap, ldap, taup, V, nm);
-}
-
-int dormqr_compact(char trans, int m, int nrhs, int k, const double *ap, int ldap,
-                   const double *taup, double *bp, int ldbp, int V, int nm)
-{
-    return ormqr(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
-}
-int sormqr_compact(char trans, int m, int nrhs, int k, const float *ap, int ldap,
-                   const float *taup, float *bp, int ldbp, int V, int nm)
-{
-    return ormqr(trans, m, nrhs, k, ap, ldap, taup, bp, ldbp, V, nm);
-}
-
-int dpotrf_compact(char layout, char uplo, int n, double *ap, int ldap, int V, int nm)
-{
-    return potrf(layout, uplo, n, ap, ldap, V, nm);
-}
-int spotrf_compact(char layout, char uplo, int n, float *ap, int ldap, int V, int nm)
-{
-    return potrf(layout, uplo, n, ap, ldap, V, nm);
-}
-
-int dtrsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
-                  double alpha, const double *ap, int ldap, double *bp, int ldbp, int V,
-                  int nm)
-{
-    return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, V, nm);
-}
-int strsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
-                  float alpha, const float *ap, int ldap, float *bp, int ldbp, int V,
-                  int nm)
-{
-    return trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, V, nm);
-}
-
+CQR_DEFINE_COMPACT_ENTRY_POINTS(double, d)
+CQR_DEFINE_COMPACT_ENTRY_POINTS(float, s)
 } /* extern "C" */
+
+#undef CQR_DEFINE_COMPACT_ENTRY_POINTS

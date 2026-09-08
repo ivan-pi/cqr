@@ -266,8 +266,7 @@ int main(int argc, char **argv)
                 "-------------\n");
 
     double log_cqr_vs_unbat = 0.0, log_cqr_vs_mkl = 0.0;
-    for (int si = 0; si < nsizes; ++si) {
-        const int n = sizes[si];
+    for (const int n : sizes) {
         Pool P(n, nmat);
 
         /* The batched paths read the pool read-only (pack copies into the

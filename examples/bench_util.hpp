@@ -26,8 +26,7 @@
 #include <omp.h>
 #endif
 
-namespace cqr {
-namespace bench {
+namespace cqr::bench {
 
 using cqr::detail::compact_format_name; /* format -> "SSE"/"AVX"/"AVX512" */
 using cqr::detail::format_for_vlen;     /* interleave width -> pack format */
@@ -121,7 +120,7 @@ struct CmdArgs {
             else
                 pos.push_back(argv[i]);
         }
-        if (pos.size() > 0) nmat = std::atoi(pos[0]);
+        if (!pos.empty()) nmat = std::atoi(pos[0]);
         if (pos.size() > 1) reps = std::atoi(pos[1]);
         if (!(nmat > 0 && reps > 0)) {
             std::printf("usage: %s [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8] "
@@ -146,7 +145,6 @@ struct CmdArgs {
     }
 };
 
-} /* namespace bench */
-} /* namespace cqr */
+} /* namespace cqr::bench */
 
 #endif /* CQR_BENCH_UTIL_HPP */

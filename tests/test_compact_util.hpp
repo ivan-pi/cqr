@@ -18,8 +18,7 @@
 #include <vector>
 #include <algorithm>
 
-namespace cqr {
-namespace test {
+namespace cqr::test {
 
 // One RNG per test binary (each test is a separate executable, so there is no
 // cross-test coupling); the seed only has to be fixed, not unique.
@@ -162,6 +161,7 @@ void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
 template <class T> struct compact;
 
 // clang-format off
+// NOLINTBEGIN(bugprone-macro-parentheses): T is a type name, p a token to paste
 #define CQR_TEST_COMPACT_DISPATCH(T, p, label)                                             \
 template <> struct compact<T> {                                                            \
     static constexpr const char *name = label;                                             \
@@ -176,6 +176,7 @@ template <> struct compact<T> {                                                 
                     const T *a, int lda, T *b, int ldb, int V, int nm)                     \
     { return p##trsm_compact(lay, si, up, tr, di, m, n, alpha, a, lda, b, ldb, V, nm); }   \
 };
+// NOLINTEND(bugprone-macro-parentheses)
 // clang-format on
 
 CQR_TEST_COMPACT_DISPATCH(double, d, "double")
@@ -387,7 +388,6 @@ template <class T> void unpack_tau(MatrixBatch<T> &tau, const T *tp, int V)
         }
 }
 
-} // namespace test
-} // namespace cqr
+} // namespace cqr::test
 
 #endif // TEST_COMPACT_UTIL_HPP

@@ -1,0 +1,54 @@
+# Formatting and linting, one configuration for three callers:
+#
+#   pre-commit install                    the git pre-commit hook
+#   pre-commit run --all-files            CI (.github/workflows/style.yml)
+#   .claude/hooks/format.sh               Claude Code, after every edit
+#
+# The versions pinned here are the ones that count; the same tools
+# installed by hand may disagree in the details. `pre-commit autoupdate`
+# moves the pins.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-added-large-files
+
+  # C++: the style is .clang-format (C++ Core Guidelines NL.17). The
+  # hand-aligned dispatch tables in tests/test_*_util.hpp are fenced with
+  # `// clang-format off` and `// clang-format on` in the source.
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.5
+    hooks:
+      - id: clang-format
+        types_or: [c, c++]
+
+  # clang-tidy needs the compile database of a configured build tree, so
+  # it is not run on every commit:
+  #
+  #   CXX=clang++ cmake -S . -B build-tidy -DBLA_VENDOR=Intel10_64lp_seq
+  #   pre-commit run --hook-stage manual clang-tidy --all-files
+  #
+  # The tree is configured with clang, and the clang-tidy is the one from
+  # the same LLVM release (the system's, not a pinned wheel): clang-tidy
+  # parses with clang's front end, and the OpenMP header it reaches through
+  # `#include <omp.h>` has to be clang's own -- g++'s is not clang-
+  # compatible, and a clang-tidy of another release does not look in
+  # this release's resource directory (libomp-dev supplies the header).
+  #
+  # Only translation units in the database are listed; the headers are
+  # checked through them (HeaderFilterRegex in .clang-tidy).
+  - repo: local
+    hooks:
+      - id: clang-tidy
+        name: clang-tidy
+        entry: clang-tidy -p build-tidy --quiet
+        language: system
+        files: ^(src|tests|examples)/.*\.cpp$
+        stages: [manual]

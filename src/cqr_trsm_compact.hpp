@@ -39,8 +39,7 @@
 #include <cassert>
 #include <type_traits>
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* Single-column column-oriented (gaxpy) solve, side='L', column-major, op(A)=A:
  * reads A down columns (contiguous), for the 1-column tail where a strided
@@ -110,7 +109,7 @@ template <bool UPPER, bool TRAN, bool UNIT, typename T, int V, typename Int>
 void trsm_left_dot_tb(Int m, Int n, T alpha, const T *a_, Int ldap, T *b_, Int ldbp)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(std::is_floating_point<T>::value,
+    static_assert(std::is_floating_point_v<T>,
                   "trsm_compact is defined for real float/double");
     assert(ldap >= m && ldbp >= m);
 
@@ -178,7 +177,7 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
                                 BatchView<T, V, Int> B)
 {
     using VT = typename pack<T, V>::type;
-    static_assert(std::is_floating_point<T>::value,
+    static_assert(std::is_floating_point_v<T>,
                   "trsm_compact is defined for real float/double");
 
     assert(A.si && A.sj && B.si && B.sj);
@@ -276,7 +275,6 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
         (double)s * s * (left ? n : m) * V /* ~substitution flops per group */);
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_TRSM_COMPACT_HPP */

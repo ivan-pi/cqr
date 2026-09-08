@@ -112,7 +112,7 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
 
     double worst_res = 0, worst_orth = 0, worst_el = 0;
@@ -290,7 +290,7 @@ template <class T> int suite3(int nm, int n, int nrhs)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
     std::vector<T> AX(sB);

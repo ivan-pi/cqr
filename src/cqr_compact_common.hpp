@@ -36,8 +36,7 @@
 #include <omp.h>
 #endif
 
-namespace cqr {
-namespace detail {
+namespace cqr::detail {
 
 /* ------------------------------------------------------------------ */
 /* pack<T,V>::type : the V-wide SIMD element                          */
@@ -136,7 +135,7 @@ template <typename T, int V, typename Int = int, bool Const = false> struct Batc
     Int si; /* stride along the first index  */
     Int sj; /* stride along the second index */
 
-    inline VT &operator()(Int i, Int j) const noexcept { return data[i * si + j * sj]; }
+    VT &operator()(Int i, Int j) const noexcept { return data[i * si + j * sj]; }
 
     /* The same storage read as the transposed matrices: (i,j) -> (j,i). */
     BatchView transposed() const noexcept { return {data, sj, si}; }
@@ -248,7 +247,6 @@ void for_each_group(
         body(g);
 }
 
-} /* namespace detail */
-} /* namespace cqr */
+} /* namespace cqr::detail */
 
 #endif /* CQR_COMPACT_COMMON_HPP */

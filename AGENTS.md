@@ -44,18 +44,55 @@ examples/  the worked solve and the benchmarks (BENCHMARKS.md), on bench_util.hp
 docs/      one design document per routine
 ```
 
-## Code style
+## Formatting and linting
 
-Layout follows C++ Core Guidelines **NL.17** (K&R-derived / "Stroustrup"),
-enforced by `.clang-format`. Format changed C++ before committing:
+Layout follows C++ Core Guidelines **NL.17** (K&R-derived / "Stroustrup"), the
+style of `.clang-format`; `.clang-tidy` lints (the bug finders, the performance
+checks, and the parts of modernize and readability that are not a matter of
+taste). Both run through [pre-commit](https://pre-commit.com/), whose
+`.pre-commit-config.yaml` pins the clang-format version CI checks with
+(`.github/workflows/style.yml`):
 
 ```sh
-clang-format -i include/*.h src/*.hpp src/*.cpp tests/*.hpp tests/*.cpp examples/*.hpp examples/*.cpp
+pip install pre-commit
+pre-commit install                 # format on every commit from now on
+pre-commit run --all-files         # or by hand, over the whole tree
 ```
 
-Run it before committing so changes land already formatted. Hand-aligned tables
-and compact one-liners that clang-format would expand are fenced with
-`// clang-format off` / `// clang-format on`; leave those fences in place.
+clang-tidy wants the compile database of a tree configured with **clang** (it
+parses with clang's front end, which cannot read g++'s `omp.h`; `libomp-dev`
+supplies clang's) and is a manual stage:
+
+```sh
+CXX=clang++ cmake -S . -B build-tidy -DBLA_VENDOR=Intel10_64lp_seq
+pre-commit run --hook-stage manual clang-tidy --all-files
+```
+
+Use the clang-tidy of the same LLVM release as that clang++. Only the
+translation units are listed; the headers are checked through them. CI runs
+this only on manual dispatch (`.github/workflows/clang-tidy.yml`), since the
+runner has to install MKL and an LLVM toolchain first; run it locally before
+pushing changes to the kernels.
+
+Hand-aligned tables and compact one-liners that clang-format would expand are
+fenced with `// clang-format off` / `// clang-format on`; leave those fences in
+place. The dispatch macros (`CQR_TEST_*_DISPATCH` in the test headers,
+`CQR_DEFINE_*_ENTRY_POINTS` in the two adapter sources) take a type name as an
+argument, which cannot be parenthesized, so they also sit between
+`// NOLINTBEGIN(bugprone-macro-parentheses)` and the matching `NOLINTEND`.
+
+## Claude Code hooks
+
+`.claude/settings.json` wires up two hooks:
+
+- `.claude/hooks/session-start.sh` provisions a fresh remote session: Intel MKL,
+  clang's OpenMP runtime, and pre-commit with its hook environments. It does
+  nothing on a developer's own machine.
+- `.claude/hooks/format.sh` runs after every `Edit` or `Write`: the pre-commit
+  hooks on that one file, so Claude's edits come out the way a commit would.
+  clang-format fixes silently; a finding the hooks cannot fix is fed back to
+  Claude to correct. Without pre-commit it falls back to the system
+  clang-format.
 
 ## Conventions worth knowing
 

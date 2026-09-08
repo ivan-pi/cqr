@@ -123,7 +123,7 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst = 0;
     for (int v = 0; v < nm; ++v) {
@@ -202,7 +202,7 @@ template <class T> int suite2(int nm, int n, int nrhs)
     int fails = 0;
     if (info != 0) {
         ++fails;
-        std::printf("    info = %d (expected 0)\n", (int)info);
+        std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
     std::vector<T> AX(sB);

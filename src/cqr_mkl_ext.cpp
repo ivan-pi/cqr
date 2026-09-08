@@ -114,66 +114,44 @@ void trsm(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo, MKL_TRANSPOSE transa,
 
 } /* anonymous namespace */
 
+/* The C entry points: one definition per routine, instantiated for double (d)
+ * and float (s). T is a type name and p a token to paste, so neither can be
+ * parenthesized. */
+// NOLINTBEGIN(bugprone-macro-parentheses)
+#define CQR_DEFINE_MKL_ENTRY_POINTS(T, p)                                                \
+    void cqr_mkl_##p##geqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, T *ap,      \
+                                    MKL_INT ldap, T *taup, T *work, MKL_INT lwork,       \
+                                    MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)  \
+    {                                                                                    \
+        geqrf(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);              \
+    }                                                                                    \
+    void cqr_mkl_##p##ormqr_compact(                                                     \
+        MKL_LAYOUT layout, char side, char trans, MKL_INT m, MKL_INT n, MKL_INT k,       \
+        const T *ap, MKL_INT ldap, const T *taup, T *cp, MKL_INT ldcp, T *work,          \
+        MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)               \
+    {                                                                                    \
+        ormqr(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info, \
+              format, nm);                                                               \
+    }                                                                                    \
+    void cqr_mkl_##p##potrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, T *ap,  \
+                                    MKL_INT ldap, MKL_INT *info,                         \
+                                    MKL_COMPACT_PACK format, MKL_INT nm)                 \
+    {                                                                                    \
+        potrf(layout, uplo, n, ap, ldap, info, format, nm);                              \
+    }                                                                                    \
+    void cqr_mkl_##p##trsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,      \
+                                   MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m,       \
+                                   MKL_INT n, T alpha, const T *ap, MKL_INT ldap, T *bp, \
+                                   MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)    \
+    {                                                                                    \
+        trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, format,  \
+             nm);                                                                        \
+    }
+// NOLINTEND(bugprone-macro-parentheses)
+
 extern "C" {
-
-void cqr_mkl_dgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, double *ap,
-                            MKL_INT ldap, double *taup, double *work, MKL_INT lwork,
-                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
-{
-    geqrf(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);
-}
-void cqr_mkl_sgeqrf_compact(MKL_LAYOUT layout, MKL_INT m, MKL_INT n, float *ap,
-                            MKL_INT ldap, float *taup, float *work, MKL_INT lwork,
-                            MKL_INT *info, MKL_COMPACT_PACK format, MKL_INT nm)
-{
-    geqrf(layout, m, n, ap, ldap, taup, work, lwork, info, format, nm);
-}
-
-void cqr_mkl_dormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
-                            MKL_INT n, MKL_INT k, const double *ap, MKL_INT ldap,
-                            const double *taup, double *cp, MKL_INT ldcp, double *work,
-                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
-                            MKL_INT nm)
-{
-    ormqr(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
-          format, nm);
-}
-void cqr_mkl_sormqr_compact(MKL_LAYOUT layout, char side, char trans, MKL_INT m,
-                            MKL_INT n, MKL_INT k, const float *ap, MKL_INT ldap,
-                            const float *taup, float *cp, MKL_INT ldcp, float *work,
-                            MKL_INT lwork, MKL_INT *info, MKL_COMPACT_PACK format,
-                            MKL_INT nm)
-{
-    ormqr(layout, side, trans, m, n, k, ap, ldap, taup, cp, ldcp, work, lwork, info,
-          format, nm);
-}
-
-void cqr_mkl_dpotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, double *ap,
-                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
-                            MKL_INT nm)
-{
-    potrf(layout, uplo, n, ap, ldap, info, format, nm);
-}
-void cqr_mkl_spotrf_compact(MKL_LAYOUT layout, MKL_UPLO uplo, MKL_INT n, float *ap,
-                            MKL_INT ldap, MKL_INT *info, MKL_COMPACT_PACK format,
-                            MKL_INT nm)
-{
-    potrf(layout, uplo, n, ap, ldap, info, format, nm);
-}
-
-void cqr_mkl_dtrsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
-                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
-                           double alpha, const double *ap, MKL_INT ldap, double *bp,
-                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
-{
-    trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, format, nm);
-}
-void cqr_mkl_strsm_compact(MKL_LAYOUT layout, MKL_SIDE side, MKL_UPLO uplo,
-                           MKL_TRANSPOSE transa, MKL_DIAG diag, MKL_INT m, MKL_INT n,
-                           float alpha, const float *ap, MKL_INT ldap, float *bp,
-                           MKL_INT ldbp, MKL_COMPACT_PACK format, MKL_INT nm)
-{
-    trsm(layout, side, uplo, transa, diag, m, n, alpha, ap, ldap, bp, ldbp, format, nm);
-}
-
+CQR_DEFINE_MKL_ENTRY_POINTS(double, d)
+CQR_DEFINE_MKL_ENTRY_POINTS(float, s)
 } /* extern "C" */
+
+#undef CQR_DEFINE_MKL_ENTRY_POINTS
