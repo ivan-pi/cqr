@@ -31,7 +31,6 @@
 
 #include "test_mkl_util.hpp" /* cqr_mkl<T>, mkl<T>, lapack<T> + the MKL-free helpers */
 
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -47,7 +46,7 @@ namespace {
  * residual and orthogonality are backward-stable quantities, so they must hold
  * to working precision for every structure -- rank deficiency and near-collinear
  * columns included -- exactly as they do for dense LAPACK. */
-enum Structure : std::uint8_t { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
+enum Structure { DENSE, RANK_DEFICIENT, NEAR_COLLINEAR };
 
 /* build a random m x n matrix (column-major). For DENSE, a diagonal boost tames
  * the conditioning and cond applies the competition's column scaling

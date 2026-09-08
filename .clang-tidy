@@ -12,7 +12,9 @@
 # and readability that do not turn into a matter of taste, and the
 # C-style cast check from the core guidelines. Checks that flag every
 # numeric constant, every short name or every unbraced one-liner are
-# left out on purpose; so are the ones that only nag.
+# left out on purpose; so are the ones that only nag, among them
+# performance-enum-size: the enums here select a kernel or a code path
+# and are never stored, so their width is not worth a byte.
 ---
 Checks: >
   -*,
@@ -22,6 +24,7 @@ Checks: >
   -bugprone-narrowing-conversions,
   -bugprone-unchecked-optional-access,
   performance-*,
+  -performance-enum-size,
   modernize-*,
   -modernize-use-trailing-return-type,
   -modernize-use-nodiscard,

@@ -50,14 +50,13 @@
 #include "cqr_compact_common.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <cassert>
 #include <type_traits>
 
 namespace cqr::detail {
 
 /* Reflector sweep order: Forward applies kk = 0..k-1, Backward k-1..0. */
-enum class Direction : std::uint8_t { Forward, Backward };
+enum class Direction { Forward, Backward };
 
 /* Apply H(kk) to the JB adjacent slices p0 .. p0+JB-1 of C (slices run along
  * C's second index; the reflector along its first, i = kk+1 .. len-1). JB is a

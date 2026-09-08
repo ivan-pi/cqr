@@ -54,7 +54,6 @@
 #include "bench_util.hpp"  /* check, best_time, omp_threads, format helpers */
 
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -110,7 +109,7 @@ double sol_error(const double *x, int n)
 /* Which library backs the batched compute pipeline -- the QR factorization and
  * the closing triangular solve. MKL has no compact ormqr, so cqr_mkl_dormqr is
  * shared by both; every other compute kernel comes from the selected library. */
-enum class Backend : std::uint8_t { Mkl, Cqr };
+enum class Backend { Mkl, Cqr };
 
 /* ===== batched path: compact group-of-V pipeline ======================= *
  * Process the pool in groups of V, packing/factoring/solving/unpacking each
