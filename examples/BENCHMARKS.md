@@ -42,7 +42,10 @@ cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
 
 Correctness (the gate each benchmark carries) is independent of these flags; only
 throughput changes. The outer loop over the pool is parallelized with OpenMP when
-available -- the intended usage -- with MKL's own threading pinned to 1.
+available, with MKL's own threading pinned to 1. That is the library's
+*composition* case: each call inside the outer loop sees a one-thread team, so
+the routines' own group-level threading (README, "Threading") stays serial and
+the two never compete.
 
 ## `bench_geqrf_compact`
 

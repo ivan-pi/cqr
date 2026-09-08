@@ -275,6 +275,8 @@ int main(int argc, char **)
     fails += run_case<double, 4>(8, m, nrhs);
     fails += run_case<double, 8>(16, m, nrhs);
     fails += run_case<double, 8>(11, m, nrhs); /* padded partial group */
+    fails +=
+        run_case<double, 4>(40, m, nrhs); /* 10 groups: OpenMP path when threads <= 10 */
     fails += run_case<float, 4>(8, m, nrhs);
     fails += run_case<float, 8>(16, m, nrhs);
     fails += run_case<float, 16>(32, m, nrhs);

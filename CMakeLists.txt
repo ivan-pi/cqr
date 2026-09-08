@@ -8,6 +8,7 @@ project(cqr
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(CQR_WITH_MKL    "Build the Intel MKL compact extension, examples and MKL tests" ON)
+option(CQR_WITH_OPENMP "Thread each routine's loop over compact groups with OpenMP"     ON)
 option(CQR_BUILD_TESTS "Build tests and register them with CTest"                     ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -20,6 +21,18 @@ endif()
 #   cmake -S . -B build -DCMAKE_CXX_FLAGS="-O3 -march=native"
 # so the SIMD kernels target the host's widest vectors.
 
+# OpenMP threads the group loop inside every routine (see the threading note
+# in src/cqr_compact_common.hpp); the benchmarks use it for their outer loops.
+# Linked PRIVATE: consumers get the runtime library, not the -fopenmp flag.
+if(CQR_WITH_OPENMP)
+  find_package(OpenMP QUIET)
+endif()
+function(cqr_link_openmp target)
+  if(CQR_WITH_OPENMP AND OpenMP_CXX_FOUND)
+    target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------------------
 # Portable kernel library: the C API of include/cqr_compact.h (no BLAS)
 # ---------------------------------------------------------------------------
@@ -28,6 +41,7 @@ target_include_directories(cqr_compact
   PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(cqr_compact PUBLIC cxx_std_17)
+cqr_link_openmp(cqr_compact)
 add_library(cqr::compact ALIAS cqr_compact)
 
 # ---------------------------------------------------------------------------
@@ -44,18 +58,18 @@ if(CQR_WITH_MKL)
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
   # MKL types appear in the public header (no link dependency).
   target_link_libraries(cqr_mkl_ext PUBLIC MKL::CompactHeaders)
+  cqr_link_openmp(cqr_mkl_ext)
   add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
 
   # Examples: the worked batched solve and the three throughput benchmarks
   # (examples/BENCHMARKS.md). All link MKL for the pack/unpack routines and the
   # per-matrix LAPACK baselines; the benchmarks parallelize their outer loop
   # with OpenMP when available.
-  find_package(OpenMP QUIET)
   foreach(prog solve_qr_compact bench_qr_compact bench_geqrf_compact bench_potrf_compact)
     add_executable(${prog} examples/${prog}.cpp)
     target_link_libraries(${prog} PRIVATE cqr_mkl_ext MKL::Compact)
-    if(OpenMP_CXX_FOUND AND prog MATCHES "^bench_")
-      target_link_libraries(${prog} PRIVATE OpenMP::OpenMP_CXX)
+    if(prog MATCHES "^bench_")
+      cqr_link_openmp(${prog})
     endif()
   endforeach()
 endif()

@@ -10,6 +10,7 @@
  *   make_view / make_const_view -- view a packed T buffer for a layout and ld.
  *   group_stride          -- scalars per group of V interleaved matrices.
  *   for_vlen              -- runtime interleave width -> compile-time V.
+ *   parallel_groups / CQR_OMP_PARALLEL_GROUPS -- OpenMP over the group loop.
  *
  * V is the compact-format interleave width (the number of matrices whose
  * element (i,j) is stored contiguously). It does NOT need to match the hardware
@@ -29,6 +30,10 @@
 #include <cstddef>
 #include <cmath>
 #include <type_traits>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace cqr {
 namespace detail {
@@ -179,6 +184,51 @@ template <typename F> bool for_vlen(int V, F &&f)
     default: return false;
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Threading over groups.                                              */
+/*                                                                     */
+/* Every all-groups driver runs its group loop as                      */
+/*     CQR_OMP_PARALLEL_GROUPS(ngroups)                                */
+/*     for (Int g = 0; g < ngroups; ++g) ...                           */
+/* which, when built with OpenMP, is                                   */
+/*     #pragma omp parallel for schedule(static) if(parallel_groups(ngroups)) */
+/* Groups are independent and equal-sized, so a static schedule        */
+/* balances exactly. The if-clause keeps the region serial unless      */
+/* every thread of the would-be team gets at least one group.         */
+/*                                                                     */
+/* Composition: the gate first asks whether one more nesting level may */
+/* be active at all, then uses omp_get_max_threads(), the team size at */
+/* the *current* nesting level. Called from inside a caller's own       */
+/* parallel loop it therefore stays serial by default and no thread    */
+/* pools compete. A per-level thread list, e.g. OMP_NUM_THREADS=8,2    */
+/* with OMP_MAX_ACTIVE_LEVELS=2, gives each of the 8 outer threads a   */
+/* 2-way inner team -- the standard OpenMP knobs, nothing library-     */
+/* specific.                                                           */
+/* ------------------------------------------------------------------ */
+
+template <typename Int> inline bool parallel_groups(Int ngroups) noexcept
+{
+#ifdef _OPENMP
+    /* A region here can only be active if nesting still allows one more level
+     * (from a caller's own parallel loop that is normally false, and without
+     * this check the runtime would still build an inactive one-thread team). */
+    if (omp_get_active_level() >= omp_get_max_active_levels()) return false;
+    const Int nthreads = omp_get_max_threads();
+    return nthreads > 1 && ngroups >= nthreads;
+#else
+    (void)ngroups;
+    return false;
+#endif
+}
+
+#ifdef _OPENMP
+#define CQR_PRAGMA(x) _Pragma(#x)
+#define CQR_OMP_PARALLEL_GROUPS(ngroups)                                                 \
+    CQR_PRAGMA(omp parallel for schedule(static) if (::cqr::detail::parallel_groups(ngroups)))
+#else
+#define CQR_OMP_PARALLEL_GROUPS(ngroups)
+#endif
 
 } /* namespace detail */
 } /* namespace cqr */

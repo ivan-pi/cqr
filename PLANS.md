@@ -96,6 +96,12 @@ underflow-safe scaling are out of scope for all of them.
 
 ## Project-wide
 
+- **Threading.** Each routine's group loop is an OpenMP `parallel for`
+  (static schedule) gated on `ngroups >= omp_get_max_threads()`, so it stays
+  serial for small batches and inside a caller's own parallel region unless
+  nested parallelism is enabled (`OMP_NUM_THREADS=8,2`). Not yet done: a
+  benchmark mode that hands the whole pool to one call (the current
+  benchmarks drive their own outer loop, the composition case).
 - **No install/export.** `CMakeLists.txt` defines no `install()`/package-config
   rules, so the project is not consumable via `find_package(cqr)`.
 - **Alignment contract.** Compact buffers are correct at any `T` alignment on

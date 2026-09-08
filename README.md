@@ -59,7 +59,25 @@ cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_FLAGS="-O3 -march=native"
 ```
 
-Useful option: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL).
+Useful options: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL) and
+`-DCQR_WITH_OPENMP=OFF` (single-threaded routines; see below).
+
+## Threading
+
+Every routine threads its loop over the *groups* of `V` interleaved matrices
+with OpenMP (static schedule; the groups are independent and equal-sized), but
+only when the team would be fully used: the region is active iff
+`ngroups >= omp_get_max_threads()`, so a small batch never pays for idle
+threads. Because that count is OpenMP's team size *at the current nesting
+level*, the routines compose with a caller's own parallel loop: called from
+inside it they run serially by default (no competing thread pools), and the
+standard per-level thread list enables nested splitting when wanted, e.g.
+
+```sh
+OMP_NUM_THREADS=8,2 OMP_MAX_ACTIVE_LEVELS=2 ./my_app   # 8 outer x 2 inner threads
+```
+
+Results are independent of the thread count.
 
 ## Examples
 

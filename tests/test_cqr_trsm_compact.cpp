@@ -235,6 +235,7 @@ int main()
     fails += run_case<double, 8>('L', 'U', 'N', 'N', 11, 20, 4); // padded last group
     fails += run_case<float, 8>('L', 'U', 'N', 'N', 16, 16, 4);
     fails += run_case<float, 16>('R', 'L', 'N', 'U', 32, 10, 7);
+    fails += run_case<double, 4>('L', 'U', 'N', 'N', 40, 16, 4); // 10 groups: OpenMP path
 
     // few-RHS no-transpose left (n = 1,2,3): the column-axpy kernel route
     // (n >= 4 above routes to the row-dot kernel), across uplo / diag / width

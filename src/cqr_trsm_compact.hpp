@@ -248,6 +248,7 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
      * group's m x n block through the same strided B view the solve uses. */
     if (alpha == T(0)) {
         using VT = typename pack<T, V>::type;
+        CQR_OMP_PARALLEL_GROUPS(ngroups)
         for (Int g = 0; g < ngroups; ++g) {
             auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
             for (Int j = 0; j < n; ++j)
@@ -257,6 +258,7 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
         return;
     }
 
+    CQR_OMP_PARALLEL_GROUPS(ngroups)
     for (Int g = 0; g < ngroups; ++g) {
         const T *a = ap + (std::size_t)g * str_a;
         T *b = bp + (std::size_t)g * str_b;

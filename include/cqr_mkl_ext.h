@@ -42,6 +42,12 @@
  *     they are; a wide factor (more columns than reflectors) must be repacked
  *     with its k reflector columns only.
  *
+ *   - Threading: built with OpenMP, the loop over groups of V matrices runs in
+ *     parallel (static schedule) whenever ngroups >= omp_get_max_threads() at
+ *     the current nesting level; from inside a caller's own parallel loop it
+ *     stays serial unless nested parallelism is enabled (OMP_NUM_THREADS=8,2
+ *     with OMP_MAX_ACTIVE_LEVELS=2). See the note in cqr_compact.h.
+ *
  * Per-routine parameter references: docs/cqr_mkl_d{geqrf,ormqr,potrf,trsm}_compact_design.md.
  *
  * Assisted-by: Claude:claude-opus-4.8

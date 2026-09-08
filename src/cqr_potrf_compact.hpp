@@ -105,6 +105,7 @@ void potrf_compact(bool rowmajor, bool upper, Int n, T *ap, Int ldap, Int nm)
     const std::size_t str_a = group_stride(rowmajor, ldap, n, n, V);
 
     const Int ngroups = (nm + V - 1) / V;
+    CQR_OMP_PARALLEL_GROUPS(ngroups)
     for (Int g = 0; g < ngroups; ++g) {
         /* The kernel factors the lower triangle of the view it is given: A
          * itself for uplo lower, A^T for upper (U^T U = A is L L^T of A^T = A). */

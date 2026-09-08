@@ -272,6 +272,9 @@ int main()
             fails += run_nonspd<float, 8>(16, u, l);
         }
 
+    // 10 groups: takes the OpenMP group loop when the team has <= 10 threads.
+    fails += run_case<double, 4>(40, 20, 'L', 'C');
+
     if (fails) {
         std::printf("\n%d CHECK(S) FAILED\n", fails);
         return 1;

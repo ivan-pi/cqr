@@ -66,6 +66,12 @@ and compact one-liners that clang-format would expand are fenced with
   `aligned(alignof(T))`; always name it as `typename pack<T,V>::type` and never
   pass it as a template *argument* (clang strips typedef alignment there and
   emits aligned loads that fault on 16-byte-aligned buffers -- issue #34).
+- **Threading over groups.** Every all-groups driver wraps its group loop in
+  `CQR_OMP_PARALLEL_GROUPS(ngroups)` (a static-schedule `omp parallel for`
+  gated by `parallel_groups`, both in `cqr_compact_common.hpp`). Keep new
+  drivers on that macro; do not add threading inside a group kernel. The gate
+  is `ngroups >= omp_get_max_threads()` at the current nesting level, which is
+  what makes the library compose with a caller's outer parallel loop.
 - **One kernel per routine.** Every kernel addresses its operands through
   `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
   `side='R'` are the same code with different strides. Register blocking is

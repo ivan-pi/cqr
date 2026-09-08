@@ -130,6 +130,7 @@ void geqrf_compact(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm
     const std::size_t str_t = (std::size_t)k * V;
 
     const Int ngroups = (nm + V - 1) / V;
+    CQR_OMP_PARALLEL_GROUPS(ngroups)
     for (Int g = 0; g < ngroups; ++g)
         geqrf_compact_group<T, V, Int>(
             m, n, make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t);

@@ -155,6 +155,7 @@ int main()
     fails += run_case<double, 8>(16, 60, 60);
     fails += run_case<double, 8>(11, 43, 43); // padded partial group
     fails += run_case<double, 4>(8, 3, 3);    // smallest supported
+    fails += run_case<double, 4>(40, 24, 24); // 10 groups: OpenMP path when threads <= 10
     // rectangular
     fails += run_case<double, 4>(8, 64, 20); // tall
     fails += run_case<double, 4>(8, 20, 64); // wide
