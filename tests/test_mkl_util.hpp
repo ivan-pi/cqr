@@ -3,7 +3,7 @@
 // Scalar-type dispatch for the MKL-backed suites, so each suite is written once
 // as a template and runs in FP64 and FP32:
 //
-//   cqr_mkl<T>  the routines under test, cqr_mkl_?{geqrf,ormqr,potrf,trsm}_compact
+//   cqr_mkl<T>  the routines under test, cqr_mkl_?{geqrf,ormqr,potrf,trsm,gels}_compact
 //   mkl<T>      MKL's Compact API: sizes, pack/unpack, and MKL's own compact
 //               kernels as references
 //   lapack<T>   dense LAPACKE / CBLAS references
@@ -53,6 +53,11 @@ template <> struct cqr_mkl<T> {                                                 
                      MKL_INT ldap, T *bp, MKL_INT ldbp, MKL_COMPACT_PACK fmt, MKL_INT nm)  \
     { cqr_mkl_##p##trsm_compact(layout, side, uplo, tr, diag, m, n, alpha, ap, ldap, bp,   \
                                 ldbp, fmt, nm); }                                          \
+    static void gels(MKL_LAYOUT layout, char trans, MKL_INT m, MKL_INT n, MKL_INT nrhs,   \
+                     T *ap, MKL_INT ldap, T *bp, MKL_INT ldbp, T *work, MKL_INT lwork,     \
+                     MKL_INT *info, MKL_COMPACT_PACK fmt, MKL_INT nm)                      \
+    { cqr_mkl_##p##gels_compact(layout, trans, m, n, nrhs, ap, ldap, bp, ldbp, work,       \
+                                lwork, info, fmt, nm); }                                   \
 };                                                                                         \
 template <> struct mkl<T> {                                                                \
     static int vlen(MKL_COMPACT_PACK fmt) { return cqr::detail::vlen_for_format<T>(fmt); } \
@@ -91,6 +96,12 @@ template <> struct lapack<T> {                                                  
     { return LAPACKE_##p##ormqr(layout, side, trans, m, n, k, a, lda, tau, c, ldc); }      \
     static lapack_int potrf(int layout, char uplo, lapack_int n, T *a, lapack_int lda)    \
     { return LAPACKE_##p##potrf(layout, uplo, n, a, lda); }                                \
+    static lapack_int gelqf(int layout, lapack_int m, lapack_int n, T *a, lapack_int lda, \
+                            T *tau)                                                        \
+    { return LAPACKE_##p##gelqf(layout, m, n, a, lda, tau); }                              \
+    static lapack_int gels(int layout, char trans, lapack_int m, lapack_int n,            \
+                           lapack_int nrhs, T *a, lapack_int lda, T *b, lapack_int ldb)   \
+    { return LAPACKE_##p##gels(layout, trans, m, n, nrhs, a, lda, b, ldb); }               \
     static void gemm(CBLAS_LAYOUT layout, CBLAS_TRANSPOSE ta, CBLAS_TRANSPOSE tb,         \
                      MKL_INT m, MKL_INT n, MKL_INT k, T alpha, const T *a, MKL_INT lda,    \
                      const T *b, MKL_INT ldb, T beta, T *c, MKL_INT ldc)                   \

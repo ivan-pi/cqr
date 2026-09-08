@@ -1,7 +1,7 @@
 # PLANS
 
 Status of each routine against its design document (`docs/`), plus the open
-items. All four routines ship both API surfaces -- the MKL-style
+items. All five routines ship both API surfaces -- the MKL-style
 `cqr_mkl_?*_compact` (no argument checking, scalar `info`) and the portable
 `?*_compact` C API (LAPACK-style `info = -j` validation) -- in FP64 and FP32,
 over one `BatchView`-based kernel each that covers every layout (and, for
@@ -23,21 +23,12 @@ underflow-safe scaling are out of scope for all of them.
 - **Scoped out (design 6.6):** no `dlarfg` rescaling near `1e+/-150`, no column
   pivoting; blocked (`larft`/`larfb`) factorization is deliberately not used at
   the target sizes.
-- **Open: one-pass solve on the fused system `[A | B]`.** Factoring the
-  `m x (n + nrhs)` matrix `[A | B]` with `geqrf` applies every reflector to the
-  `B` block as it is built, so `Q^T B` comes out of the factorization and the
-  separate `ormqr` pass disappears. The current API only partly supports this:
-  `geqrf` always builds `min(m, ncols)` reflectors, which is exactly `n` for a
-  square `A` (correct, one pass) but `min(m, n + nrhs) > n` for a tall `A`
-  (extra reflectors over the `B` block -- harmless for the least-squares
-  solution, wasted work); and `trsm` cannot address the `R` and `Q^T B` blocks
-  inside the fused buffer, because it derives the group stride from its own
-  `ldap*s` / `ldbp*n`, not from the fused column count `n + nrhs`, so it only
-  works while the batch is a single group (`nm <= V`). Closing this needs either
-  a reflector-count argument on `geqrf` plus explicit group strides on `trsm`,
-  or a fused driver (`?gels`-style: per group, factor `[A | B]` to `n`
-  reflectors and back-substitute the `B` block in place) built on the existing
-  view-based kernels.
+- **Done: one-pass solve on the fused system `[A | B]`.** Closed by `gels`
+  (below): `geqrf_compact_group` takes an optional panel view to which every
+  reflector is applied as it is built, so `Q^T B` comes out of the
+  factorization -- the QR of `[A | B]` truncated to `A`'s `min(m, n)`
+  reflectors -- with `B` in its own buffer (no reflector-count argument, no
+  fused group strides). `geqrf_compact` itself is unchanged (`ncols = 0`).
 - **Deferred:** a benchmark against the open-source `batmat` `geqrf` (same
   interleaved format).
 
@@ -94,6 +85,45 @@ underflow-safe scaling are out of scope for all of them.
 - **Scoped out:** no singularity check (a zero non-unit diagonal divides to
   `Inf`/`NaN`, as in BLAS).
 
+## gels (`cqr_mkl_dgels_compact`)
+
+- **Implemented (design 6):** LAPACK `?gels` for the compact format, both
+  precisions, both layouts, `trans in {N, T}` over any `m x n` shape. The four
+  cases are one kernel: the QR of the *tall* orientation of `A` (its `BatchView`,
+  transposed when `m < n`, which is the `?gelqf` storage convention for free),
+  then `B := Q^T B` fused into the factorization and `R X = B` (least squares), or
+  `R^T Y = B`, `B := Q [Y; 0]` (minimum norm). The whole solve of a group runs in
+  one `for_each_group` body over the existing `geqrf`/`ormqr`/`trsm` group
+  kernels; `work` is the per-group `tau` scratch (`lwork >= min(m,n) * V *
+  ceil(nm/V)`, the size of a compact `tau` buffer) and holds `tau` on exit, so
+  `(ap, work)` feed `ormqr` for further right-hand sides.
+- **Validated (design 7):** a BLAS-free test vs a scalar `ref_gels` (same
+  unblocked steps; `X`, the factorization and `tau` gated elementwise) plus the
+  defining properties formed independently (normal equations and the
+  residual-sum-of-squares rows; `op(A) X = B` and the minimum-norm solution built
+  through the Gram matrix), the C API validation, the workspace query and the
+  `min(m,n) = 0` quick return; and an MKL/LAPACK test vs per-matrix
+  `LAPACKE_?gels` over every `(layout, trans)` and square/tall/wide shape (forward
+  error `100 max(m,n) eps`, the residual contracts, the factorization vs
+  `LAPACKE_?geqrf`/`?gelqf`), and a cross-check vs the `mkl_?geqrf_compact ->
+  cqr_mkl_?ormqr_compact -> mkl_?trsm_compact` pipeline on the same packed input.
+- **Benchmarked:** the `cqr-gels` path of `bench_qr_compact` (one call per
+  group in the caller's loop, next to the three-step chain). With the
+  benchmark's single right-hand side it matches the chain (`1.00x` geometric
+  mean over `n = 10..100`, 4 threads, AVX-512): the `O(n^3)` factorization
+  dominates and the fused apply-`Q^T` saves only an `O(n^2)` sweep, so the
+  fusion's gain scales with `nrhs`, not with `n`. What `gels` buys at `nrhs = 1`
+  is the one-call interface, the rectangular cases, and library-side threading
+  of the whole solve.
+- **Scoped out (design 6.7):** no rank-deficiency test (`?gels`'s `info > 0`;
+  a zero diagonal of `R` divides to `Inf`/`NaN` in that lane), no
+  overflow/underflow rescaling of `A`/`B`, no pivoting.
+- **Open:** the tuned column-major `trsm` path is used only for `m >= n`
+  column-major; the transposed-view (`m < n`) cases and row-major go through
+  the strided kernels. A whole-batch, library-threaded `gels` call has not been
+  benchmarked against the caller-threaded per-group loop (the pack/unpack
+  around each group is outside the library either way).
+
 ## Project-wide
 
 - **Precision coverage.** Every suite is templated on the scalar type and runs
@@ -110,9 +140,9 @@ underflow-safe scaling are out of scope for all of them.
   MKL and LAPACK reference paths keep an outer OpenMP loop (sequential MKL is
   not threaded). The solve benchmark keeps its pipeline per group in the
   caller's loop: whole-pool geqrf/ormqr/trsm calls stream the pool three times
-  and measured 15-55% slower than the cache-resident per-group pipeline. A
-  fused per-group solve driver (the `?gels`-style entry above) is the way to
-  get library-side threading for the whole solve without that penalty.
+  and measured 15-55% slower than the cache-resident per-group pipeline. The
+  fused per-group solve driver, `gels`, is the library-side answer: one call
+  runs the whole solve of each group inside `for_each_group`.
 - **No install/export.** `CMakeLists.txt` defines no `install()`/package-config
   rules, so the project is not consumable via `find_package(cqr)`.
 - **Alignment contract.** Compact buffers are correct at any `T` alignment on

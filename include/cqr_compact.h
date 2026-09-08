@@ -10,6 +10,7 @@
  *   dormqr_compact / sormqr_compact  -- apply Q or Q^T from the left, B := op(Q) B
  *   dpotrf_compact / spotrf_compact  -- Cholesky factorization  A = L L^T or A = U^T U
  *   dtrsm_compact  / strsm_compact   -- triangular solve  op(A) X = alpha B, etc.
+ *   dgels_compact  / sgels_compact   -- least-squares / minimum-norm solve  op(A) X = B
  *
  * Compact layout; group g = idx/V, slot v = idx%V:
  *   A_v(i,j)  = ap [ g*ldap*ncol*V + (j*ldap + i)*V + v ]   (column-major)
@@ -140,6 +141,47 @@ int dtrsm_compact(char layout, char side, char uplo, char transa, char diag, int
 int strsm_compact(char layout, char side, char uplo, char transa, char diag, int m, int n,
                   float alpha, const float *ap, int ldap, float *bp, int ldbp, int V,
                   int nm);
+
+/* Least-squares / minimum-norm solve of a batch of full-rank systems
+ *   op(A) X = B,   op(A) = A ('N') or A^T ('T'/'C'),   A is m x n,
+ * in one call per batch -- the compact form of LAPACK ?gels. With more rows than
+ * columns op(A) X = B is overdetermined and X is the least-squares solution;
+ * with more columns than rows it is underdetermined and X is the minimum-norm
+ * solution. Per group of V matrices the routine factors A (QR when m >= n, LQ
+ * when m < n), applies Q to B (fused into the factorization in the
+ * least-squares case) and back-substitutes, on the group's cache-resident
+ * buffers; a whole-batch ?geqrf_compact -> ?ormqr_compact -> ?trsm_compact
+ * chain streams the batch three times instead.
+ *   layout   'C'/'c' column-major (tuned) or 'R'/'r' row-major
+ *   trans    'N' (A X = B) or 'T'/'C' (A^T X = B)
+ *   m, n     rows, columns of A
+ *   nrhs     columns of B and X
+ *   ap       compact A (m x n); overwritten with its QR (m >= n) or LQ (m < n)
+ *            factorization in the LAPACK ?geqrf / ?gelqf storage convention
+ *   ldap     compact leading dimension of A (>= m col-major, >= n row-major)
+ *   bp       compact B, max(m,n) x nrhs per matrix: on entry rows 0 .. (rows of
+ *            op(A))-1 hold B; on exit rows 0 .. (columns of op(A))-1 hold X and,
+ *            in the least-squares case, the remaining rows the residual (the
+ *            squared column norms of rows n..m-1 are the residual sums of squares)
+ *   ldbp     compact leading dimension of B (>= max(m,n) col-major, >= nrhs row-major)
+ *   work     scratch for the reflector scalars, lwork >= max(1, min(m,n)*V*ceil(nm/V))
+ *            (the size of a compact tau buffer for the batch); on exit it holds
+ *            them, so (ap, work) is the (H, tau) that ?ormqr_compact accepts
+ *   lwork    the length of work, or -1 for a workspace query: the required
+ *            lwork is returned in work[0] and nothing else is touched
+ *   V, nm    interleave width; total number of matrices (padded last group)
+ * min(m,n) = 0 sets B := 0 (the solution of an empty system), as LAPACK does.
+ * Rank deficiency is not detected (no info > 0): a zero diagonal of R divides
+ * through to Inf/NaN in that lane, as in ?trsm.
+ * Returns 0, or -j for an illegal j-th argument:
+ *   -1 layout   -2 trans   -3 m (<0)   -4 n (<0)   -5 nrhs (<0)   -7 ldap
+ *   -9 ldbp     -11 lwork (too small and not -1)   -12 V (not 2/4/8/16)   -13 nm (<0)
+ * (V and nm are checked before lwork, whose requirement depends on them.) */
+int dgels_compact(char layout, char trans, int m, int n, int nrhs, double *ap, int ldap,
+                  double *bp, int ldbp, double *work, int lwork, int V, int nm);
+
+int sgels_compact(char layout, char trans, int m, int n, int nrhs, float *ap, int ldap,
+                  float *bp, int ldbp, float *work, int lwork, int V, int nm);
 
 #ifdef __cplusplus
 }

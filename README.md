@@ -21,9 +21,17 @@ an Intel MKL-style API:
   `mkl_?trsm_compact` (the batched triangular solve), so the whole `AX = B`
   pipeline runs with no MKL compute kernel. See its
   [design document](docs/cqr_mkl_dtrsm_compact_design.md).
+* **`cqr_mkl_?gels_compact`** - the batched **least-squares / minimum-norm
+  solve** `op(A) X = B` in one call: LAPACK `?gels` for the compact format
+  (square, over- and underdetermined systems, `A` or `A^T`), running the
+  factorization, the apply-`Q` step (fused into the factorization) and the
+  triangular solve per group of `V` matrices while they are cache-resident, so
+  the library's own threading covers the whole solve. See its
+  [design document](docs/cqr_mkl_dgels_compact_design.md).
 
 All routines come in single and double precision. Together they factor and
-solve batched systems entirely in the compact format, with no MKL compute kernel.
+solve batched systems entirely in the compact format, with no MKL compute kernel
+-- as the `geqrf -> ormqr -> trsm` chain, or as the one-call `gels`.
 
 The kernels are written with GNU vector types (`__attribute__((vector_size))`),
 which the compiler lowers to SSE, AVX, or AVX-512 -- one portable source for
@@ -84,7 +92,8 @@ Results are independent of the thread count.
 
 * `solve_qr_compact` - a batch of square systems `A_v X_v = B_v` solved end to
   end with the compact pipeline (`mkl_dgeqrf_compact` -> `cqr_mkl_dormqr_compact`
-  -> `cqr_mkl_dtrsm_compact`), cross-checked against per-matrix `LAPACKE_dgels`.
+  -> `cqr_mkl_dtrsm_compact`) and with the one-call `cqr_mkl_dgels_compact`,
+  both cross-checked against per-matrix `LAPACKE_dgels`.
 * `bench_qr_compact [nmat] [reps]` - throughput of the fully open compact *solve*
   pipeline vs. MKL's batched pipeline and the one-matrix-at-a-time LAPACK path,
   over pools of small matrices (order 10-100), reporting geometric-mean speedups.
