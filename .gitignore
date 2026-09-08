@@ -70,3 +70,4 @@ Testing/
 
 # Skill development: eval run outputs (generated, not source)
 .skill-dev/*-workspace/
+.skill-dev/eval-review.html
