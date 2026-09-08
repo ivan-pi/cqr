@@ -29,22 +29,23 @@
 using namespace cqr::test;
 
 // ----------------------- reference kernel (scalar) ------------------
-// Dense column-major BLAS ?trsm: solves op(A) X = alpha B (side='L') or
+// Dense BLAS ?trsm: solves op(A) X = alpha B (side='L') or
 // X op(A) = alpha B (side='R') in place, A the order-s triangular factor.
 // B is pre-scaled by alpha (so alpha == 0 gives B := 0), then a unit-alpha
 // substitution runs. Only the referenced triangle of A is touched; the
 // diagonal is skipped entirely when diag='U'.
 
-template <class T>
-static void ref_trsm(char side, char uplo, char transa, char diag, int m, int n, T alpha,
-                     const T *A, int lda, T *B, int ldb)
+template <class T, class Av>
+static void ref_trsm(char side, char uplo, char transa, char diag, T alpha, Av A,
+                     MatrixView<T> B)
 {
     const bool left = (side == 'L' || side == 'l');
     const bool upper = (uplo == 'U' || uplo == 'u');
     const bool tran = (transa == 'T' || transa == 't' || transa == 'C' || transa == 'c');
     const bool unit = (diag == 'U' || diag == 'u');
-    auto Ae = [&](int i, int j) -> T { return A[i + (size_t)j * lda]; };
-    auto Be = [&](int i, int j) -> T & { return B[i + (size_t)j * ldb]; };
+    const int m = B.rows, n = B.cols;
+    auto Ae = [&](int i, int j) -> T { return A(i, j); };
+    auto Be = [&](int i, int j) -> T & { return B(i, j); };
 
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i)
@@ -111,7 +112,7 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     MatrixBatch<T> A(nm, s, s);
     const bool up = (uplo == 'U');
     for (int idx = 0; idx < nm; ++idx)
-        gen_tri<T>(A[idx], s, up);
+        gen_tri(A.view(idx), up);
 
     // random B (m x n) and its reference solution
     MatrixBatch<T> B(nm, m, n), Xref(nm, m, n);
@@ -119,7 +120,7 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
         for (size_t e = 0; e < (size_t)m * n; ++e)
             B[idx][e] = frand<T>();
         std::copy(B[idx], B[idx] + (size_t)m * n, Xref[idx]);
-        ref_trsm<T>(side, uplo, transa, diag, m, n, alpha, A[idx], s, Xref[idx], m);
+        ref_trsm(side, uplo, transa, diag, alpha, A.view(idx), Xref.view(idx));
     }
 
     // pack, solve with the routine under test, unpack
@@ -140,16 +141,18 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     // kernel cannot slip through (the ?trsm analogue of the reconstruction /
     // round-trip identities the geqrf/potrf/ormqr self-tests check).
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> R((size_t)m * n), aB((size_t)m * n);
+    std::vector<T> Rs((size_t)m * n), aBs((size_t)m * n);
+    const auto R = mat_view(Rs.data(), m, n), aB = mat_view(aBs.data(), m, n);
     for (int idx = 0; idx < nm; ++idx) {
         worst_fwd =
             std::max(worst_fwd, max_abs_diff(Bout[idx], Xref[idx], (size_t)m * n) /
-                                    std::max(norm1(Xref[idx], m, n), 1e-300));
-        tri_apply<T>(side, uplo, transa, diag, m, n, A[idx], s, Bout[idx], m, R.data());
+                                    std::max(norm1(Xref.view(idx)), 1e-300));
+        tri_apply(side, uplo, transa, diag, A.view(idx), Bout.view(idx), R);
         for (size_t e = 0; e < (size_t)m * n; ++e)
-            aB[e] = alpha * B[idx][e];
-        worst_res = std::max(worst_res, max_abs_diff(R.data(), aB.data(), (size_t)m * n) /
-                                            std::max(norm1(aB.data(), m, n), 1e-300));
+            aBs[e] = alpha * B[idx][e];
+        worst_res =
+            std::max(worst_res, max_abs_diff(Rs.data(), aBs.data(), (size_t)m * n) /
+                                    std::max(norm1(aB), 1e-300));
     }
     const double worst = std::max(worst_fwd, worst_res);
 

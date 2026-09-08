@@ -39,19 +39,6 @@ namespace {
 
 /* ---------------- Suite 1: isolated op(Q) C (section 7.1) -------------- */
 
-/* L1 (max column sum) norm of an m x n matrix in the given layout. */
-template <class T> double norm1_layout(const T *M, int m, int n, bool rowmajor, int ld)
-{
-    double mx = 0;
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        for (int i = 0; i < m; ++i)
-            s += std::abs(M[rowmajor ? (size_t)i * ld + j : i + (size_t)j * ld]);
-        mx = std::max(mx, s);
-    }
-    return mx;
-}
-
 /* Generalized Suite 1: validate cqr_mkl_dormqr_compact's op(Q) application
  * for any (layout, side, trans) against dense LAPACKE_dormqr. A is the s x k
  * reflector batch with s = m (side='L') or n (side='R'); C is m x n. */
@@ -129,7 +116,8 @@ int suite1(MKL_LAYOUT layout, char side, char trans, int nm, int m, int n, int k
     for (int v = 0; v < nm; ++v) {
         const T *Bo = Bout.data() + v * sB, *Rv = Bref.data() + v * sB;
         double resid = max_abs_diff(Bo, Rv, sB);
-        double rel = resid / std::max(norm1_layout(Rv, m, n, rowmajor, ldC), 1e-300);
+        /* the reference is stored in `layout`, which its view carries */
+        double rel = resid / std::max(norm1(mat_view(Rv, m, n, ldC, rowmajor)), 1e-300);
         worst = std::max(worst, rel);
     }
     const double rtol = 20.0 * s * eps;
@@ -151,15 +139,16 @@ template <class T> int suite2(int nm, int n, int nrhs)
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
     const int V = mkl<T>::vlen(fmt);
     const int m = n, k = n;
-    const std::vector<T> X = known_solution<T>(n, nrhs);
+    const std::vector<T> Xs = known_solution<T>(n, nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
 
     /* each batch in one contiguous column-major buffer, matrix v at v*stride */
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<T> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        T *Av = A.data() + v * sA;
-        gen_boosted(Av, n, n); /* diagonal boost tames cond */
-        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
+        const auto Av = mat_view(A.data() + v * sA, n, n);
+        gen_boosted(Av); /* diagonal boost tames cond */
+        matmul(Av, X, mat_view(B.data() + v * sB, n, nrhs)); /* B = A X */
     }
 
     auto Ap = batch_ptrs<const T>(A.data(), nm, sA);
@@ -205,16 +194,16 @@ template <class T> int suite2(int nm, int n, int nrhs)
         std::printf("    info = %ld (expected 0)\n", (long)info);
     }
     double worst_fwd = 0, worst_res = 0;
-    std::vector<T> AX(sB);
+    std::vector<T> AXs(sB);
+    const auto AX = mat_view(AXs.data(), n, nrhs);
     for (int v = 0; v < nm; ++v) {
-        const T *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
-        const T *Xv = Xhat.data() + v * sB;
-        double fwd =
-            max_abs_diff(Xv, X.data(), sB) / std::max(norm1(X.data(), n, nrhs), 1e-300);
+        const auto Av = mat_view<const T>(A.data() + v * sA, n, n);
+        const auto Bv = mat_view<const T>(B.data() + v * sB, n, nrhs);
+        const auto Xv = mat_view<const T>(Xhat.data() + v * sB, n, nrhs);
+        double fwd = max_abs_diff(Xv.data, Xs.data(), sB) / std::max(norm1(X), 1e-300);
         worst_fwd = std::max(worst_fwd, fwd);
-        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n); /* AX = A Xhat */
-        double res =
-            max_abs_diff(AX.data(), Bv, sB) / std::max(norm1(Bv, n, nrhs), 1e-300);
+        matmul(Av, Xv, AX); /* AX = A Xhat */
+        double res = max_abs_diff(AXs.data(), Bv.data, sB) / std::max(norm1(Bv), 1e-300);
         worst_res = std::max(worst_res, res);
     }
     const double rtol = 100.0 * n * eps;

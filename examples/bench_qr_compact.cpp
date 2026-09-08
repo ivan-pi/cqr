@@ -65,33 +65,29 @@ namespace {
 
 using namespace cqr::bench;
 
-/* A pool of `nmat` dense column-major square matrices of order n, each stored
- * back to back in `a` (n*n per matrix), with the matching right-hand sides in
- * `b` (n per matrix; single RHS). The exact solution is X == 1, so each RHS is
- * the row sum b_v = A_v 1, and a correct solve returns all ones. */
-struct Pool {
-    int n, nmat;
-    std::vector<double> a; /* nmat * n*n */
-    std::vector<double> b; /* nmat * n   */
+/* The batch of systems: `nmat` square matrices of order n in `a`, and their
+ * matching right-hand sides in `b` (one RHS per system). The exact solution is
+ * X == 1, so each RHS is the row sum b_v = A_v 1, and a correct solve returns
+ * all ones. */
+struct Systems {
+    MatrixPool a, b;
 
-    Pool(int n_, int nmat_)
-        : n(n_), nmat(nmat_), a((size_t)nmat_ * n_ * n_), b((size_t)nmat_ * n_)
+    Systems(int n, int nmat) : a(nmat, n, n), b(nmat, n, 1)
     {
         std::mt19937_64 rng(42);
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
         for (int v = 0; v < nmat; ++v) {
-            double *A = a.data() + (size_t)v * n * n;
+            const auto A = a.matrix(v), B = b.matrix(v);
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    A[i + (size_t)j * n] = dist(rng);
-            for (int i = 0; i < n; ++i)
-                A[i + (size_t)i * n] += 2.0 * n; /* diag dominant */
-            double *B = b.data() + (size_t)v * n;
+                    A(i, j) = dist(rng);
+            for (int d = 0; d < n; ++d)
+                A(d, d) += 2.0 * n;       /* diag dominant */
             for (int i = 0; i < n; ++i) { /* B = A * ones */
                 double s = 0.0;
                 for (int j = 0; j < n; ++j)
-                    s += A[i + (size_t)j * n];
-                B[i] = s;
+                    s += A(i, j);
+                B(i, 0) = s;
             }
         }
     }
@@ -117,9 +113,9 @@ enum class Backend { Mkl, Cqr };
  * trsm (MKL's compact kernels, or this repo's open drop-ins); the shared
  * cqr_mkl_dormqr and the pack/unpack around them are identical for both. Returns
  * the max solution error. */
-double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, Backend impl)
+double run_batched(const Systems &P, MKL_COMPACT_PACK fmt, int V, Backend impl)
 {
-    const int n = P.n, nmat = P.nmat, nrhs = 1;
+    const int n = P.a.rows, nmat = P.a.nmat, nrhs = 1;
     const int ngroups = (nmat + V - 1) / V;
     double maxerr = 0.0;
 
@@ -149,8 +145,8 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, Backend impl)
         const MKL_INT lwork = (MKL_INT)wq;
         std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
 
-        std::vector<double *> Aptr(V), Bptr(V);  /* per-matrix base pointers */
-        std::vector<double> xout((size_t)V * n); /* unpacked solutions      */
+        std::vector<const double *> Aptr(V), Bptr(V); /* per-matrix base pointers */
+        std::vector<double> xout((size_t)V * n);      /* unpacked solutions      */
         std::vector<double *> Xptr(V);
 
 #pragma omp for schedule(static)
@@ -159,8 +155,8 @@ double run_batched(const Pool &P, MKL_COMPACT_PACK fmt, int V, Backend impl)
             const MKL_INT cnt = std::min(V, nmat - base); /* last group may be short */
 
             for (int s = 0; s < cnt; ++s) {
-                Aptr[s] = const_cast<double *>(P.a.data()) + (size_t)(base + s) * n * n;
-                Bptr[s] = const_cast<double *>(P.b.data()) + (size_t)(base + s) * n;
+                Aptr[s] = P.a.matrix(base + s).data;
+                Bptr[s] = P.b.matrix(base + s).data;
                 Xptr[s] = xout.data() + (size_t)s * n;
             }
 
@@ -241,7 +237,7 @@ int main(int argc, char **argv)
 
     const int sizes[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
-    const int nrhs = 1; /* single RHS per system (see Pool / run_batched) */
+    const int nrhs = 1; /* single RHS per system (see Systems / run_batched) */
     const double eps = std::numeric_limits<double>::epsilon();
 
     std::printf("QR solve throughput (matrices/second), three paths:\n");
@@ -267,14 +263,14 @@ int main(int argc, char **argv)
 
     double log_cqr_vs_unbat = 0.0, log_cqr_vs_mkl = 0.0;
     for (const int n : sizes) {
-        Pool P(n, nmat);
+        const Systems P(n, nmat);
 
         /* The batched paths read the pool read-only (pack copies into the
          * interleaved buffers), so they need no reset. The non-batched path
          * factors in place, so refresh a destroyable working copy of the pool
          * before each pass -- untimed, mirroring an application that consumes
          * the matrix rather than copying it inside the solve. */
-        std::vector<double> wa, wb; /* filled by the reset step below */
+        aligned_vector<double> wa, wb; /* filled by the reset step below */
 
         double err_m = 0.0, err_c = 0.0, err_u = 0.0;
         const double tb_mkl =
@@ -284,8 +280,8 @@ int main(int argc, char **argv)
         const double tu = best_time(
             reps,
             [&] {
-                wa = P.a;
-                wb = P.b;
+                wa = P.a.storage;
+                wb = P.b.storage;
             },
             [&] { err_u = run_unbatched(n, nmat, wa.data(), wb.data()); });
 

@@ -11,21 +11,39 @@
 #define TEST_COMPACT_UTIL_HPP
 
 #include "cqr_compact.h"
+#include "cqr_compact_common.hpp"
 #include "cqr_matrix_view.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #include <algorithm>
 
 namespace cqr::test {
 
 // The dense strided view every suite addresses its host-side matrices through
-// (src/cqr_matrix_view.hpp); the kernels' BatchView is the compact analogue.
+// (src/cqr_matrix_view.hpp), and the compact analogue the kernels use, which
+// the pack/unpack helpers below address the interleaved side through
+// (src/cqr_compact_common.hpp).
 using cqr::detail::ConstMatrixView;
 using cqr::detail::mat_view;
 using cqr::detail::MatrixView;
+
+using cqr::detail::for_vlen;
+using cqr::detail::group_stride;
+using cqr::detail::make_const_view;
+using cqr::detail::make_view;
+
+// The scalar a view addresses. Helpers that only read take the view type
+// itself, so one signature serves MatrixView<T> and ConstMatrixView<T> (which
+// are unrelated types -- the view is an aggregate, with no const conversion).
+template <class Mv>
+using elem_t = std::remove_const_t<
+    std::remove_reference_t<decltype(std::declval<const Mv &>()(0, 0))>>;
 
 // One RNG per test binary (each test is a separate executable, so there is no
 // cross-test coupling); the seed only has to be fixed, not unique.
@@ -50,30 +68,31 @@ template <class T> double max_abs_diff(const T *a, const T *b, size_t n)
     return d;
 }
 
-// L1 (max column sum) norm of a column-major m x n matrix, leading dim m.
-template <class T> double norm1(const T *M, int m, int n)
+// L1 (max column sum) norm of a matrix, in any layout its view describes.
+template <class Mv> double norm1(Mv M)
 {
     double mx = 0;
-    for (int j = 0; j < n; ++j) {
+    for (int j = 0; j < M.cols; ++j) {
         double s = 0;
-        for (int i = 0; i < m; ++i)
-            s += std::abs(M[i + (size_t)j * m]);
+        for (int i = 0; i < M.rows; ++i)
+            s += std::abs(M(i, j));
         mx = std::max(mx, s);
     }
     return mx;
 }
 
-// C (m x n) := A (m x k) * B (k x n), all column-major with the given leading
-// dimensions -- the plain triple loop, for forming right-hand sides and residuals.
-template <class T>
-void matmul(int m, int n, int k, const T *A, int lda, const T *B, int ldb, T *C, int ldc)
+// C (m x n) := A (m x k) * B (k x n) -- the plain triple loop, for forming
+// right-hand sides and residuals. The shapes come from the views, which also
+// carry the layout, so the three operands need not share one.
+template <class Av, class Bv, class Cv> void matmul(Av A, Bv B, Cv C)
 {
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < m; ++i) {
-            T s = 0;
-            for (int l = 0; l < k; ++l)
-                s += A[i + (size_t)l * lda] * B[l + (size_t)j * ldb];
-            C[i + (size_t)j * ldc] = s;
+    assert(A.rows == C.rows && B.cols == C.cols && A.cols == B.rows);
+    for (int j = 0; j < C.cols; ++j)
+        for (int i = 0; i < C.rows; ++i) {
+            elem_t<Cv> s = 0;
+            for (int l = 0; l < A.cols; ++l)
+                s += A(i, l) * B(l, j);
+            C(i, j) = s;
         }
 }
 
@@ -81,17 +100,21 @@ void matmul(int m, int n, int k, const T *A, int lda, const T *B, int ldb, T *C,
 // column-major n x nrhs.
 template <class T> std::vector<T> known_solution(int n, int nrhs)
 {
-    std::vector<T> X((size_t)n * nrhs);
+    std::vector<T> Xs((size_t)n * nrhs);
+    const auto X = mat_view(Xs.data(), n, nrhs);
     for (int j = 0; j < nrhs; ++j)
         for (int i = 0; i < n; ++i)
-            X[i + (size_t)j * n] = T(j + 1);
-    return X;
+            X(i, j) = T(j + 1);
+    return Xs;
 }
 
 // ----------------------- reference kernels (scalar) -----------------
-// Column-major, in place, templated on T: the unblocked LAPACK algorithms the
-// vectorized kernels execute V lanes at a time, so a correct kernel matches
-// them to working precision.
+// Column-major, in place: the unblocked LAPACK algorithms the vectorized
+// kernels execute V lanes at a time, so a correct kernel matches them to
+// working precision. Matrix operands are views; the vector operands of ?larfg
+// stay pointers, since a reflector is a contiguous column segment and not a
+// matrix (which is also why these references are column-major only -- the
+// views they are handed must have unit row stride, as their col() asserts).
 
 // dlarfg: reflector from (alpha, x[0..m-2]); alpha := beta on exit.
 template <class T> void ref_larfg(int m, T *alpha, T *x, T *tau)
@@ -112,51 +135,55 @@ template <class T> void ref_larfg(int m, T *alpha, T *x, T *tau)
 }
 
 // dgeqr2: unblocked Householder QR, (H, tau) in the LAPACK convention.
-template <class T> void ref_geqr2(int m, int n, T *A, int lda, T *tau)
+template <class T> void ref_geqr2(MatrixView<T> A, T *tau)
 {
-    int k = std::min(m, n);
+    const int m = A.rows, n = A.cols, k = std::min(m, n);
     for (int kk = 0; kk < k; ++kk) {
-        ref_larfg(m - kk, &A[kk + kk * lda], &A[(kk + 1) + kk * lda], &tau[kk]);
+        // The reflector runs down column kk from the diagonal; A.col() gives
+        // the contiguous column, so the tail below the diagonal is addressable
+        // even when it is empty (kk + 1 == m on the last row).
+        ref_larfg(m - kk, &A(kk, kk), A.col(kk) + kk + 1, &tau[kk]);
         for (int j = kk + 1; j < n; ++j) {
-            T w = A[kk + j * lda];
+            T w = A(kk, j);
             for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * A[i + j * lda];
-            A[kk + j * lda] -= tau[kk] * w;
+                w += A(i, kk) * A(i, j);
+            A(kk, j) -= tau[kk] * w;
             for (int i = kk + 1; i < m; ++i)
-                A[i + j * lda] -= tau[kk] * A[i + kk * lda] * w;
+                A(i, j) -= tau[kk] * A(i, kk) * w;
         }
     }
 }
 
-// dorm2r, side='L': B := Q^T B (trans 'T') or Q B ('N') from (H, tau).
-template <class T>
-void ref_orm2r(char trans, int m, int nrhs, int k, const T *A, int lda, const T *tau,
-               T *B, int ldb)
+// dorm2r, side='L': B := Q^T B (trans 'T') or Q B ('N') from (H, tau), with
+// k reflectors read from A (m x k or wider) and applied to B (m x nrhs).
+template <class T, class Av>
+void ref_orm2r(char trans, int k, Av A, const T *tau, MatrixView<T> B)
 {
+    const int m = B.rows, nrhs = B.cols;
     bool fwd = (trans == 'T');
     for (int s = 0; s < k; ++s) {
         int kk = fwd ? s : k - 1 - s;
         for (int j = 0; j < nrhs; ++j) {
-            T w = B[kk + j * ldb];
+            T w = B(kk, j);
             for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * B[i + j * ldb];
-            B[kk + j * ldb] -= tau[kk] * w;
+                w += A(i, kk) * B(i, j);
+            B(kk, j) -= tau[kk] * w;
             for (int i = kk + 1; i < m; ++i)
-                B[i + j * ldb] -= tau[kk] * A[i + kk * lda] * w;
+                B(i, j) -= tau[kk] * A(i, kk) * w;
         }
     }
 }
 
 // Back substitution R X = B with R the upper triangle of an n x n array.
-template <class T>
-void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
+template <class T, class Rv> void ref_trsm_upper(Rv R, MatrixView<T> B)
 {
+    const int n = B.rows, nrhs = B.cols;
     for (int j = 0; j < nrhs; ++j)
         for (int i = n - 1; i >= 0; --i) {
-            T s = B[i + j * ldb];
+            T s = B(i, j);
             for (int l = i + 1; l < n; ++l)
-                s -= R[i + l * lda] * B[l + j * ldb];
-            B[i + j * ldb] = s / R[i + i * lda];
+                s -= R(i, l) * B(l, j);
+            B(i, j) = s / R(i, i);
         }
 }
 
@@ -209,14 +236,15 @@ template <class T> std::vector<T *> batch_ptrs(T *base, int nm, size_t stride)
     return p;
 }
 
-// Random m x n matrix (column-major) with the leading diagonal boosted by
-// `boost`, which tames the conditioning of the square/tall QR and solve tests.
-template <class T> void gen_boosted(T *A, int m, int n, T boost = T(2))
+// Random m x n matrix with the leading diagonal boosted by `boost`, which
+// tames the conditioning of the square/tall QR and solve tests.
+template <class T> void gen_boosted(MatrixView<T> A, T boost = T(2))
 {
-    for (size_t e = 0; e < (size_t)m * n; ++e)
-        A[e] = frand<T>();
-    for (int i = 0; i < std::min(m, n); ++i)
-        A[i + (size_t)i * m] += boost;
+    for (int j = 0; j < A.cols; ++j)
+        for (int i = 0; i < A.rows; ++i)
+            A(i, j) = frand<T>();
+    for (int d = 0; d < std::min(A.rows, A.cols); ++d)
+        A(d, d) += boost;
 }
 
 // Symmetric positive-definite n x n matrix (column-major): A = M^T M + n*I, a
@@ -231,31 +259,33 @@ template <class T> void gen_boosted(T *A, int m, int n, T boost = T(2))
 // through its transpose, comparing A(j,i) with A(i,j), so a sub-ULP asymmetry
 // there reads as the kernel having written the wrong triangle. The trailing
 // mirror pins A(j,i) == A(i,j) exactly, on every compiler and FP model.
-template <class T> void gen_spd(T *A, int n, double cond = 0.0)
+template <class T> void gen_spd(MatrixView<T> A, double cond = 0.0)
 {
-    std::vector<T> M((size_t)n * n);
-    for (auto &x : M)
+    const int n = A.rows;
+    std::vector<T> Ms((size_t)n * n);
+    const auto M = mat_view(Ms.data(), n, n);
+    for (auto &x : Ms)
         x = frand<T>();
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             T s = 0;
             for (int l = 0; l < n; ++l)
-                s += M[l + (size_t)i * n] * M[l + (size_t)j * n];
-            A[i + (size_t)j * n] = s + (i == j ? T(n) : T(0));
+                s += M(l, i) * M(l, j);
+            A(i, j) = s + (i == j ? T(n) : T(0));
         }
     if (cond > 0.0)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 double si = std::pow(10.0, -cond * (n > 1 ? (double)i / (n - 1) : 0.0));
                 double sj = std::pow(10.0, -cond * (n > 1 ? (double)j / (n - 1) : 0.0));
-                A[i + (size_t)j * n] *= (T)(si * sj);
+                A(i, j) *= (T)(si * sj);
             }
     // Mirror the lower triangle onto the upper so A(j,i) == A(i,j) bit-for-bit
     // (the congruence above scales A(i,j) and A(j,i) by the same si*sj, so it
     // preserves whatever symmetry M^T M produced; enforce it exactly here).
     for (int j = 0; j < n; ++j)
         for (int i = j + 1; i < n; ++i)
-            A[j + (size_t)i * n] = A[i + (size_t)j * n];
+            A(j, i) = A(i, j);
 }
 
 // Symmetric *indefinite* n x n matrix (column-major) with a known-good
@@ -266,11 +296,11 @@ template <class T> void gen_spd(T *A, int n, double cond = 0.0)
 // leading principal minor is prod(d_1..d_k) != 0, so the unpivoted
 // factorization exists and is exactly this (L, D). As in gen_spd, the upper
 // triangle is mirrored from the lower so A is symmetric to the bit.
-template <class T> void gen_sym_ldlt(T *A, int n)
+template <class T> void gen_sym_ldlt(MatrixView<T> A)
 {
+    const int n = A.rows;
     std::vector<T> Ls((size_t)n * n, T(0)), d(n);
     const auto L = mat_view(Ls.data(), n, n);
-    const auto Av = mat_view(A, n, n);
     for (int j = 0; j < n; ++j) {
         L(j, j) = T(1);
         for (int i = j + 1; i < n; ++i)
@@ -283,11 +313,11 @@ template <class T> void gen_sym_ldlt(T *A, int n)
             T s = 0;
             for (int l = 0; l <= j; ++l)
                 s += L(i, l) * d[l] * L(j, l);
-            Av(i, j) = s;
+            A(i, j) = s;
         }
     for (int j = 0; j < n; ++j)
         for (int i = j + 1; i < n; ++i)
-            Av(j, i) = Av(i, j);
+            A(j, i) = A(i, j);
 }
 
 // Element (i,j) of an n x n unpivoted LDL^T factor as stored by ?sytrfnp:
@@ -306,56 +336,56 @@ template <class At> double ldlt_reconstruct(const At &at, int i, int j, bool upp
     return s;
 }
 
-// Fill one order-s triangular matrix (leading dim s) in the given layout:
-// random in the referenced triangle, the diagonal boosted away from zero for
-// conditioning, the other (never-referenced) triangle zeroed. Shared by the
-// ?trsm suites; A is square, so lda = s for both layouts.
-template <class T> void gen_tri(T *A, int s, bool upper, bool rowmajor = false)
+// Fill one square triangular matrix: random in the referenced triangle, the
+// diagonal boosted away from zero for conditioning, the other (never
+// referenced) triangle zeroed. Shared by the ?trsm suites; the layout rides on
+// the view's strides, so one body serves column-major and row-major.
+template <class T> void gen_tri(MatrixView<T> A, bool upper)
 {
-    auto at = [&](int i, int j) -> T & {
-        return A[rowmajor ? (size_t)i * s + j : i + (size_t)j * s];
-    };
+    const int s = A.rows;
     for (int i = 0; i < s; ++i)
         for (int j = 0; j < s; ++j) {
             bool ref = upper ? (i <= j) : (i >= j);
-            at(i, j) = ref ? frand<T>() : T(0);
+            A(i, j) = ref ? frand<T>() : T(0);
         }
     for (int d = 0; d < s; ++d)
-        at(d, d) = (at(d, d) >= 0 ? T(1) : T(-1)) * (T(2) + std::abs(frand<T>()));
+        A(d, d) = (A(d, d) >= 0 ? T(1) : T(-1)) * (T(2) + std::abs(frand<T>()));
 }
 
 // Apply a triangular operator to a general matrix -- the "forward" direction of
 // a ?trsm, for checking a solve's defining residual ||op(A) X - alpha B||.
-// R (m x n, column-major, ld m) := op(A) X (side 'L') or X op(A) (side 'R'),
-// with A the order-s (s = m for 'L', n for 'R') triangular factor: uplo 'U'/'L',
-// op(A) = A ('N') or A^T ('T'/'C'), unit ('U') or non-unit ('N') diagonal.
-template <class T>
-void tri_apply(char side, char uplo, char transa, char diag, int m, int n, const T *A,
-               int lda, const T *X, int ldx, T *R)
+// R (m x n) := op(A) X (side 'L') or X op(A) (side 'R'), with A the order-s
+// (s = m for 'L', n for 'R') triangular factor: uplo 'U'/'L', op(A) = A ('N')
+// or A^T ('T'/'C'), unit ('U') or non-unit ('N') diagonal. The shapes come
+// from R and A; each operand carries its own layout in its view.
+template <class Av, class Xv, class Rv>
+void tri_apply(char side, char uplo, char transa, char diag, Av A, Xv X, Rv R)
 {
+    using T = elem_t<Rv>;
     const bool left = (side == 'L' || side == 'l');
     const bool upper = (uplo == 'U' || uplo == 'u');
     const bool tran = (transa == 'T' || transa == 't' || transa == 'C' || transa == 'c');
     const bool unit = (diag == 'U' || diag == 'u');
-    const int s = left ? m : n;
+    const int m = R.rows, n = R.cols, s = left ? m : n;
+    assert(A.rows == s && A.cols == s && X.rows == m && X.cols == n);
     // op(A)(i,k): unit or A(i,i) on the diagonal; off-diagonal is the referenced
     // entry of A (op = A) or of its transpose (op = A^T), else zero.
     auto Mop = [&](int i, int k) -> T {
-        if (i == k) return unit ? T(1) : A[i + (size_t)i * lda];
+        if (i == k) return unit ? T(1) : A(i, i);
         const bool ref = tran ? (upper ? i > k : i < k) : (upper ? k > i : k < i);
         if (!ref) return T(0);
-        return tran ? A[k + (size_t)i * lda] : A[i + (size_t)k * lda];
+        return tran ? A(k, i) : A(i, k);
     };
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i) {
             T acc = 0;
             if (left)
                 for (int k = 0; k < s; ++k)
-                    acc += Mop(i, k) * X[k + (size_t)j * ldx];
+                    acc += Mop(i, k) * X(k, j);
             else
                 for (int k = 0; k < s; ++k)
-                    acc += X[i + (size_t)k * ldx] * Mop(k, j);
-            R[i + (size_t)j * m] = acc;
+                    acc += X(i, k) * Mop(k, j);
+            R(i, j) = acc;
         }
 }
 
@@ -377,8 +407,8 @@ template <class T> class MatrixBatch {
     const T *operator[](int idx) const { return a_.data() + (size_t)idx * rows_ * cols_; }
     MatrixView<T>       view(int idx)       { return mat_view((*this)[idx], rows_, cols_); }
     ConstMatrixView<T>  view(int idx) const { return mat_view((*this)[idx], rows_, cols_); }
-    T       &operator()(int idx, int i, int j)       { return (*this)[idx][i + (size_t)j * rows_]; }
-    const T &operator()(int idx, int i, int j) const { return (*this)[idx][i + (size_t)j * rows_]; }
+    T       &operator()(int idx, int i, int j)       { return view(idx)(i, j); }
+    const T &operator()(int idx, int i, int j) const { return view(idx)(i, j); }
     // clang-format on
 
   private:
@@ -387,26 +417,43 @@ template <class T> class MatrixBatch {
 };
 
 // Compact pack/unpack (matches mkl_?gepack_compact). group g = idx/V, slot
-// v = idx%V; element (i,j) of matrix idx lives at, per layout,
-//   col-major: p[g*ldp*cols*V + (j*ldp + i)*V + v]
-//   row-major: p[g*ldp*rows*V + (i*ldp + j)*V + v]
+// v = idx%V; element (i,j) of every matrix in a group is one V-wide pack, and
+// the packs of a group sit at the leading dimension ldp in the given layout.
 // Padded slots (idx >= nm) carry the identity.
+//
+// Both sides are addressed through the project's views: the dense side through
+// MatrixBatch (hence MatrixView), the interleaved side through the kernels'
+// own BatchView, whose element is the pack and whose strides are in packs --
+// `P(i, j)[v]` is element (i,j) of slot v. The layout is the view's strides,
+// so one body serves column-major and row-major, and the group offset is the
+// library's group_stride. BatchView is templated on the interleave width, so
+// for_vlen turns the runtime V into the compile-time one (2, 4, 8 or 16 --
+// the widths the C API accepts).
+//
+// The library and its tests are one internal codebase and share these views on
+// purpose; what makes the suites independent of the kernels is that they
+// compute the *answers* independently (scalar LAPACK references, dense
+// LAPACK/MKL cross-checks), not that they re-derive the addressing.
 template <class T>
 void pack_compact(const MatrixBatch<T> &Mk, T *p, int ldp, int V, bool rowmajor = false)
 {
     const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
     const int ng = (nm + V - 1) / V;
-    const size_t gstride = (size_t)ldp * (rowmajor ? m : n) * V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    p[g * gstride + off * V + v] =
-                        (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
-                }
+    const std::size_t gstride = group_stride(rowmajor, ldp, m, n, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P = make_view<T, VV>(p + (std::size_t)g * gstride, rowmajor, ldp);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < m; ++i)
+                        P(i, j)[v] = (idx < nm) ? Mk(idx, i, j) : (i == j ? T(1) : T(0));
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 template <class T>
@@ -414,17 +461,23 @@ void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V, bool rowmajo
 {
     const int m = Mk.rows(), n = Mk.cols(), nm = Mk.count();
     const int ng = (nm + V - 1) / V;
-    const size_t gstride = (size_t)ldp * (rowmajor ? m : n) * V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) {
-                    size_t off = rowmajor ? ((size_t)i * ldp + j) : ((size_t)j * ldp + i);
-                    Mk(idx, i, j) = p[g * gstride + off * V + v];
-                }
+    const std::size_t gstride = group_stride(rowmajor, ldp, m, n, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P =
+                make_const_view<T, VV>(p + (std::size_t)g * gstride, rowmajor, ldp);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                if (idx >= nm) continue;
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < m; ++i)
+                        Mk(idx, i, j) = P(i, j)[v];
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 // A tau batch (k scalars per matrix) is packed as k x 1 matrices; padded slots
@@ -432,25 +485,41 @@ void unpack_compact(MatrixBatch<T> &Mk, const T *p, int ldp, int V, bool rowmajo
 template <class T> void pack_tau(const MatrixBatch<T> &tau, T *tp, int V)
 {
     const int k = tau.rows(), nm = tau.count(), ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            for (int kk = 0; kk < k; ++kk)
-                tp[(size_t)g * k * V + (size_t)kk * V + v] =
-                    (idx < nm) ? tau[idx][kk] : T(0);
+    const std::size_t gstride = group_stride(false, k, k, 1, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P = make_view<T, VV>(tp + (std::size_t)g * gstride, false, k);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                for (int kk = 0; kk < k; ++kk)
+                    P(kk, 0)[v] = (idx < nm) ? tau[idx][kk] : T(0);
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 template <class T> void unpack_tau(MatrixBatch<T> &tau, const T *tp, int V)
 {
     const int k = tau.rows(), nm = tau.count(), ng = (nm + V - 1) / V;
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int kk = 0; kk < k; ++kk)
-                tau[idx][kk] = tp[(size_t)g * k * V + (size_t)kk * V + v];
+    const std::size_t gstride = group_stride(false, k, k, 1, V);
+    const bool width_ok = for_vlen(V, [&](auto vw) {
+        constexpr int VV = decltype(vw)::value;
+        for (int g = 0; g < ng; ++g) {
+            const auto P =
+                make_const_view<T, VV>(tp + (std::size_t)g * gstride, false, k);
+            for (int v = 0; v < VV; ++v) {
+                const int idx = g * VV + v;
+                if (idx >= nm) continue;
+                for (int kk = 0; kk < k; ++kk)
+                    tau[idx][kk] = P(kk, 0)[v];
+            }
         }
+    });
+    assert(width_ok && "interleave width must be 2, 4, 8 or 16");
+    (void)width_ok;
 }
 
 } // namespace cqr::test

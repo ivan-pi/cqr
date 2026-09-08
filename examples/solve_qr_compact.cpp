@@ -30,7 +30,8 @@
 #include <mkl_compact.h>
 
 #include "cqr_mkl_ext.h"
-#include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_mkl_alloc.h"     /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "cqr_matrix_view.hpp" /* MatrixView, shared with the tests and benchmarks */
 
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +42,10 @@
 #include <algorithm>
 
 namespace {
+
+using cqr::detail::ConstMatrixView;
+using cqr::detail::mat_view;
+using cqr::detail::MatrixView;
 
 /* Deterministic uniform reals in [-1, 1), seeded once for reproducibility. */
 std::mt19937_64 rng(42);
@@ -92,6 +97,13 @@ class Matrix {
     double &operator()(int i, int j)       { return a_[i + j * rows_]; }
     double  operator()(int i, int j) const { return a_[i + j * rows_]; }
     // clang-format on
+
+    /* The same storage as a MatrixView (src/cqr_matrix_view.hpp), for handing
+     * to anything that takes the library's dense view -- the strided element
+     * access the test suites and benchmarks address their matrices through.
+     * The view owns nothing: it stays valid only while this Matrix does. */
+    MatrixView<double> view() { return mat_view(a_.data(), rows_, cols_); }
+    ConstMatrixView<double> view() const { return mat_view(a_.data(), rows_, cols_); }
 
   private:
     int rows_, cols_;
