@@ -18,8 +18,8 @@
  * format stores element (i,j) of all V contiguously, so it lifts verbatim with
  * double -> V-wide vector, one lane per matrix (no data-dependent branch). The
  * tuned side='L', column-major path is templated on the RHS block width and on
- * uplo/trans/diag; the per-kernel notes and cqr_mkl_dtrsm_compact_design.md have
- * the details.
+ * uplo/trans/diag; the other side/layout combinations go through one strided
+ * kernel over BatchViews (docs/cqr_mkl_dtrsm_compact_design.md has the details).
  *
  * Compact storage (matches mkl_?gepack_compact); group g = idx/V, slot v = idx%V,
  * A the order-s (s = m left / n right) triangular batch, B the m x n batch:
@@ -33,7 +33,7 @@
 #ifndef CQR_TRSM_COMPACT_HPP
 #define CQR_TRSM_COMPACT_HPP
 
-#include "cqr_compact_common.hpp" /* pack<T,V>, BatchView, make_view, make_const_view */
+#include "cqr_compact_common.hpp"
 
 #include <cstddef>
 #include <cassert>
@@ -174,17 +174,14 @@ inline void trsm_left_dot(bool upper, bool tran, bool unit, Int m, Int n, T alph
  * two BatchViews). side='L' sweeps a row of X at a time, side='R' a column. */
 template <typename T, int V, typename Int = int>
 void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int m, Int n,
-                                T alpha,
-                                BatchView<const typename pack<T, V>::type, Int> A,
-                                BatchView<typename pack<T, V>::type, Int> B)
+                                T alpha, ConstBatchView<T, V, Int> A,
+                                BatchView<T, V, Int> B)
 {
     using VT = typename pack<T, V>::type;
     static_assert(std::is_floating_point<T>::value,
                   "trsm_compact is defined for real float/double");
 
-    /* Strides must be non-degenerate so distinct (i,j) map to distinct pack
-     * elements -- an invariant the driver upholds for every side/layout. */
-    assert(A.special && A.panel && B.special && B.panel);
+    assert(A.si && A.sj && B.si && B.sj);
 
     VT va;
     broadcast<T, V>(va, alpha);
@@ -232,9 +229,8 @@ void trsm_compact_group_strided(bool left, bool upper, bool tran, bool unit, Int
  * side='L' column-major routes to the tuned trsm_left_dot; the other three
  * side/layout combinations use the strided kernel. */
 template <typename T, int V, typename Int = int>
-void trsm_compact_general(bool left, bool upper, bool rowmajor, bool tran, bool unit,
-                          Int m, Int n, T alpha, const T *ap, Int ldap, T *bp, Int ldbp,
-                          Int nm)
+void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, Int m,
+                  Int n, T alpha, const T *ap, Int ldap, T *bp, Int ldbp, Int nm)
 {
     assert(nm >= 1 && m >= 0 && n >= 0);
 

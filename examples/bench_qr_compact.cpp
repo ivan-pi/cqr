@@ -42,10 +42,9 @@
 #include <mkl.h>
 #include <mkl_compact.h>
 
-#include "cqr_mkl_ext.h"
 #include "cqr_mkl_alloc.h" /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
+#include "bench_util.hpp"  /* check, best_time, omp_threads, format helpers */
 
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -54,28 +53,9 @@
 #include <vector>
 #include <algorithm>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 namespace {
 
-using clk = std::chrono::steady_clock;
-
-/* Report and abort on the spot if cond is false. */
-void check(bool cond, const char *what)
-{
-    if (!cond) {
-        std::printf("FAILED: %s\n", what);
-        std::exit(1);
-    }
-}
-
-/* Shared compact-format helpers (see cqr_mkl_ext.h): the interleave width V for
- * the active pack format -- MKL packs V = (SIMD register bytes) / sizeof(double),
- * used for double here -- and a human-readable name of the SIMD ISA behind it. */
-using cqr::detail::compact_format_name;
-using cqr::detail::vlen_for_format;
+using namespace cqr::bench;
 
 /* A pool of `nmat` dense column-major square matrices of order n, each stored
  * back to back in `a` (n*n per matrix), with the matching right-hand sides in
@@ -230,25 +210,6 @@ double run_unbatched(int n, int nmat, double *a, double *b)
     return maxerr;
 }
 
-/* Best (minimum) wall time over `reps` timed passes, in seconds. `reset` runs
- * untimed before every pass (e.g. to restore input the timed work destroys);
- * only `timed` is clocked. */
-template <typename Reset, typename Timed>
-double best_time(int reps, Reset &&reset, Timed &&timed)
-{
-    reset();
-    timed(); /* warm-up (untimed) */
-    double best = std::numeric_limits<double>::infinity();
-    for (int r = 0; r < reps; ++r) {
-        reset(); /* not clocked */
-        auto t0 = clk::now();
-        timed();
-        const std::chrono::duration<double> elapsed = clk::now() - t0; /* seconds */
-        best = std::min(best, elapsed.count());
-    }
-    return best;
-}
-
 } /* anonymous namespace */
 
 int main(int argc, char **argv)
@@ -268,12 +229,7 @@ int main(int argc, char **argv)
     /* Turn LAPACKE NaN-checking off so the per-matrix path is timed clean. */
     LAPACKE_set_nancheck(0);
 
-#ifdef _OPENMP
-    int nthreads = 1;
-#pragma omp parallel
-#pragma omp single
-    nthreads = omp_get_num_threads();
-#endif
+    const int nthreads = omp_threads();
 
     const int sizes[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int nsizes = (int)(sizeof(sizes) / sizeof(sizes[0]));
@@ -287,13 +243,8 @@ int main(int argc, char **argv)
                 "cqr_mkl_dtrsm_compact\n");
     std::printf("  unbatched  LAPACKE_dgeqrf         -> LAPACKE_dormqr          -> "
                 "cblas_dtrsm\n");
-#ifdef _OPENMP
     std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  OpenMP threads=%d\n\n",
                 nmat, reps, nrhs, V, compact_format_name(fmt), nthreads);
-#else
-    std::printf("matrices=%d  reps=%d  rhs=%d  simdlen=%d (%s)  Sequential\n\n", nmat,
-                reps, nrhs, V, compact_format_name(fmt));
-#endif
     /* Throughput as matrices/second (scientific) for each path, then two speedups:
      * cqr-batch over the per-matrix baseline (the headline batched win), and
      * cqr-batch over MKL-batch (the two batched paths differ in the geqrf and the

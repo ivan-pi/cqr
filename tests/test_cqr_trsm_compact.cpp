@@ -24,8 +24,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "cqr_compact.h"         // dtrsm_compact / strsm_compact (C entry points)
-#include "test_compact_util.hpp" // rng/frand, max_abs_diff, norm1, MatrixBatch, pack/unpack
+#include "test_compact_util.hpp" // trsm_c, frand, gen_tri, tri_apply, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -93,22 +92,8 @@ static void ref_trsm(char side, char uplo, char transa, char diag, int m, int n,
     }
 }
 
-// rng/frand, max_abs_diff, norm1, MatrixBatch and pack_compact/unpack_compact
-// live in test_compact_util.hpp (shared across the compact test suites). Padded
-// pack slots carry the identity -- for a triangular A that is a unit diagonal,
-// so the kernel's divisions never hit a zero pivot in the padding.
-
-// precision-overloaded shim: pick d/s by the pointer type
-static int trsm_c(char lay, char si, char up, char tr, char di, int m, int n, double al,
-                  const double *a, int lda, double *b, int ldb, int V, int nm)
-{
-    return dtrsm_compact(lay, si, up, tr, di, m, n, al, a, lda, b, ldb, V, nm);
-}
-static int trsm_c(char lay, char si, char up, char tr, char di, int m, int n, float al,
-                  const float *a, int lda, float *b, int ldb, int V, int nm)
-{
-    return strsm_compact(lay, si, up, tr, di, m, n, al, a, lda, b, ldb, V, nm);
-}
+// Padded pack slots carry the identity -- for a triangular A that is a unit
+// diagonal, so the kernel's divisions never hit a zero pivot in the padding.
 
 // --------------------------- one numerical case ---------------------
 // Column-major; A is the order-s triangular factor, B is m x n.

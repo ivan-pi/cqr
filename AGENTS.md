@@ -29,13 +29,26 @@ cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
 
 Correctness is independent of these flags; only throughput changes.
 
+## Tree
+
+```
+include/   public headers: cqr_compact.h (portable C API), cqr_mkl_ext.h
+           (MKL-style API), cqr_mkl_alloc.h (optional RAII mkl_malloc helpers)
+src/       the templated kernels (cqr_*_compact.hpp, one per routine, on the
+           shared cqr_compact_common.hpp) and the two adapter sources that
+           implement the public headers: cqr_compact.cpp, cqr_mkl_ext.cpp
+tests/     portable (no BLAS) and MKL-backed suites, on test_compact_util.hpp
+examples/  the worked solve and the benchmarks (BENCHMARKS.md), on bench_util.hpp
+docs/      one design document per routine
+```
+
 ## Code style
 
 Layout follows C++ Core Guidelines **NL.17** (K&R-derived / "Stroustrup"),
 enforced by `.clang-format`. Format changed C++ before committing:
 
 ```sh
-clang-format -i src/*.h src/*.hpp src/*.cpp examples/*.cpp
+clang-format -i include/*.h src/*.hpp src/*.cpp tests/*.hpp tests/*.cpp examples/*.hpp examples/*.cpp
 ```
 
 Run it before committing so changes land already formatted. Hand-aligned tables
@@ -49,7 +62,15 @@ and compact one-liners that clang-format would expand are fenced with
   A partial final group is padded with identities, so kernels run it unmasked.
 - **SIMD via GNU vector types.** The kernels use
   `__attribute__((vector_size))` vectors, which the compiler lowers to the target
-  ISA -- one portable source for every width.
+  ISA -- one portable source for every width. The pack type carries a relaxed
+  `aligned(alignof(T))`; always name it as `typename pack<T,V>::type` and never
+  pass it as a template *argument* (clang strips typedef alignment there and
+  emits aligned loads that fault on 16-byte-aligned buffers -- issue #34).
+- **One kernel per routine.** Every kernel addresses its operands through
+  `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
+  `side='R'` are the same code with different strides. Register blocking is
+  written as a `JB`-templated block helper with `for (c < JB)` loops the
+  compiler unrolls, not as hand-expanded `w0..w3` copies.
 - **Argument checking.** The MKL-style API (`cqr_mkl_*`) skips validation like
   MKL's own compact routines (`info` is a scalar, `0` on success). The portable C
   API (`cqr_compact.h`) validates LAPACK-style, returning `-j` for a bad j-th

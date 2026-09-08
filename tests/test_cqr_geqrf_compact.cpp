@@ -22,100 +22,9 @@
 #include <limits>
 #include <algorithm>
 
-#include "cqr_compact.h" // dgeqrf_compact + dormqr_compact (all four C entry points)
-#include "test_compact_util.hpp" // MatrixBatch, pack/unpack, frand, max_abs_diff
+#include "test_compact_util.hpp" // C API shims, scalar references, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
-
-// ----------------------- reference kernels (scalar) -----------------
-
-template <class T> static void ref_larfg(int m, T *alpha, T *x, T *tau)
-{
-    T xnorm = 0;
-    for (int i = 0; i < m - 1; ++i)
-        xnorm = std::hypot(xnorm, x[i]);
-    if (xnorm == T(0)) {
-        *tau = 0;
-        return;
-    }
-    T beta = -std::copysign(std::hypot(*alpha, xnorm), *alpha);
-    *tau = (beta - *alpha) / beta;
-    T scal = T(1) / (*alpha - beta);
-    for (int i = 0; i < m - 1; ++i)
-        x[i] *= scal;
-    *alpha = beta;
-}
-
-template <class T> static void ref_geqr2(int m, int n, T *A, int lda, T *tau)
-{
-    int k = std::min(m, n);
-    for (int kk = 0; kk < k; ++kk) {
-        ref_larfg(m - kk, &A[kk + kk * lda], &A[(kk + 1) + kk * lda], &tau[kk]);
-        for (int j = kk + 1; j < n; ++j) {
-            T w = A[kk + j * lda];
-            for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * A[i + j * lda];
-            A[kk + j * lda] -= tau[kk] * w;
-            for (int i = kk + 1; i < m; ++i)
-                A[i + j * lda] -= tau[kk] * A[i + kk * lda] * w;
-        }
-    }
-}
-
-// Apply Q (side='L', trans) to a dense m x nrhs B in place (scalar dorm2r),
-// for the reconstruction check (Q * R) and the solve check.
-template <class T>
-static void ref_orm2r(char trans, int m, int nrhs, int k, const T *A, int lda,
-                      const T *tau, T *B, int ldb)
-{
-    bool fwd = (trans == 'T');
-    for (int s = 0; s < k; ++s) {
-        int kk = fwd ? s : k - 1 - s;
-        for (int j = 0; j < nrhs; ++j) {
-            T w = B[kk + j * ldb];
-            for (int i = kk + 1; i < m; ++i)
-                w += A[i + kk * lda] * B[i + j * ldb];
-            B[kk + j * ldb] -= tau[kk] * w;
-            for (int i = kk + 1; i < m; ++i)
-                B[i + j * ldb] -= tau[kk] * A[i + kk * lda] * w;
-        }
-    }
-}
-
-template <class T>
-static void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
-{
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = n - 1; i >= 0; --i) {
-            T s = B[i + j * ldb];
-            for (int l = i + 1; l < n; ++l)
-                s -= R[i + l * lda] * B[l + j * ldb];
-            B[i + j * ldb] = s / R[i + i * lda];
-        }
-}
-
-// MatrixBatch, pack_compact/unpack_compact, frand and max_abs_diff live in
-// test_compact_util.hpp (shared across the compact test suites).
-
-// precision-overloaded shims: pick d/s by the pointer type
-static int geqrf_c(char l, int m, int n, double *a, int ld, double *t, int V, int nm)
-{
-    return dgeqrf_compact(l, m, n, a, ld, t, V, nm);
-}
-static int geqrf_c(char l, int m, int n, float *a, int ld, float *t, int V, int nm)
-{
-    return sgeqrf_compact(l, m, n, a, ld, t, V, nm);
-}
-static void ormqr_c(char tr, int m, int nr, int k, const double *a, int lda,
-                    const double *t, double *b, int ldb, int V, int nm)
-{
-    dormqr_compact(tr, m, nr, k, a, lda, t, b, ldb, V, nm);
-}
-static void ormqr_c(char tr, int m, int nr, int k, const float *a, int lda,
-                    const float *t, float *b, int ldb, int V, int nm)
-{
-    sormqr_compact(tr, m, nr, k, a, lda, t, b, ldb, V, nm);
-}
 
 // --------------------------- one test case --------------------------
 
@@ -127,13 +36,9 @@ template <class T, int V> static int run_case(int nm, int m, int n)
     // random A batch, diagonal-boosted so the columns stay well conditioned
     MatrixBatch<T> A(nm, m, n), Aref(nm, m, n), tau_ref(nm, k, 1);
     for (int idx = 0; idx < nm; ++idx) {
-        T *a = A[idx];
-        for (size_t e = 0; e < (size_t)m * n; ++e)
-            a[e] = frand<T>();
-        for (int i = 0; i < k; ++i)
-            A(idx, i, i) += T(2);
-        std::copy(a, a + (size_t)m * n, Aref[idx]);  // Aref <- A (after boost)
-        ref_geqr2(m, n, Aref[idx], m, tau_ref[idx]); // reference (H, tau)
+        gen_boosted(A[idx], m, n);
+        std::copy(A[idx], A[idx] + (size_t)m * n, Aref[idx]); // Aref <- A
+        ref_geqr2(m, n, Aref[idx], m, tau_ref[idx]);          // reference (H, tau)
     }
 
     // pack A, factor with the routine under test, unpack (H, tau)
@@ -145,13 +50,7 @@ template <class T, int V> static int run_case(int nm, int m, int n)
 
     MatrixBatch<T> Aout(nm, m, n), tau_out(nm, k, 1);
     unpack_compact(Aout, ap.data(), m, V);
-    for (int g = 0; g < ng; ++g)
-        for (int v = 0; v < V; ++v) {
-            int idx = g * V + v;
-            if (idx >= nm) continue;
-            for (int kk = 0; kk < k; ++kk)
-                tau_out(idx, kk, 0) = tp[(size_t)g * k * V + (size_t)kk * V + v];
-        }
+    unpack_tau(tau_out, tp.data(), V);
 
     // check 1: (H, tau) match the scalar reference elementwise
     double e_h = 0, e_t = 0;
@@ -176,20 +75,11 @@ template <class T, int V> static int run_case(int nm, int m, int n)
     double e_solve = -1;
     if (m == n) {
         const int nrhs = 3;
-        std::vector<T> X((size_t)n * nrhs);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i)
-                X[i + (size_t)j * n] = T(j + 1);
+        const std::vector<T> X = known_solution<T>(n, nrhs);
         MatrixBatch<T> B(nm, n, nrhs);
         std::vector<T> bp((size_t)ng * n * nrhs * V);
         for (int idx = 0; idx < nm; ++idx)
-            for (int j = 0; j < nrhs; ++j)
-                for (int i = 0; i < n; ++i) {
-                    T s = 0;
-                    for (int l = 0; l < n; ++l)
-                        s += A(idx, i, l) * X[l + (size_t)j * n];
-                    B(idx, i, j) = s;
-                }
+            matmul(n, nrhs, n, A[idx], n, X.data(), n, B[idx], n); /* B = A X */
         pack_compact(B, bp.data(), n, V);
         ormqr_c('T', n, nrhs, k, ap.data(), n, tp.data(), bp.data(), n, V, nm);
         MatrixBatch<T> Bo(nm, n, nrhs);

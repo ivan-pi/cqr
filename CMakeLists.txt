@@ -1,5 +1,3 @@
-# Assisted-by: Claude:claude-opus-4.8
-
 cmake_minimum_required(VERSION 3.18)
 
 project(cqr
@@ -9,97 +7,57 @@ project(cqr
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# ---------------------------------------------------------------------------
-# Options
-# ---------------------------------------------------------------------------
-option(CQR_WITH_MKL        "Build the Intel MKL compact extension + MKL tests" ON)
-option(CQR_BUILD_TESTS     "Build tests and register them with CTest"          ON)
+option(CQR_WITH_MKL    "Build the Intel MKL compact extension, examples and MKL tests" ON)
+option(CQR_BUILD_TESTS "Build tests and register them with CTest"                     ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-# C++17 is required per-target via target_compile_features below; no GNU
-# extensions are needed (the kernel's vector_size attribute compiles under
-# strict -std=c++17). Optimization flags are the caller's to choose: for a
+# C++17, no GNU extensions (the kernels' vector_size attribute compiles under
+# strict -std=c++17). Optimization flags are the caller's to choose; for a
 # performance build pass them through CMAKE_CXX_FLAGS, e.g.
 #   cmake -S . -B build -DCMAKE_CXX_FLAGS="-O3 -march=native"
 # so the SIMD kernels target the host's widest vectors.
 
 # ---------------------------------------------------------------------------
-# Core kernel library (portable; no BLAS dependency)
+# Portable kernel library: the C API of include/cqr_compact.h (no BLAS)
 # ---------------------------------------------------------------------------
-add_library(cqr_compact
-  src/cqr_ormqr_compact_dispatch.cpp
-  src/cqr_geqrf_compact_dispatch.cpp
-  src/cqr_potrf_compact_dispatch.cpp
-  src/cqr_trsm_compact_dispatch.cpp)
-target_include_directories(cqr_compact PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_library(cqr_compact src/cqr_compact.cpp)
+target_include_directories(cqr_compact
+  PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(cqr_compact PUBLIC cxx_std_17)
 add_library(cqr::compact ALIAS cqr_compact)
 
 # ---------------------------------------------------------------------------
-# Intel MKL compact extension: cqr_mkl_?geqrf_compact / cqr_mkl_?ormqr_compact /
-# cqr_mkl_?potrf_compact / cqr_mkl_?trsm_compact (MKL-style drop-ins; see the
-# per-routine design docs)
+# Intel MKL compact extension: cqr_mkl_?{geqrf,ormqr,potrf,trsm}_compact, the
+# MKL-style drop-ins of include/cqr_mkl_ext.h (see docs/*_design.md)
 # ---------------------------------------------------------------------------
 if(CQR_WITH_MKL)
   find_package(MKLCompact REQUIRED)
 
-  add_library(cqr_mkl_ext
-    src/cqr_mkl_ormqr.cpp
-    src/cqr_mkl_geqrf.cpp
-    src/cqr_mkl_potrf.cpp
-    src/cqr_mkl_trsm.cpp)
+  add_library(cqr_mkl_ext src/cqr_mkl_ext.cpp)
   target_include_directories(cqr_mkl_ext
-    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(cqr_mkl_ext PUBLIC cxx_std_17)
-  target_link_libraries(cqr_mkl_ext
-    PUBLIC  MKL::CompactHeaders   # MKL types in the public header (no link dep)
-    PRIVATE cqr_compact)
+  # MKL types appear in the public header (no link dependency).
+  target_link_libraries(cqr_mkl_ext PUBLIC MKL::CompactHeaders)
   add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
-endif()
 
-# ---------------------------------------------------------------------------
-# Examples
-# ---------------------------------------------------------------------------
-# Worked example of the Compact-format batch QR solver
-# (mkl_dgeqrf_compact -> cqr_mkl_dormqr_compact -> mkl_dtrsm_compact),
-# cross-checked against the naive per-matrix LAPACKE_dgels. Needs Intel MKL
-# (the compact API) and this repo's cqr_mkl_ext.
-if(CQR_WITH_MKL)
-  add_executable(solve_qr_compact examples/solve_qr_compact.cpp)
-  target_link_libraries(solve_qr_compact
-    PRIVATE cqr_mkl_ext MKL::Compact)
-
-  # Throughput benchmark: compact batched vs per-matrix LAPACK QR solve, with
-  # the outer loop over the matrix pool parallelised by OpenMP when available.
-  add_executable(bench_qr_compact examples/bench_qr_compact.cpp)
-  target_link_libraries(bench_qr_compact
-    PRIVATE cqr_mkl_ext MKL::Compact)
+  # Examples: the worked batched solve and the three throughput benchmarks
+  # (examples/BENCHMARKS.md). All link MKL for the pack/unpack routines and the
+  # per-matrix LAPACK baselines; the benchmarks parallelize their outer loop
+  # with OpenMP when available.
   find_package(OpenMP QUIET)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(bench_qr_compact PRIVATE OpenMP::OpenMP_CXX)
-  endif()
-
-  # Throughput benchmark of the QR factorization itself: cqr_mkl_dgeqrf_compact
-  # vs mkl_dgeqrf_compact vs per-matrix LAPACKE_dgeqrf (see examples/BENCHMARKS.md).
-  add_executable(bench_geqrf_compact examples/bench_geqrf_compact.cpp)
-  target_link_libraries(bench_geqrf_compact
-    PRIVATE cqr_mkl_ext MKL::Compact)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(bench_geqrf_compact PRIVATE OpenMP::OpenMP_CXX)
-  endif()
-
-  # Throughput benchmark of the Cholesky factorization on SPD matrices:
-  # cqr_mkl_dpotrf_compact vs mkl_dpotrf_compact vs per-matrix LAPACKE_dpotrf
-  # (the potrf analogue of bench_geqrf_compact; see examples/BENCHMARKS.md).
-  add_executable(bench_potrf_compact examples/bench_potrf_compact.cpp)
-  target_link_libraries(bench_potrf_compact
-    PRIVATE cqr_mkl_ext MKL::Compact)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(bench_potrf_compact PRIVATE OpenMP::OpenMP_CXX)
-  endif()
+  foreach(prog solve_qr_compact bench_qr_compact bench_geqrf_compact bench_potrf_compact)
+    add_executable(${prog} examples/${prog}.cpp)
+    target_link_libraries(${prog} PRIVATE cqr_mkl_ext MKL::Compact)
+    if(OpenMP_CXX_FOUND AND prog MATCHES "^bench_")
+      target_link_libraries(${prog} PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+  endforeach()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -108,84 +66,32 @@ endif()
 if(CQR_BUILD_TESTS)
   enable_testing()
 
-  # Portable self-contained ormqr (apply-Q) test (no BLAS).
-  add_executable(test_cqr_ormqr_compact src/test_cqr_ormqr_compact.cpp)
-  target_link_libraries(test_cqr_ormqr_compact PRIVATE cqr_compact)
-  add_test(NAME portable_ormqr COMMAND test_cqr_ormqr_compact)
+  # Portable self-contained suites (no BLAS): each kernel vs a scalar reference
+  # of the same unblocked algorithm, plus the C API's LAPACK-style validation.
+  foreach(routine geqrf ormqr potrf trsm)
+    add_executable(test_cqr_${routine}_compact tests/test_cqr_${routine}_compact.cpp)
+    target_link_libraries(test_cqr_${routine}_compact PRIVATE cqr_compact)
+    add_test(NAME portable_${routine} COMMAND test_cqr_${routine}_compact)
+  endforeach()
 
-  # Portable self-contained QR factorization test (no BLAS): the compact geqrf
-  # kernel vs a scalar geqr2/larfg reference, plus C API validation.
-  add_executable(test_cqr_geqrf_compact src/test_cqr_geqrf_compact.cpp)
-  target_link_libraries(test_cqr_geqrf_compact PRIVATE cqr_compact)
-  add_test(NAME portable_geqrf COMMAND test_cqr_geqrf_compact)
-
-  # Portable self-contained Cholesky factorization test (no BLAS): the compact
-  # potrf kernel vs a scalar potf2 reference over both uplo and all layouts,
-  # plus C API validation.
-  add_executable(test_cqr_potrf_compact src/test_cqr_potrf_compact.cpp)
-  target_link_libraries(test_cqr_potrf_compact PRIVATE cqr_compact)
-  add_test(NAME portable_potrf COMMAND test_cqr_potrf_compact)
-
-  # Portable self-contained triangular-solve test (no BLAS): C API argument
-  # validation + the compact trsm kernel vs a scalar ?trsm reference.
-  add_executable(test_cqr_trsm_compact src/test_cqr_trsm_compact.cpp)
-  target_link_libraries(test_cqr_trsm_compact PRIVATE cqr_compact)
-  add_test(NAME portable_trsm COMMAND test_cqr_trsm_compact)
-
-  # MKL-backed validation of cqr_mkl_dormqr_compact (design doc section 7).
   if(CQR_WITH_MKL)
-    add_executable(test_cqr_ormqr_mkl src/test_cqr_ormqr_mkl.cpp)
-    target_link_libraries(test_cqr_ormqr_mkl
-      PRIVATE cqr_mkl_ext MKL::Compact)
-    add_test(NAME mkl_ormqr_suites COMMAND test_cqr_ormqr_mkl)
+    # MKL + dense-LAPACK validation of each cqr_mkl_?*_compact routine (the
+    # design docs' section 7): invariants vs LAPACK, cross-checks vs MKL's own
+    # compact kernels, and end-to-end solves.
+    foreach(routine geqrf ormqr potrf trsm)
+      add_executable(test_cqr_${routine}_mkl tests/test_cqr_${routine}_mkl.cpp)
+      target_link_libraries(test_cqr_${routine}_mkl PRIVATE cqr_mkl_ext MKL::Compact)
+      add_test(NAME mkl_${routine}_suites COMMAND test_cqr_${routine}_mkl)
+    endforeach()
 
-    # MKL + dense LAPACK validation of cqr_mkl_dgeqrf_compact (design doc
-    # section 7): factorization invariants, cross-check vs mkl_dgeqrf_compact,
-    # and the end-to-end solve. Needs cqr_compact for the ormqr apply step.
-    add_executable(test_cqr_geqrf_mkl src/test_cqr_geqrf_mkl.cpp)
-    target_link_libraries(test_cqr_geqrf_mkl
-      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
-    add_test(NAME mkl_geqrf_suites COMMAND test_cqr_geqrf_mkl)
-
-    # MKL + dense LAPACK validation of cqr_mkl_dpotrf_compact (design doc
-    # section 7): factorization invariants (reconstruction residual, untouched
-    # triangle, elementwise vs LAPACKE_dpotrf since the SPD factor is unique),
-    # cross-check vs mkl_dpotrf_compact, and the end-to-end SPD solve
-    # (potrf + two mkl_dtrsm_compact).
-    add_executable(test_cqr_potrf_mkl src/test_cqr_potrf_mkl.cpp)
-    target_link_libraries(test_cqr_potrf_mkl
-      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
-    add_test(NAME mkl_potrf_suites COMMAND test_cqr_potrf_mkl)
-
-    # MKL cross-check of cqr_mkl_?trsm_compact vs mkl_?trsm_compact over the full
-    # feature matrix, plus an end-to-end AX=B solve driven entirely by cqr
-    # kernels (no MKL compute).
-    add_executable(test_cqr_trsm_mkl src/test_cqr_trsm_mkl.cpp)
-    target_link_libraries(test_cqr_trsm_mkl
-      PRIVATE cqr_mkl_ext cqr_compact MKL::Compact)
-    add_test(NAME mkl_trsm_suites COMMAND test_cqr_trsm_mkl)
-
-    # The compact QR-solve example self-validates, so register it too.
+    # The example self-validates, and the benchmarks carry a correctness gate
+    # against per-matrix LAPACK, so they double as integration tests. A small
+    # pool with a single rep keeps CTest quick; 33 is not a multiple of any
+    # SIMD width, so the padded last group is exercised too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
-
-    # The benchmark carries a correctness gate (both paths must recover the
-    # known solution), so it doubles as an end-to-end integration test of the
-    # compact pipeline against per-matrix LAPACK. Run a small, quick pool
-    # (few matrices, a single rep) to keep CTest fast. 33 is not a multiple of
-    # the SIMD vector length, so the partial last group is exercised too.
-    add_test(NAME bench_qr_compact_integration COMMAND bench_qr_compact 33 1)
-    set_tests_properties(bench_qr_compact_integration PROPERTIES LABELS "integration")
-
-    # The factorization benchmark is accuracy-gated against per-matrix LAPACK,
-    # so register a small, quick run as an integration test too. 33 exercises a
-    # padded final group.
-    add_test(NAME bench_geqrf_compact_integration COMMAND bench_geqrf_compact 33 1)
-    set_tests_properties(bench_geqrf_compact_integration PROPERTIES LABELS "integration")
-
-    # The Cholesky factorization benchmark is likewise accuracy-gated against
-    # per-matrix LAPACK (elementwise vs LAPACKE_dpotrf, the SPD factor being
-    # unique), so register a small, quick run too. 33 exercises a padded group.
-    add_test(NAME bench_potrf_compact_integration COMMAND bench_potrf_compact 33 1)
-    set_tests_properties(bench_potrf_compact_integration PROPERTIES LABELS "integration")
+    foreach(prog bench_qr_compact bench_geqrf_compact bench_potrf_compact)
+      add_test(NAME ${prog}_integration COMMAND ${prog} 33 1)
+      set_tests_properties(${prog}_integration PROPERTIES LABELS "integration")
+    endforeach()
   endif()
 endif()

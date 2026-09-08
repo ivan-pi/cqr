@@ -21,8 +21,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "cqr_compact.h"         // dpotrf_compact / spotrf_compact
-#include "test_compact_util.hpp" // frand, gen_spd, MatrixBatch, pack/unpack, max_abs_diff
+#include "test_compact_util.hpp" // potrf_c, frand, gen_spd, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -61,19 +60,6 @@ template <class T> static void ref_potf2(char uplo, int n, T *A, int lda)
                         A[j + (size_t)r * lda] * A[j + (size_t)c * lda];
         }
     }
-}
-
-// MatrixBatch, pack_compact/unpack_compact, frand, max_abs_diff and gen_spd
-// live in test_compact_util.hpp (shared across the compact test suites).
-
-// precision-overloaded shim: pick d/s by the pointer type
-static int potrf_c(char lay, char up, int n, double *a, int ld, int V, int nm)
-{
-    return dpotrf_compact(lay, up, n, a, ld, V, nm);
-}
-static int potrf_c(char lay, char up, int n, float *a, int ld, int V, int nm)
-{
-    return spotrf_compact(lay, up, n, a, ld, V, nm);
 }
 
 // --------------------------- one test case --------------------------

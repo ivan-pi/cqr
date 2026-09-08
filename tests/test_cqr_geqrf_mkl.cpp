@@ -34,7 +34,7 @@
 
 #include "cqr_mkl_ext.h"
 #include "cqr_mkl_alloc.h"       /* mkl_alloc_bytes (calls mkl_malloc; links MKL) */
-#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, max_abs_diff */
+#include "test_compact_util.hpp" /* frand, norm1, batch_ptrs, matmul, known_solution */
 
 #include <cstdio>
 #include <cstdlib>
@@ -48,11 +48,7 @@ using namespace cqr::test;
 namespace {
 
 const double eps = std::numeric_limits<double>::epsilon();
-
-int vlen(MKL_COMPACT_PACK fmt)
-{
-    return cqr::detail::vlen_for_format<double>(fmt);
-}
+using cqr::detail::vlen_for_format;
 
 /* Input structures (a subset of the GPU competition's stress set). The QR
  * residual and orthogonality are backward-stable quantities, so they must hold
@@ -91,7 +87,7 @@ void gen_matrix(double *A, int m, int n, double cond, Structure s = DENSE)
 int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int V = vlen_for_format<double>(fmt);
     const int k = std::min(m, n);
     const size_t sA = (size_t)m * n, sT = (size_t)k;
 
@@ -187,7 +183,7 @@ int suite1(int nm, int m, int n, double cond, Structure structure = DENSE)
 int suite2(MKL_LAYOUT layout, int nm, int m, int n)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt);
+    const int V = vlen_for_format<double>(fmt);
     const int k = std::min(m, n);
     const bool row = (layout == MKL_ROW_MAJOR);
     const size_t sA = (size_t)m * n;
@@ -247,25 +243,15 @@ int suite2(MKL_LAYOUT layout, int nm, int m, int n)
 int suite3(int nm, int n, int nrhs)
 {
     const MKL_COMPACT_PACK fmt = mkl_get_format_compact();
-    const int V = vlen(fmt), m = n, k = n;
-
-    std::vector<double> X((size_t)n * nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i)
-            X[i + (size_t)j * n] = double(j + 1);
+    const int V = vlen_for_format<double>(fmt), m = n, k = n;
+    const std::vector<double> X = known_solution<double>(n, nrhs);
 
     const size_t sA = (size_t)n * n, sB = (size_t)n * nrhs;
     std::vector<double> A(nm * sA), B(nm * sB);
     for (int v = 0; v < nm; ++v) {
-        double *Av = A.data() + v * sA, *Bv = B.data() + v * sB;
+        double *Av = A.data() + v * sA;
         gen_matrix(Av, n, n, 0.0);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += Av[i + (size_t)l * n] * X[l + (size_t)j * n];
-                Bv[i + (size_t)j * n] = s;
-            }
+        matmul(n, nrhs, n, Av, n, X.data(), n, B.data() + v * sB, n); /* B = A X */
     }
     auto Ap = batch_ptrs<const double>(A.data(), nm, sA);
     auto Bp = batch_ptrs<const double>(B.data(), nm, sB);
@@ -321,13 +307,7 @@ int suite3(int nm, int n, int nrhs)
         const double *Xv = Xhat.data() + v * sB;
         worst_fwd = std::max(worst_fwd, max_abs_diff(Xv, X.data(), sB) /
                                             std::max(norm1(X.data(), n, nrhs), 1e-300));
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                double s = 0;
-                for (int l = 0; l < n; ++l)
-                    s += Av[i + (size_t)l * n] * Xv[l + (size_t)j * n];
-                AX[i + (size_t)j * n] = s;
-            }
+        matmul(n, nrhs, n, Av, n, Xv, n, AX.data(), n);
         worst_res = std::max(worst_res, max_abs_diff(AX.data(), Bv, sB) /
                                             std::max(norm1(Bv, n, nrhs), 1e-300));
     }
@@ -345,7 +325,8 @@ int suite3(int nm, int n, int nrhs)
 int main()
 {
     std::printf("MKL compact format = %d, V(double) = %d\n",
-                (int)mkl_get_format_compact(), vlen(mkl_get_format_compact()));
+                (int)mkl_get_format_compact(),
+                vlen_for_format<double>(mkl_get_format_compact()));
 
     int fails = 0;
 
