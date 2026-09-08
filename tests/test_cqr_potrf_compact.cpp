@@ -21,7 +21,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "test_compact_util.hpp" // potrf_c, frand, gen_spd, MatrixBatch, pack/unpack
+#include "test_compact_util.hpp" // compact<T>, frand, gen_spd, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -82,7 +82,7 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
     int ng = (nm + V - 1) / V;
     std::vector<T> ap((size_t)ng * n * n * V);
     pack_compact(A, ap.data(), n, V, rowmajor);
-    int info = potrf_c(layout, uplo, n, ap.data(), n, V, nm);
+    int info = compact<T>::potrf(layout, uplo, n, ap.data(), n, V, nm);
     MatrixBatch<T> Aout(nm, n, n);
     unpack_compact(Aout, ap.data(), n, V, rowmajor);
 
@@ -127,9 +127,9 @@ template <class T, int V> static int run_case(int nm, int n, char uplo, char lay
 
     std::printf("T=%-6s V=%-2d uplo=%c lay=%c nm=%-2d n=%-3d | fac:%.1e %s rec:%.1e %s "
                 "untouched:%s | info=%d %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, uplo, layout, nm, n, e_fac,
-                ok_f ? "OK" : "FAIL", e_rec, ok_r ? "OK" : "FAIL", ok_u ? "OK" : "FAIL",
-                info, ok_i ? "OK" : "FAIL");
+                compact<T>::name, V, uplo, layout, nm, n, e_fac, ok_f ? "OK" : "FAIL",
+                e_rec, ok_r ? "OK" : "FAIL", ok_u ? "OK" : "FAIL", info,
+                ok_i ? "OK" : "FAIL");
     return (!ok_f) + (!ok_r) + (!ok_u) + (!ok_i);
 }
 
@@ -169,7 +169,7 @@ template <class T, int V> static int run_nonspd(int n, char uplo, char layout)
     int ng = (nm + V - 1) / V;
     std::vector<T> ap((size_t)ng * n * n * V);
     pack_compact(A, ap.data(), n, V, rowmajor);
-    int info = potrf_c(layout, uplo, n, ap.data(), n, V, nm);
+    int info = compact<T>::potrf(layout, uplo, n, ap.data(), n, V, nm);
     MatrixBatch<T> Aout(nm, n, n);
     unpack_compact(Aout, ap.data(), n, V, rowmajor);
 
@@ -198,9 +198,8 @@ template <class T, int V> static int run_nonspd(int n, char uplo, char layout)
 
     std::printf("T=%-6s V=%-2d uplo=%c lay=%c n=%-3d non-SPD lane | siblings:%.1e %s "
                 "poison:%s info=%d %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, uplo, layout, n, e_spd,
-                ok_spd ? "OK" : "FAIL", ok_bad ? "OK" : "FAIL", info,
-                ok_info ? "OK" : "FAIL");
+                compact<T>::name, V, uplo, layout, n, e_spd, ok_spd ? "OK" : "FAIL",
+                ok_bad ? "OK" : "FAIL", info, ok_info ? "OK" : "FAIL");
     return (!ok_spd) + (!ok_bad) + (!ok_info);
 }
 

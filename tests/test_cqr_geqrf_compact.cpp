@@ -22,7 +22,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "test_compact_util.hpp" // C API shims, scalar references, MatrixBatch, pack/unpack
+#include "test_compact_util.hpp" // compact<T>, scalar references, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -46,7 +46,7 @@ template <class T, int V> static int run_case(int nm, int m, int n)
     std::vector<T> ap((size_t)ng * m * n * V), tp((size_t)ng * k * V);
     pack_compact(A, ap.data(), m, V);
 
-    int info = geqrf_c('C', m, n, ap.data(), m, tp.data(), V, nm);
+    int info = compact<T>::geqrf('C', m, n, ap.data(), m, tp.data(), V, nm);
 
     MatrixBatch<T> Aout(nm, m, n), tau_out(nm, k, 1);
     unpack_compact(Aout, ap.data(), m, V);
@@ -81,7 +81,7 @@ template <class T, int V> static int run_case(int nm, int m, int n)
         for (int idx = 0; idx < nm; ++idx)
             matmul(n, nrhs, n, A[idx], n, X.data(), n, B[idx], n); /* B = A X */
         pack_compact(B, bp.data(), n, V);
-        ormqr_c('T', n, nrhs, k, ap.data(), n, tp.data(), bp.data(), n, V, nm);
+        compact<T>::ormqr('T', n, nrhs, k, ap.data(), n, tp.data(), bp.data(), n, V, nm);
         MatrixBatch<T> Bo(nm, n, nrhs);
         unpack_compact(Bo, bp.data(), n, V);
         e_solve = 0;
@@ -100,9 +100,8 @@ template <class T, int V> static int run_case(int nm, int m, int n)
     bool ok_s = (e_solve < 0) || (e_solve <= tol_sol);
 
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d n=%-3d | H:%.1e %s tau:%.1e %s rec:%.1e %s",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, n, e_h,
-                ok_h ? "OK" : "FAIL", e_t, ok_t ? "OK" : "FAIL", e_rec,
-                ok_r ? "OK" : "FAIL");
+                compact<T>::name, V, nm, m, n, e_h, ok_h ? "OK" : "FAIL", e_t,
+                ok_t ? "OK" : "FAIL", e_rec, ok_r ? "OK" : "FAIL");
     if (e_solve >= 0) std::printf(" solve:%.1e %s", e_solve, ok_s ? "OK" : "FAIL");
     std::printf(" | info=%d\n", info);
     return (info != 0) + !ok_h + !ok_t + !ok_r + !ok_s;

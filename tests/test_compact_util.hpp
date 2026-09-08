@@ -155,34 +155,32 @@ void ref_trsm_upper(int n, int nrhs, const T *R, int lda, T *B, int ldb)
 }
 
 // ----------------------- portable C API, by scalar type ------------
-// The d/s entry point is picked by the pointer type, so the templated test
-// cases call one name for both precisions.
+// compact<T>::geqrf / ormqr / potrf / trsm forward to the d/s entry points of
+// cqr_compact.h, so the templated suites call one name for both precisions;
+// compact<T>::name labels their output.
+
+template <class T> struct compact;
 
 // clang-format off
-inline int geqrf_c(char l, int m, int n, double *a, int ld, double *t, int V, int nm)
-{ return dgeqrf_compact(l, m, n, a, ld, t, V, nm); }
-inline int geqrf_c(char l, int m, int n, float *a, int ld, float *t, int V, int nm)
-{ return sgeqrf_compact(l, m, n, a, ld, t, V, nm); }
-
-inline int ormqr_c(char tr, int m, int nr, int k, const double *a, int lda,
-                   const double *t, double *b, int ldb, int V, int nm)
-{ return dormqr_compact(tr, m, nr, k, a, lda, t, b, ldb, V, nm); }
-inline int ormqr_c(char tr, int m, int nr, int k, const float *a, int lda,
-                   const float *t, float *b, int ldb, int V, int nm)
-{ return sormqr_compact(tr, m, nr, k, a, lda, t, b, ldb, V, nm); }
-
-inline int potrf_c(char lay, char up, int n, double *a, int ld, int V, int nm)
-{ return dpotrf_compact(lay, up, n, a, ld, V, nm); }
-inline int potrf_c(char lay, char up, int n, float *a, int ld, int V, int nm)
-{ return spotrf_compact(lay, up, n, a, ld, V, nm); }
-
-inline int trsm_c(char lay, char si, char up, char tr, char di, int m, int n, double al,
-                  const double *a, int lda, double *b, int ldb, int V, int nm)
-{ return dtrsm_compact(lay, si, up, tr, di, m, n, al, a, lda, b, ldb, V, nm); }
-inline int trsm_c(char lay, char si, char up, char tr, char di, int m, int n, float al,
-                  const float *a, int lda, float *b, int ldb, int V, int nm)
-{ return strsm_compact(lay, si, up, tr, di, m, n, al, a, lda, b, ldb, V, nm); }
+#define CQR_TEST_COMPACT_DISPATCH(T, p, label)                                             \
+template <> struct compact<T> {                                                            \
+    static constexpr const char *name = label;                                             \
+    static int geqrf(char lay, int m, int n, T *a, int ld, T *tau, int V, int nm)          \
+    { return p##geqrf_compact(lay, m, n, a, ld, tau, V, nm); }                             \
+    static int ormqr(char tr, int m, int nrhs, int k, const T *a, int lda, const T *tau,   \
+                     T *b, int ldb, int V, int nm)                                         \
+    { return p##ormqr_compact(tr, m, nrhs, k, a, lda, tau, b, ldb, V, nm); }               \
+    static int potrf(char lay, char up, int n, T *a, int ld, int V, int nm)                \
+    { return p##potrf_compact(lay, up, n, a, ld, V, nm); }                                 \
+    static int trsm(char lay, char si, char up, char tr, char di, int m, int n, T alpha,   \
+                    const T *a, int lda, T *b, int ldb, int V, int nm)                     \
+    { return p##trsm_compact(lay, si, up, tr, di, m, n, alpha, a, lda, b, ldb, V, nm); }   \
+};
 // clang-format on
+
+CQR_TEST_COMPACT_DISPATCH(double, d, "double")
+CQR_TEST_COMPACT_DISPATCH(float, s, "float")
+#undef CQR_TEST_COMPACT_DISPATCH
 
 // ----------------------- input generation ----------------------------
 

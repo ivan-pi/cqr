@@ -96,6 +96,11 @@ underflow-safe scaling are out of scope for all of them.
 
 ## Project-wide
 
+- **Precision coverage.** Every suite is templated on the scalar type and runs
+  in FP64 and FP32; the MKL-backed ones reach MKL and LAPACK through the
+  `cqr_mkl<T>` / `mkl<T>` / `lapack<T>` dispatch structs of
+  `tests/test_mkl_util.hpp`. The FP32 cross-checks agree with
+  `mkl_s*_compact` to ~1e-6 (potrf bit-exact), gated at 1e-4.
 - **Threading.** Each routine's group loop is an OpenMP `parallel for`
   (static schedule, at most one thread per group) gated on two or more groups
   and a per-call work estimate above the measured fork/join break-even

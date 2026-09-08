@@ -24,7 +24,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "test_compact_util.hpp" // trsm_c, frand, gen_tri, tri_apply, MatrixBatch, pack/unpack
+#include "test_compact_util.hpp" // compact<T>, frand, gen_tri, tri_apply, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -128,8 +128,8 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     pack_compact(A, ap.data(), s, V);
     pack_compact(B, bp.data(), m, V);
 
-    int info = trsm_c('C', side, uplo, transa, diag, m, n, alpha, ap.data(), s, bp.data(),
-                      m, V, nm);
+    int info = compact<T>::trsm('C', side, uplo, transa, diag, m, n, alpha, ap.data(), s,
+                                bp.data(), m, V, nm);
 
     MatrixBatch<T> Bout(nm, m, n);
     unpack_compact(Bout, bp.data(), m, V);
@@ -159,8 +159,8 @@ static int run_case(char side, char uplo, char transa, char diag, int nm, int m,
     const bool ok = (worst <= rtol);
     std::printf("  T=%-6s V=%-2d side=%c uplo=%c tr=%c diag=%c nm=%-2d m=%-3d n=%-3d | "
                 "fwd %.1e res %.1e (rtol %.1e) info=%d %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, side, uplo, transa, diag, nm, m,
-                n, worst_fwd, worst_res, rtol, info, (ok && info == 0) ? "OK" : "FAIL");
+                compact<T>::name, V, side, uplo, transa, diag, nm, m, n, worst_fwd,
+                worst_res, rtol, info, (ok && info == 0) ? "OK" : "FAIL");
 
     return (info != 0) + !ok;
 }

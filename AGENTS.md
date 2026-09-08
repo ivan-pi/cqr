@@ -37,7 +37,9 @@ include/   public headers: cqr_compact.h (portable C API), cqr_mkl_ext.h
 src/       the templated kernels (cqr_*_compact.hpp, one per routine, on the
            shared cqr_compact_common.hpp) and the two adapter sources that
            implement the public headers: cqr_compact.cpp, cqr_mkl_ext.cpp
-tests/     portable (no BLAS) and MKL-backed suites, on test_compact_util.hpp
+tests/     portable (no BLAS) and MKL-backed suites, templated on the scalar
+           type; test_compact_util.hpp / test_mkl_util.hpp hold the helpers and
+           the compact<T> / cqr_mkl<T> / mkl<T> / lapack<T> dispatch structs
 examples/  the worked solve and the benchmarks (BENCHMARKS.md), on bench_util.hpp
 docs/      one design document per routine
 ```

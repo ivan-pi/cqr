@@ -140,9 +140,10 @@ The headers under `include/` are the project's API, the only files users need:
 | `src/cqr_trsm_compact.hpp` | Triangular-solve kernels: the tuned column-major `side='L'` row-dot path and the general strided kernel. |
 | `src/cqr_compact.cpp` | The portable C API: argument validation and `V` dispatch for all eight entry points. |
 | `src/cqr_mkl_ext.cpp` | The MKL-style API: MKL enum / `MKL_COMPACT_PACK` unwrapping for all eight entry points. |
-| `tests/test_compact_util.hpp` | Shared test helpers: RNG, error metrics, input generation, scalar reference kernels, Compact pack/unpack; header-only, no MKL. |
-| `tests/test_cqr_*_compact.cpp` | Portable self-contained suites (no BLAS): each kernel vs its scalar reference, plus C API validation. |
-| `tests/test_cqr_*_mkl.cpp` | MKL + dense-LAPACK validation: invariants vs LAPACK, cross-checks vs MKL's compact kernels, end-to-end solves. |
+| `tests/test_compact_util.hpp` | Shared test helpers: RNG, error metrics, input generation, scalar reference kernels, Compact pack/unpack, and `compact<T>` (the portable C API dispatched on the scalar type); header-only, no MKL. |
+| `tests/test_mkl_util.hpp` | Scalar-type dispatch for the MKL-backed suites: `cqr_mkl<T>` (routines under test), `mkl<T>` (MKL's compact API and kernels), `lapack<T>` (LAPACKE/CBLAS references). |
+| `tests/test_cqr_*_compact.cpp` | Portable self-contained suites (no BLAS): each kernel vs its scalar reference, plus C API validation, in FP64 and FP32. |
+| `tests/test_cqr_*_mkl.cpp` | MKL + dense-LAPACK validation, templated on the scalar type and run in FP64 and FP32: invariants vs LAPACK, cross-checks vs MKL's compact kernels, end-to-end solves. |
 | `examples/bench_util.hpp` | The benchmarks' shared harness (timing, aligned storage, command line). |
 
 ## Related work

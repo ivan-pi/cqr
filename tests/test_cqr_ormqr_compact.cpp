@@ -24,7 +24,7 @@
 #include <limits>
 #include <algorithm>
 
-#include "test_compact_util.hpp" // C API shims, scalar references, MatrixBatch, pack/unpack
+#include "test_compact_util.hpp" // compact<T>, scalar references, MatrixBatch, pack/unpack
 
 using namespace cqr::test;
 
@@ -105,7 +105,7 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     pack_compact(B, bp.data(), m, V);
 
     /* check 1: compact Q^T B vs scalar */
-    ormqr_c('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
+    compact<T>::ormqr('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
     double e1 = 0;
     for (int kk = 0; kk < nm; ++kk)
@@ -119,7 +119,7 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     }
 
     /* check 3: 'N' undoes 'T' */
-    ormqr_c('N', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
+    compact<T>::ormqr('N', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
     double e3 = 0;
     for (int kk = 0; kk < nm; ++kk)
@@ -129,8 +129,8 @@ template <class T, int V> static int run_case(int nm, int m, int nrhs)
     bool ok1 = e1 <= tol_exact * m, ok2 = e2 <= tol_solve, ok3 = e3 <= tol_exact * m * 10;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | QtB: %.2e %s | solve X: %.2e %s "
                 "| QQt=I: %.2e %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, e1,
-                ok1 ? "OK" : "FAIL", e2, ok2 ? "OK" : "FAIL", e3, ok3 ? "OK" : "FAIL");
+                compact<T>::name, V, nm, m, nrhs, e1, ok1 ? "OK" : "FAIL", e2,
+                ok2 ? "OK" : "FAIL", e3, ok3 ? "OK" : "FAIL");
     return !ok1 + !ok2 + !ok3;
 }
 
@@ -167,7 +167,7 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
     pack_compact(B, bp.data(), m, V);
 
     /* kernel: c := Q^T b */
-    ormqr_c('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
+    compact<T>::ormqr('T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V, nm);
     unpack_compact(Bout, bp.data(), m, V);
 
     /* R y = c, then back-permute x(jpvt(j)) = y(j); compare against X */
@@ -183,8 +183,7 @@ template <class T, int V> static int run_case_pivoted(int nm, int m, int nrhs)
 
     bool ok = e <= tol_solve;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | pivoted solve X: %.2e %s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, e,
-                ok ? "OK" : "FAIL");
+                compact<T>::name, V, nm, m, nrhs, e, ok ? "OK" : "FAIL");
     return !ok;
 }
 
@@ -206,8 +205,8 @@ template <class T> static void bench(int V, int nm, int m, int nrhs, int reps)
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int r = 0; r < reps; ++r)
-        ormqr_c((r & 1) ? 'N' : 'T', m, nrhs, k, ap.data(), m, tp.data(), bp.data(), m, V,
-                nm);
+        compact<T>::ormqr((r & 1) ? 'N' : 'T', m, nrhs, k, ap.data(), m, tp.data(),
+                          bp.data(), m, V, nm);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double sec = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
 
@@ -215,7 +214,7 @@ template <class T> static void bench(int V, int nm, int m, int nrhs, int reps)
     for (int kk = 0; kk < k; ++kk)
         fl_mat += 4.0 * (m - kk) * nrhs;
     std::printf("T=%-6s V=%-2d nm=%-2d m=%-3d nrhs=%d | %8.3f us/rep | %7.2f GFLOP/s\n",
-                sizeof(T) == 8 ? "double" : "float", V, nm, m, nrhs, 1e6 * sec / reps,
+                compact<T>::name, V, nm, m, nrhs, 1e6 * sec / reps,
                 fl_mat * nm * reps / sec * 1e-9);
     volatile T sink = bp[0];
     (void)sink;
