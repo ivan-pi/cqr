@@ -246,27 +246,34 @@ void trsm_compact(bool left, bool upper, bool rowmajor, bool tran, bool unit, In
      * group's m x n block through the same strided B view the solve uses. */
     if (alpha == T(0)) {
         using VT = typename pack<T, V>::type;
-        for_each_group<V>(nm, (double)m * n * V /* stores */, [&](Int g) {
-            auto B = make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
-            for (Int j = 0; j < n; ++j)
-                for (Int i = 0; i < m; ++i)
-                    B(i, j) = VT{};
-        });
+        for_each_group<V>(
+            nm,
+            [&](Int g) {
+                auto B =
+                    make_view<T, V, Int>(bp + (std::size_t)g * str_b, rowmajor, ldbp);
+                for (Int j = 0; j < n; ++j)
+                    for (Int i = 0; i < m; ++i)
+                        B(i, j) = VT{};
+            },
+            (double)m * n * V /* stores per group */);
         return;
     }
 
-    /* ~substitution: s^2 times the other extent, all lanes */
-    for_each_group<V>(nm, (double)s * s * (left ? n : m) * V, [&](Int g) {
-        const T *a = ap + (std::size_t)g * str_a;
-        T *b = bp + (std::size_t)g * str_b;
-        if (left && !rowmajor)
-            trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b, ldbp);
-        else
-            trsm_compact_group_strided<T, V, Int>(
-                left, upper, tran, unit, m, n, alpha,
-                make_const_view<T, V, Int>(a, rowmajor, ldap),
-                make_view<T, V, Int>(b, rowmajor, ldbp));
-    });
+    for_each_group<V>(
+        nm,
+        [&](Int g) {
+            const T *a = ap + (std::size_t)g * str_a;
+            T *b = bp + (std::size_t)g * str_b;
+            if (left && !rowmajor)
+                trsm_left_dot<T, V, Int>(upper, tran, unit, m, n, alpha, a, ldap, b,
+                                         ldbp);
+            else
+                trsm_compact_group_strided<T, V, Int>(
+                    left, upper, tran, unit, m, n, alpha,
+                    make_const_view<T, V, Int>(a, rowmajor, ldap),
+                    make_view<T, V, Int>(b, rowmajor, ldbp));
+        },
+        (double)s * s * (left ? n : m) * V /* ~substitution flops per group */);
 }
 
 } /* namespace detail */

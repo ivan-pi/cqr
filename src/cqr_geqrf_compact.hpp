@@ -129,10 +129,14 @@ void geqrf_compact(bool rowmajor, Int m, Int n, T *ap, Int ldap, T *taup, Int nm
     const std::size_t str_a = group_stride(rowmajor, ldap, m, n, V);
     const std::size_t str_t = (std::size_t)k * V;
 
-    for_each_group<V>(nm, 2.0 * m * n * k * V /* ~geqr2 */, [&](Int g) {
-        geqrf_compact_group<T, V, Int>(
-            m, n, make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap), taup + g * str_t);
-    });
+    for_each_group<V>(
+        nm,
+        [&](Int g) {
+            geqrf_compact_group<T, V, Int>(
+                m, n, make_view<T, V, Int>(ap + g * str_a, rowmajor, ldap),
+                taup + g * str_t);
+        },
+        2.0 * m * n * k * V /* ~geqr2 flops per group */);
 }
 
 } /* namespace detail */

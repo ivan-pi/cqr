@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 #ifdef _OPENMP
@@ -189,7 +190,7 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* for_each_group: the loop over groups, threaded with OpenMP.         */
 /*                                                                     */
 /* Every all-groups driver is                                          */
-/*     for_each_group<V>(nm, flops_per_group, [&](Int g) { ... });     */
+/*     for_each_group<V>(nm, [&](Int g) { ... }, flops_per_group);     */
 /* which runs body(g) for g = 0 .. ceil(nm/V)-1. Built with OpenMP the */
 /* loop is a static-schedule `omp parallel for` on a team of           */
 /* min(ngroups, omp_get_max_threads()) threads -- groups are           */
@@ -198,7 +199,9 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* the call is worth a fork: at least two groups, more than one thread */
 /* available, and total work above parallel_min_flops. Otherwise it is */
 /* a plain serial loop that never enters the OpenMP runtime (a single  */
-/* group costs nothing beyond the gate's few ICV reads).               */
+/* group costs nothing beyond the gate's few ICV reads). The work      */
+/* estimate is optional: omit it and the call is assumed worth a fork  */
+/* whenever it has two groups and two threads.                         */
 /*                                                                     */
 /* parallel_min_flops was measured, not guessed: a fork/join costs     */
 /* 2-3 us on the 4-core AVX-512 box this was tuned on (gcc, libgomp);  */
@@ -237,7 +240,8 @@ template <typename Int> inline bool parallel_groups(Int ngroups, double flops) n
 }
 
 template <int V, typename Int, typename Body>
-void for_each_group(Int nm, double flops_per_group, Body &&body)
+void for_each_group(Int nm, Body &&body,
+                    double flops_per_group = std::numeric_limits<double>::infinity())
 {
     const Int ngroups = (nm + V - 1) / V;
 #ifdef _OPENMP

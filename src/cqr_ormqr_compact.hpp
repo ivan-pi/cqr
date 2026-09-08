@@ -142,7 +142,7 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
     const std::size_t str_t = (std::size_t)k * V;
     const std::size_t str_c = group_stride(rowmajor, ldcp, m, n, V);
 
-    for_each_group<V>(nm, 4.0 * k * len * npanel * V /* ~orm2r */, [&](Int g) {
+    for_each_group<V>(nm, [&](Int g) {
         /* A is swept down its columns. For side='R' the reflectors act on the
          * rows of C, so the kernel is handed C^T. */
         auto C = make_view<T, V, Int>(cp + g * str_c, rowmajor, ldcp);
