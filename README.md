@@ -65,13 +65,14 @@ Useful options: `-DCQR_WITH_MKL=OFF` (portable kernel only, no MKL) and
 ## Threading
 
 Every routine threads its loop over the *groups* of `V` interleaved matrices
-with OpenMP (static schedule; the groups are independent and equal-sized), but
-only when the team would be fully used: the region is active iff
-`ngroups >= omp_get_max_threads()`, so a small batch never pays for idle
-threads. Because that count is OpenMP's team size *at the current nesting
-level*, the routines compose with a caller's own parallel loop: called from
-inside it they run serially by default (no competing thread pools), and the
-standard per-level thread list enables nested splitting when wanted, e.g.
+with OpenMP (static schedule over a team of at most one thread per group; the
+groups are independent and equal-sized), but only when the call has at least two
+groups and enough work to pay for the fork/join -- about `2e5` flops, the
+measured break-even (`-DCQR_OMP_MIN_FLOPS=...` overrides it). Because the
+thread count is OpenMP's team size *at the current nesting level*, the routines
+compose with a caller's own parallel loop: called from inside it they run
+serially by default (no competing thread pools), and the standard per-level
+thread list enables nested splitting when wanted, e.g.
 
 ```sh
 OMP_NUM_THREADS=8,2 OMP_MAX_ACTIVE_LEVELS=2 ./my_app   # 8 outer x 2 inner threads

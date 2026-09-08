@@ -189,13 +189,19 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* Threading over groups.                                              */
 /*                                                                     */
 /* Every all-groups driver runs its group loop as                      */
-/*     CQR_OMP_PARALLEL_GROUPS(ngroups)                                */
+/*     CQR_OMP_PARALLEL_GROUPS(ngroups, flops)                         */
 /*     for (Int g = 0; g < ngroups; ++g) ...                           */
-/* which, when built with OpenMP, is                                   */
-/*     #pragma omp parallel for schedule(static) if(parallel_groups(ngroups)) */
-/* Groups are independent and equal-sized, so a static schedule        */
-/* balances exactly. The if-clause keeps the region serial unless      */
-/* every thread of the would-be team gets at least one group.         */
+/* which, built with OpenMP, is a static-schedule `omp parallel for`   */
+/* over a team of min(ngroups, omp_get_max_threads()) threads -- no    */
+/* thread ever idles on a group count -- gated by parallel_groups():   */
+/* at least two groups, more than one thread available, and enough    */
+/* work in the whole call to pay for the fork/join. `flops` is the     */
+/* driver's estimate of the call's total arithmetic, all lanes. The    */
+/* threshold parallel_min_flops comes from a measured sweep (4 cores,  */
+/* AVX-512, gcc -O3): a fork/join costs 2-3 us, calls below ~1e5 flops */
+/* ran slower in parallel, and everything above 2e5 gained >= 1.4x, so */
+/* 2e5 is the default; override with -DCQR_OMP_MIN_FLOPS=... if your   */
+/* machine's fork cost differs.                                        */
 /*                                                                     */
 /* Composition: the gate first asks whether one more nesting level may */
 /* be active at all, then uses omp_get_max_threads(), the team size at */
@@ -207,27 +213,44 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* specific.                                                           */
 /* ------------------------------------------------------------------ */
 
-template <typename Int> inline bool parallel_groups(Int ngroups) noexcept
+#ifndef CQR_OMP_MIN_FLOPS
+#define CQR_OMP_MIN_FLOPS 2e5
+#endif
+constexpr double parallel_min_flops = CQR_OMP_MIN_FLOPS;
+
+template <typename Int> inline bool parallel_groups(Int ngroups, double flops) noexcept
 {
 #ifdef _OPENMP
-    /* A region here can only be active if nesting still allows one more level
-     * (from a caller's own parallel loop that is normally false, and without
-     * this check the runtime would still build an inactive one-thread team). */
     if (omp_get_active_level() >= omp_get_max_active_levels()) return false;
-    const Int nthreads = omp_get_max_threads();
-    return nthreads > 1 && ngroups >= nthreads;
+    return ngroups >= 2 && omp_get_max_threads() > 1 && flops >= parallel_min_flops;
 #else
     (void)ngroups;
+    (void)flops;
     return false;
+#endif
+}
+
+/* Team size for the group loop: one thread per group at most. */
+template <typename Int> inline int parallel_team(Int ngroups) noexcept
+{
+#ifdef _OPENMP
+    const Int nthreads = omp_get_max_threads();
+    return static_cast<int>(ngroups < nthreads ? ngroups : nthreads);
+#else
+    (void)ngroups;
+    return 1;
 #endif
 }
 
 #ifdef _OPENMP
 #define CQR_PRAGMA(x) _Pragma(#x)
-#define CQR_OMP_PARALLEL_GROUPS(ngroups)                                                 \
-    CQR_PRAGMA(omp parallel for schedule(static) if (::cqr::detail::parallel_groups(ngroups)))
+#define CQR_OMP_PARALLEL_GROUPS(ngroups, flops)                                          \
+    CQR_PRAGMA(omp parallel for schedule(static)                                         \
+                   if (::cqr::detail::parallel_groups(ngroups, flops))                   \
+                       num_threads(::cqr::detail::parallel_team(ngroups)))
 #else
-#define CQR_OMP_PARALLEL_GROUPS(ngroups)
+/* No OpenMP: consume the arguments so the drivers' estimates are not "unused". */
+#define CQR_OMP_PARALLEL_GROUPS(ngroups, flops) ((void)(ngroups), (void)(flops));
 #endif
 
 } /* namespace detail */

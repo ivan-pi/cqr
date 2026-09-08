@@ -143,7 +143,8 @@ void ormqr_compact(bool left, bool rowmajor, char trans, Int m, Int n, Int k, co
     const std::size_t str_c = group_stride(rowmajor, ldcp, m, n, V);
 
     const Int ngroups = (nm + V - 1) / V;
-    CQR_OMP_PARALLEL_GROUPS(ngroups)
+    const double flops = 4.0 * k * len * npanel * V * ngroups; /* ~orm2r, all lanes */
+    CQR_OMP_PARALLEL_GROUPS(ngroups, flops)
     for (Int g = 0; g < ngroups; ++g) {
         /* A is swept down its columns. For side='R' the reflectors act on the
          * rows of C, so the kernel is handed C^T. */

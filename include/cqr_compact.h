@@ -26,13 +26,14 @@
  * calling process.
  *
  * Threading: built with OpenMP (the default, -DCQR_WITH_OPENMP=ON), each routine
- * runs its loop over groups of V matrices as a static-schedule parallel loop,
- * active only when every thread of the team would get at least one group
- * (ngroups >= omp_get_max_threads()). The team size is the one OpenMP reports
- * at the current nesting level, so calling these routines from your own
- * parallel loop leaves the inner loop serial (no competing pools) unless you
- * enable nested parallelism, e.g. OMP_NUM_THREADS=8,2 OMP_MAX_ACTIVE_LEVELS=2.
- * Results do not depend on the thread count: groups are independent.
+ * runs its loop over groups of V matrices as a static-schedule parallel loop on
+ * a team of min(ngroups, omp_get_max_threads()) threads, active only when the
+ * call has at least two groups and enough work (about 2e5 flops, the measured
+ * fork/join break-even; -DCQR_OMP_MIN_FLOPS overrides). The thread count is the
+ * one OpenMP reports at the current nesting level, so calling these routines
+ * from your own parallel loop leaves the inner loop serial (no competing pools)
+ * unless you enable nested parallelism, e.g. OMP_NUM_THREADS=8,2
+ * OMP_MAX_ACTIVE_LEVELS=2. Results do not depend on the thread count.
  *
  * Alignment: the compact buffers may start at any address aligned to the scalar
  * type (the SIMD element carries relaxed alignment, so loads and stores never
