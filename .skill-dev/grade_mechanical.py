@@ -62,8 +62,12 @@ def grade(eval_name, run_dir):
         add("Verified the fix by actually running something", None, manual=True)
 
     elif eval_name == "esimd-cpu-reality":
+        # SYCL_ESIMD_KERNEL is the canonical Intel macro and expands to
+        # [[intel::sycl_explicit_simd]]; matching only the raw attribute
+        # spelling scores a correct program as invalid.
         add("Valid ESIMD program (esimd namespace + explicit_simd attribute)",
-            find(src, r"intel::esimd") and find(src, r"sycl_explicit_simd"))
+            find(src, r"intel::esimd") and
+            find(src, r"sycl_explicit_simd", r"SYCL_ESIMD_KERNEL", r"SYCL_ESIMD_FUNCTION"))
         # Check for REPORTED compile success, not a binary on disk: a run that
         # tidied up its executables afterwards compiled just as successfully as
         # one that left them lying around, and scoring the artifact instead of
@@ -71,7 +75,7 @@ def grade(eval_name, run_dir):
         add("Compiled successfully with icpx",
             find(blob, r"compil\w+ (cleanly|successfully|fine|ok)", r"exit(ed)? 0",
                  r"compile[sd]? (with )?(no|zero) (warnings|errors)",
-                 r"icpx .*-fsycl.*\n?.*(success|OK)"))
+                 r"icpx .*-fsycl", r"echo \$\?\s*\n?0\b"))
         add("Actually attempted to run the binary",
             find(blob, r"ext_intel_esimd is not supported", r"\./esimd", r"ran (it|the)",
                  r"executed"))
