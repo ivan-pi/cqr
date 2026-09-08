@@ -115,10 +115,14 @@ unpivoted `mkl_?getrfnp_compact`. Status vs. the design document:
   of scope (per-lane pivot decisions do not vectorize; MKL's own compact LU
   makes the same trade). No overflow/underflow-safe scaling; complex Hermitian
   variants out of scope; the strided (column-major upper / row-major lower)
-  sweep is correctness-first, as for `potrf`. No benchmark yet: the potrf
-  benchmark harness ports directly for the factorization, and a `sysvnp` vs.
-  `sytrfnp + sytrsnp` comparison on out-of-cache pools is the measurement that
-  would quantify the fusion (design 6.8).
+  sweep is correctness-first, as for `potrf`. No factorization-only
+  benchmark (the potrf harness would port directly), and no `sysvnp` vs.
+  `sytrfnp + sytrsnp` measurement on out-of-cache pools yet -- the comparison
+  that would quantify the fusion (design 6.8).
+- **Benchmarked:** `bench_sysvnp_compact` -- the fused solve on the whole pool
+  vs per-matrix `LAPACKE_dsysv` (Bunch-Kaufman), on indefinite diagonally
+  dominant pools, both checked against the known solution
+  (`examples/BENCHMARKS.md`).
 
 ## trsm (`cqr_mkl_dtrsm_compact`)
 

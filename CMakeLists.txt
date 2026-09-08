@@ -66,11 +66,12 @@ if(CQR_WITH_MKL)
   cqr_link_openmp(cqr_mkl_ext)
   add_library(cqr::mkl_ext ALIAS cqr_mkl_ext)
 
-  # Examples: the worked batched solve and the three throughput benchmarks
+  # Examples: the worked batched solve and the four throughput benchmarks
   # (examples/BENCHMARKS.md). All link MKL for the pack/unpack routines and the
   # per-matrix LAPACK baselines; the benchmarks parallelize their outer loop
   # with OpenMP when available.
-  foreach(prog solve_qr_compact bench_qr_compact bench_geqrf_compact bench_potrf_compact)
+  foreach(prog solve_qr_compact bench_qr_compact bench_geqrf_compact bench_potrf_compact
+               bench_sysvnp_compact)
     add_executable(${prog} examples/${prog}.cpp)
     target_link_libraries(${prog} PRIVATE cqr_mkl_ext MKL::Compact)
     if(prog MATCHES "^bench_")
@@ -108,7 +109,7 @@ if(CQR_BUILD_TESTS)
     # pool with a single rep keeps CTest quick; 33 is not a multiple of any
     # SIMD width, so the padded last group is exercised too.
     add_test(NAME example_solve_qr_compact COMMAND solve_qr_compact)
-    foreach(prog bench_qr_compact bench_geqrf_compact bench_potrf_compact)
+    foreach(prog bench_qr_compact bench_geqrf_compact bench_potrf_compact bench_sysvnp_compact)
       add_test(NAME ${prog}_integration COMMAND ${prog} 33 1)
       set_tests_properties(${prog}_integration PROPERTIES LABELS "integration")
     endforeach()

@@ -108,10 +108,17 @@ Results are independent of the thread count.
   lower, `A = L L^T`), reporting GFLOP/s and a geometric-mean speedup, checked
   elementwise against LAPACK (the SPD factor is unique). Same `--size-sweep` /
   `--simdlen` flags and the same `-march=native` caveat as `bench_geqrf_compact`.
+* `bench_sysvnp_compact [--nrhs=k] [nmat] [reps]` - the end-to-end symmetric
+  *solve*: `cqr_mkl_dsysvnp_compact` (the fused unpivoted LDL^T factor + solve,
+  one call on the pool) vs per-matrix `LAPACKE_dsysv` (Bunch-Kaufman), over the
+  same square-size range on indefinite but diagonally dominant pools, both paths
+  checked against the known solution. No MKL yardstick: MKL has no compact
+  `sytrf`. Same `--size-sweep` / `--simdlen` flags and `-march=native` caveat.
 
 All are registered with CTest (`example_solve_qr_compact`,
 `bench_qr_compact_integration`, `bench_geqrf_compact_integration`,
-`bench_potrf_compact_integration`). The three benchmarks -- what they measure,
+`bench_potrf_compact_integration`, `bench_sysvnp_compact_integration`). The four
+benchmarks -- what they measure,
 how to run them, the flags, and the `-march=native` caveat -- are documented in
 detail in [`examples/BENCHMARKS.md`](examples/BENCHMARKS.md).
 
