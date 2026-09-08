@@ -196,10 +196,11 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* min(ngroups, omp_get_max_threads()) threads -- groups are           */
 /* independent and equal-sized, so a static schedule balances exactly  */
 /* and no thread ever idles -- but only when the call is worth a fork: */
-/* at least two groups, more than one thread                           */
+/* more than one thread for at least two groups,                      */
 /* available, and total work above parallel_min_flops; the if-clause  */
 /* serializes it otherwise (a single group then costs only the gate's  */
-/* few ICV reads and an inactive one-thread region). The work          */
+/* few ICV reads and an inactive one-thread region), and a single group */
+/* returns before touching the runtime at all. The work                */
 /* estimate is optional: omit it and the call is assumed worth a fork  */
 /* whenever it has two groups and two threads.                         */
 /*                                                                     */
@@ -231,12 +232,16 @@ void for_each_group(
     [[maybe_unused]] double flops_per_group = std::numeric_limits<double>::infinity())
 {
     const Int ngroups = (nm + V - 1) / V;
+    if (ngroups == 1) { /* the common single-group call: no OpenMP runtime at all */
+        body(0);
+        return;
+    }
 #ifdef _OPENMP
+    /* at most one thread per group; nthreads > 1 also implies ngroups >= 2 */
     const Int nthreads =
         ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
     const bool parallel = omp_get_active_level() < omp_get_max_active_levels() &&
-                          ngroups >= 2 && nthreads > 1 &&
-                          flops_per_group * ngroups >= parallel_min_flops;
+                          nthreads > 1 && flops_per_group * ngroups >= parallel_min_flops;
 #pragma omp parallel for schedule(static) num_threads(nthreads) if (parallel)
 #endif
     for (Int g = 0; g < ngroups; ++g)
