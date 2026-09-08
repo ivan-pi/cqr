@@ -195,8 +195,8 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* loop is a static-schedule `omp parallel for` on a team of           */
 /* min(ngroups, omp_get_max_threads()) threads -- groups are           */
 /* independent and equal-sized, so a static schedule balances exactly  */
-/* and no thread ever idles -- but only when parallel_groups() says    */
-/* the call is worth a fork: at least two groups, more than one thread */
+/* and no thread ever idles -- but only when the call is worth a fork: */
+/* at least two groups, more than one thread                           */
 /* available, and total work above parallel_min_flops; the if-clause  */
 /* serializes it otherwise (a single group then costs only the gate's  */
 /* few ICV reads and an inactive one-thread region). The work          */
@@ -225,20 +225,6 @@ template <typename F> bool for_vlen(int V, F &&f)
 #endif
 constexpr double parallel_min_flops = CQR_OMP_MIN_FLOPS;
 
-/* Is a call of `ngroups` groups and `flops` total work worth a parallel
- * region here and now? Always false without OpenMP. */
-template <typename Int>
-inline bool parallel_groups([[maybe_unused]] Int ngroups,
-                            [[maybe_unused]] double flops) noexcept
-{
-#ifdef _OPENMP
-    return omp_get_active_level() < omp_get_max_active_levels() && ngroups >= 2 &&
-           omp_get_max_threads() > 1 && flops >= parallel_min_flops;
-#else
-    return false;
-#endif
-}
-
 template <int V, typename Int, typename Body>
 void for_each_group(
     Int nm, Body &&body,
@@ -246,9 +232,12 @@ void for_each_group(
 {
     const Int ngroups = (nm + V - 1) / V;
 #ifdef _OPENMP
-    const Int team = ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
-#pragma omp parallel for schedule(static)                                                \
-    num_threads(team) if (parallel_groups(ngroups, flops_per_group * ngroups))
+    const Int nthreads =
+        ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
+    const bool parallel = omp_get_active_level() < omp_get_max_active_levels() &&
+                          ngroups >= 2 && nthreads > 1 &&
+                          flops_per_group * ngroups >= parallel_min_flops;
+#pragma omp parallel for schedule(static) num_threads(nthreads) if (parallel)
 #endif
     for (Int g = 0; g < ngroups; ++g)
         body(g);

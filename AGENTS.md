@@ -68,12 +68,11 @@ and compact one-liners that clang-format would expand are fenced with
   emits aligned loads that fault on 16-byte-aligned buffers -- issue #34).
 - **Threading over groups.** Every all-groups driver is a call to
   `for_each_group<V>(nm, flops_per_group, body)` (`cqr_compact_common.hpp`):
-  a static-schedule `omp parallel for` on a team of at most one thread per
-  group when `parallel_groups` says the call is worth a fork, otherwise a plain
-  loop that never enters the OpenMP runtime. Keep new drivers on it; do not add
-  threading inside a group kernel. The gate refuses when nesting is exhausted
-  (that is what makes the library compose with a caller's outer parallel
-  loop), when there is a single group, or below `parallel_min_flops`.
+  a static-schedule `omp parallel for` on at most one thread per group, gated
+  by an if-clause. Keep new drivers on it; do not add threading inside a group
+  kernel. The gate refuses when nesting is exhausted (that is what makes the
+  library compose with a caller's outer parallel loop), when there is a single
+  group, or below `parallel_min_flops`.
 - **One kernel per routine.** Every kernel addresses its operands through
   `BatchView` (strides `si`, `sj`), so column-major, row-major, and ormqr's
   `side='R'` are the same code with different strides. Register blocking is
