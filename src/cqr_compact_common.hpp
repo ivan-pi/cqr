@@ -197,9 +197,9 @@ template <typename F> bool for_vlen(int V, F &&f)
 /* independent and equal-sized, so a static schedule balances exactly  */
 /* and no thread ever idles -- but only when parallel_groups() says    */
 /* the call is worth a fork: at least two groups, more than one thread */
-/* available, and total work above parallel_min_flops. Otherwise it is */
-/* a plain serial loop that never enters the OpenMP runtime (a single  */
-/* group costs nothing beyond the gate's few ICV reads). The work      */
+/* available, and total work above parallel_min_flops; the if-clause  */
+/* serializes it otherwise (a single group then costs only the gate's  */
+/* few ICV reads and an inactive one-thread region). The work          */
 /* estimate is optional: omit it and the call is assumed worth a fork  */
 /* whenever it has two groups and two threads.                         */
 /*                                                                     */
@@ -227,34 +227,28 @@ constexpr double parallel_min_flops = CQR_OMP_MIN_FLOPS;
 
 /* Is a call of `ngroups` groups and `flops` total work worth a parallel
  * region here and now? Always false without OpenMP. */
-template <typename Int> inline bool parallel_groups(Int ngroups, double flops) noexcept
+template <typename Int>
+inline bool parallel_groups([[maybe_unused]] Int ngroups,
+                            [[maybe_unused]] double flops) noexcept
 {
 #ifdef _OPENMP
     return omp_get_active_level() < omp_get_max_active_levels() && ngroups >= 2 &&
            omp_get_max_threads() > 1 && flops >= parallel_min_flops;
 #else
-    (void)ngroups;
-    (void)flops;
     return false;
 #endif
 }
 
 template <int V, typename Int, typename Body>
-void for_each_group(Int nm, Body &&body,
-                    double flops_per_group = std::numeric_limits<double>::infinity())
+void for_each_group(
+    Int nm, Body &&body,
+    [[maybe_unused]] double flops_per_group = std::numeric_limits<double>::infinity())
 {
     const Int ngroups = (nm + V - 1) / V;
 #ifdef _OPENMP
-    if (parallel_groups(ngroups, flops_per_group * ngroups)) {
-        const Int team =
-            ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
-#pragma omp parallel for schedule(static) num_threads(team)
-        for (Int g = 0; g < ngroups; ++g)
-            body(g);
-        return;
-    }
-#else
-    (void)flops_per_group;
+    const Int team = ngroups < omp_get_max_threads() ? ngroups : omp_get_max_threads();
+#pragma omp parallel for schedule(static)                                                \
+    num_threads(team) if (parallel_groups(ngroups, flops_per_group * ngroups))
 #endif
     for (Int g = 0; g < ngroups; ++g)
         body(g);
