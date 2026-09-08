@@ -11,13 +11,14 @@
  * layout, with MKL's own compact kernel as a second yardstick (all three
  * benchmarks are documented in examples/BENCHMARKS.md). To measure the
  * factorization kernels rather than data movement, the pool is packed into
- * compact form once, up front; only the
- * factorization is timed, and the destroyed input is restored (untimed) before
- * each pass. The two compact paths are driven from an OpenMP outer loop over the
- * groups of V interleaved matrices -- the intended "outer multi-threaded loop"
- * usage -- with MKL's own threading pinned to 1; the per-matrix path parallelizes
- * over matrices the same way. The factorization is checked (untimed) against
- * per-matrix LAPACK, so the benchmark doubles as an integration test.
+ * compact form once, up front; only the factorization is timed, and the
+ * destroyed input is restored (untimed) before each pass. The cqr path is one
+ * call on the whole pool -- the routine threads its own loop over groups. MKL's
+ * compact kernel is not threaded here (sequential MKL; its threading is pinned
+ * to 1 in any case), so it and the per-matrix LAPACK path are driven from an
+ * OpenMP loop of the same thread count, group by group / matrix by matrix. The
+ * factorization is checked (untimed) against per-matrix LAPACK, so the
+ * benchmark doubles as an integration test.
  *
  * Usage:  bench_geqrf_compact [--size-sweep=nmin:nmax[:stride]] [--simdlen=2|4|8]
  *         [nmat] [reps]      (defaults: 512 matrices, 3 reps)
@@ -77,13 +78,21 @@ struct Pool {
     }
 };
 
-/* Factor a pre-packed compact pool in place, one group of V per OpenMP
- * iteration (the intended outer-loop usage). `use_cqr` selects our kernel or
- * MKL's; both see the identical compact buffer. */
-void factor_compact(bool use_cqr, double *ap, double *taup, int m, int n, int ngroups,
-                    int V, MKL_COMPACT_PACK fmt, MKL_INT lwork)
+/* Factor a pre-packed compact pool of nmat matrices in place. cqr: one call on
+ * the whole pool, threaded inside the library. MKL: an OpenMP loop over the
+ * groups of V (its compact kernel is not threaded in this build), so both paths
+ * run on the same thread count. */
+void factor_compact(bool use_cqr, double *ap, double *taup, int m, int n, int nmat, int V,
+                    MKL_COMPACT_PACK fmt, MKL_INT lwork)
 {
-    const int k = std::min(m, n);
+    if (use_cqr) {
+        std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
+        MKL_INT info;
+        cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap, m, taup, work.data(), lwork,
+                               &info, fmt, nmat);
+        return;
+    }
+    const int k = std::min(m, n), ngroups = (nmat + V - 1) / V;
 #pragma omp parallel
     {
         std::vector<double> work((size_t)std::max<MKL_INT>(lwork, 1));
@@ -92,12 +101,8 @@ void factor_compact(bool use_cqr, double *ap, double *taup, int m, int n, int ng
         for (int g = 0; g < ngroups; ++g) {
             double *apg = ap + (size_t)g * m * n * V; /* group stride m*n*V */
             double *taupg = taup + (size_t)g * k * V;
-            if (use_cqr)
-                cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, apg, m, taupg, work.data(),
-                                       lwork, &info, fmt, V);
-            else
-                mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, apg, m, taupg, work.data(), lwork,
-                                   &info, fmt, V);
+            mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, apg, m, taupg, work.data(), lwork,
+                               &info, fmt, V);
         }
     }
 }
@@ -133,13 +138,12 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
         Ap[v] = const_cast<double *>(P.a.data()) + v * sA;
     mkl_dgepack_compact(MKL_COL_MAJOR, m, n, Ap.data(), m, ap.get(), m, fmt, nmat);
 
-    const int ngroups = (nmat + V - 1) / V;
     MKL_INT lwork = -1, info;
     double wq;
     cqr_mkl_dgeqrf_compact(MKL_COL_MAJOR, m, n, ap.get(), m, tp.get(), &wq, -1, &info,
                            fmt, V);
     lwork = (MKL_INT)wq;
-    factor_compact(true, ap.get(), tp.get(), m, n, ngroups, V, fmt, lwork);
+    factor_compact(true, ap.get(), tp.get(), m, n, nmat, V, fmt, lwork);
 
     std::vector<double> H(nmat * sA), tau(nmat * (size_t)k);
     std::vector<double *> Hp(nmat), Tp(nmat);
@@ -189,7 +193,6 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
     for (int n = nmin; n <= nmax; n += stride) {
         const int m = n, k = n;
         Pool P(m, n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nmat);
         MKL_INT sz_t = mkl_dget_size_compact(k, 1, fmt, nmat);
@@ -210,7 +213,7 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
 
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
         const double t = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt, lwork);
+            factor_compact(true, work_ap.get(), taup.get(), m, n, nmat, V, fmt, lwork);
         });
         std::printf("%4d | %10.3e | %11.2f | %11.2e\n", n, t,
                     nmat * geqrf_gflop(m, n) / t, nmat / t);
@@ -264,7 +267,6 @@ int main(int argc, char **argv)
     for (int n : sizes) {
         const int m = n, k = n;
         Pool P(m, n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         /* pristine packed buffer + two working copies (cqr, mkl) */
         MKL_INT sz_a = mkl_dget_size_compact(m, n, fmt, nmat);
@@ -296,11 +298,11 @@ int main(int argc, char **argv)
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
 
         double t_cqr = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
+            factor_compact(true, work_ap.get(), taup.get(), m, n, nmat, V, fmt,
                            lwork_cqr);
         });
         double t_mkl = best_time(reps, restore, [&] {
-            factor_compact(false, work_ap.get(), taup.get(), m, n, ngroups, V, fmt,
+            factor_compact(false, work_ap.get(), taup.get(), m, n, nmat, V, fmt,
                            lwork_mkl);
         });
         double t_lap = best_time(

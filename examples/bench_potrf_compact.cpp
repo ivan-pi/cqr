@@ -16,11 +16,12 @@
  * Cholesky data flow. To measure the factorization kernels rather than data
  * movement, the pool is packed into compact form once, up front; only the
  * factorization is timed, and the destroyed input is restored (untimed) before
- * each pass. The two compact paths are driven from an OpenMP outer loop over the
- * groups of V interleaved matrices -- the intended "outer multi-threaded loop"
- * usage -- with MKL's own threading pinned to 1; the per-matrix path parallelizes
- * over matrices the same way. The factorization is checked (untimed) against
- * per-matrix LAPACK, so the benchmark doubles as an integration test.
+ * each pass. The cqr path is one call on the whole pool -- the routine threads
+ * its own loop over groups. MKL's compact kernel is not threaded here
+ * (sequential MKL; its threading is pinned to 1 in any case), so it and the
+ * per-matrix LAPACK path are driven from an OpenMP loop of the same thread
+ * count. The factorization is checked (untimed) against per-matrix LAPACK, so
+ * the benchmark doubles as an integration test.
  *
  * Unlike ?geqrf, ?potrf needs no workspace, so there is no lwork query and no
  * per-thread work array (as in mkl_?potrf_compact / LAPACKE_dpotrf).
@@ -98,25 +99,23 @@ struct Pool {
     }
 };
 
-/* Factor a pre-packed compact pool in place, one group of V per OpenMP iteration
- * (the intended outer-loop usage), column-major lower (A = L L^T). `use_cqr`
- * selects our kernel or MKL's; both see the identical compact buffer. No
- * workspace is needed (unlike geqrf), so there is no per-thread work array. */
-void factor_compact(bool use_cqr, double *ap, int n, int ngroups, int V,
+/* Factor a pre-packed compact pool of nmat matrices in place, column-major
+ * lower (A = L L^T). cqr: one call on the whole pool, threaded inside the
+ * library. MKL: an OpenMP loop over the groups of V (its compact kernel is not
+ * threaded in this build), so both paths run on the same thread count. */
+void factor_compact(bool use_cqr, double *ap, int n, int nmat, int V,
                     MKL_COMPACT_PACK fmt)
 {
-#pragma omp parallel
-    {
-        MKL_INT info;
-#pragma omp for schedule(static)
-        for (int g = 0; g < ngroups; ++g) {
-            double *apg = ap + (size_t)g * n * n * V; /* group stride n*n*V */
-            if (use_cqr)
-                cqr_mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt,
-                                       V);
-            else
-                mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt, V);
-        }
+    MKL_INT info;
+    if (use_cqr) {
+        cqr_mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, ap, n, &info, fmt, nmat);
+        return;
+    }
+    const int ngroups = (nmat + V - 1) / V;
+#pragma omp parallel for schedule(static) private(info)
+    for (int g = 0; g < ngroups; ++g) {
+        double *apg = ap + (size_t)g * n * n * V; /* group stride n*n*V */
+        mkl_dpotrf_compact(MKL_COL_MAJOR, MKL_LOWER, n, apg, n, &info, fmt, V);
     }
 }
 
@@ -146,8 +145,7 @@ double factor_error(const Pool &P, MKL_COMPACT_PACK fmt, int V)
         Ap[v] = const_cast<double *>(P.a.data()) + v * sA;
     mkl_dgepack_compact(MKL_COL_MAJOR, n, n, Ap.data(), n, ap.get(), n, fmt, nmat);
 
-    const int ngroups = (nmat + V - 1) / V;
-    factor_compact(true, ap.get(), n, ngroups, V, fmt);
+    factor_compact(true, ap.get(), n, nmat, V, fmt);
 
     std::vector<double> H(nmat * sA);
     std::vector<double *> Hp(nmat);
@@ -195,7 +193,6 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
 
     for (int n = nmin; n <= nmax; n += stride) {
         Pool P(n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
         auto pristine = cqr::detail::mkl_alloc_bytes<double>(sz_a);
@@ -207,9 +204,8 @@ void run_sweep(int nmat, int reps, int nmin, int nmax, int stride, MKL_COMPACT_P
                             nmat);
 
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
-        const double t = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), n, ngroups, V, fmt);
-        });
+        const double t = best_time(
+            reps, restore, [&] { factor_compact(true, work_ap.get(), n, nmat, V, fmt); });
         std::printf("%4d | %10.3e | %11.2f | %11.2e\n", n, t, nmat * potrf_gflop(n) / t,
                     nmat / t);
     }
@@ -261,7 +257,6 @@ int main(int argc, char **argv)
     double log_speed_vs_lapack = 0.0;
     for (int n : sizes) {
         Pool P(n, nmat);
-        const int ngroups = (nmat + V - 1) / V;
 
         /* pristine packed buffer + two working copies (cqr, mkl) */
         MKL_INT sz_a = mkl_dget_size_compact(n, n, fmt, nmat);
@@ -279,11 +274,10 @@ int main(int argc, char **argv)
          * (untimed) before each timed pass */
         auto restore = [&] { std::memcpy(work_ap.get(), pristine.get(), sz_a); };
 
-        double t_cqr = best_time(reps, restore, [&] {
-            factor_compact(true, work_ap.get(), n, ngroups, V, fmt);
-        });
+        double t_cqr = best_time(
+            reps, restore, [&] { factor_compact(true, work_ap.get(), n, nmat, V, fmt); });
         double t_mkl = best_time(reps, restore, [&] {
-            factor_compact(false, work_ap.get(), n, ngroups, V, fmt);
+            factor_compact(false, work_ap.get(), n, nmat, V, fmt);
         });
         double t_lap = best_time(
             reps, [&] { pool_work = P.a; },

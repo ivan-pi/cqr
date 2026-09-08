@@ -41,11 +41,15 @@ cmake -S . -B build -DBLA_VENDOR=Intel10_64lp_seq -DCMAKE_BUILD_TYPE=Release \
 ```
 
 Correctness (the gate each benchmark carries) is independent of these flags; only
-throughput changes. The outer loop over the pool is parallelized with OpenMP when
-available, with MKL's own threading pinned to 1. That is the library's
-*composition* case: each call inside the outer loop sees a one-thread team, so
-the routines' own group-level threading (README, "Threading") stays serial and
-the two never compete.
+throughput changes. Threading: the factorization benchmarks' cqr paths hand the
+whole pool to one call and let the library thread its loop over groups (README,
+"Threading"). The MKL compact paths link sequential MKL (no internal threading;
+`mkl_set_num_threads(1)` pins it regardless), so they and the per-matrix LAPACK
+path are driven from an OpenMP loop over groups / matrices with the same thread
+count -- every path gets the same parallelism. `bench_qr_compact` keeps its
+whole *pipeline* per group inside the caller's loop for both backends: the five
+steps then work on one group's cache-resident buffers, which measured 15-55%
+faster than three whole-pool calls streaming the pool through separate passes.
 
 ## `bench_geqrf_compact`
 

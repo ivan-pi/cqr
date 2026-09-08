@@ -97,11 +97,17 @@ underflow-safe scaling are out of scope for all of them.
 ## Project-wide
 
 - **Threading.** Each routine's group loop is an OpenMP `parallel for`
-  (static schedule) gated on `ngroups >= omp_get_max_threads()`, so it stays
-  serial for small batches and inside a caller's own parallel region unless
-  nested parallelism is enabled (`OMP_NUM_THREADS=8,2`). Not yet done: a
-  benchmark mode that hands the whole pool to one call (the current
-  benchmarks drive their own outer loop, the composition case).
+  (static schedule, at most one thread per group) gated on two or more groups
+  and a per-call work estimate above the measured fork/join break-even
+  (`2e5` flops), so it stays serial for small calls and inside a caller's own
+  parallel region unless nested parallelism is enabled (`OMP_NUM_THREADS=8,2`).
+  The factorization benchmarks' cqr paths hand the whole pool to one call; the
+  MKL and LAPACK reference paths keep an outer OpenMP loop (sequential MKL is
+  not threaded). The solve benchmark keeps its pipeline per group in the
+  caller's loop: whole-pool geqrf/ormqr/trsm calls stream the pool three times
+  and measured 15-55% slower than the cache-resident per-group pipeline. A
+  fused per-group solve driver (the `?gels`-style entry above) is the way to
+  get library-side threading for the whole solve without that penalty.
 - **No install/export.** `CMakeLists.txt` defines no `install()`/package-config
   rules, so the project is not consumable via `find_package(cqr)`.
 - **Alignment contract.** Compact buffers are correct at any `T` alignment on

@@ -22,7 +22,15 @@
  * threading pinned to 1); each size is timed `reps` times keeping the best, and
  * geometric-mean speedups across sizes are printed at the end. (Details on the
  * timing harness and the in-place working copy are at best_time() and
- * run_unbatched().) A single right-hand side per system (nrhs = 1); every path
+ * run_unbatched().)
+ *
+ * The batched pipeline is deliberately driven group by group from the caller's
+ * loop, not as three whole-pool calls (which the routines would thread
+ * internally): per group, pack -> geqrf -> ormqr -> trsm -> unpack all touch one
+ * group's buffers, a few tens of KB that stay in L1/L2 across the five steps,
+ * whereas whole-pool calls stream the entire pool through five separate passes.
+ * Measured on 4 cores, the whole-pool variant was 15-55% slower over n = 10..100.
+ * (For a single factorization the two are equivalent; see bench_geqrf_compact.) A single right-hand side per system (nrhs = 1); every path
  * is checked against the known solution X == 1, so the reported error is a
  * forward error, not a comparison to LAPACK.
  *
