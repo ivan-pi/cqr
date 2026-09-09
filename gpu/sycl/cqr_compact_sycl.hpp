@@ -255,13 +255,21 @@ inline void trsm_upper_slot(int g, int v, const T *ap, int ldap, T *bp, int ldbp
 {
     matrix_view<const T, V> R = col_major<const T, V>(ap, g, v, ldap, n);
     matrix_view<T, V> B = col_major<T, V>(bp, g, v, ldbp, nrhs);
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = n - 1; i >= 0; --i) {
+    /* Row loop outermost so the diagonal is read once per row instead of once
+     * per (row, rhs). Back-substitution permits the swap: every row below i is
+     * already solved for all columns before row i is reached. The division
+     * itself is left alone -- hoisting a reciprocal instead would change the
+     * result in the last ulp, and the sub-group variant below is documented to
+     * agree with this one bit for bit. */
+    for (int i = n - 1; i >= 0; --i) {
+        const T d = R(i, i);
+        for (int j = 0; j < nrhs; ++j) {
             T s = B(i, j);
             for (int l = i + 1; l < n; ++l)
                 s -= R(i, l) * B(l, j);
-            B(i, j) = s / R(i, i);
+            B(i, j) = s / d;
         }
+    }
 }
 
 /* ================================================================== *
@@ -442,13 +450,18 @@ inline void trsm_upper_slot_sg(sycl::sub_group sg, int g, const T *ap, int ldap,
                           static_cast<std::size_t>(V), static_cast<std::size_t>(ldap) * V};
     sg_view<T, V> B{sg, bp + static_cast<std::size_t>(g) * ldbp * nrhs * V,
                     static_cast<std::size_t>(V), static_cast<std::size_t>(ldbp) * V};
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = n - 1; i >= 0; --i) {
+    /* Row loop outermost: the diagonal is column-invariant, so this turns
+     * n*nrhs sub-group block reads of R(i,i) into n. Same division as the
+     * per-lane variant above, so the two stay bit-identical. */
+    for (int i = n - 1; i >= 0; --i) {
+        const T d = R.load(i, i);
+        for (int j = 0; j < nrhs; ++j) {
             T s = B.load(i, j);
             for (int l = i + 1; l < n; ++l)
                 s -= R.load(i, l) * B.load(l, j);
-            B.store(i, j, s / R.load(i, i));
+            B.store(i, j, s / d);
         }
+    }
 }
 
 } /* namespace gpu */

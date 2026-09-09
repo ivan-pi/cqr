@@ -40,48 +40,23 @@ static double secs(clk::duration d) { return std::chrono::duration<double>(d).co
 
 constexpr int V = 8; // AVX-512 double interleave width (a valid Xe sub-group size too)
 
-// SYCL ormqr (trans='T', side='L', column-major) on resident device pointers --
-// the same body as gpu/sycl/cqr_compact_sycl.cpp. `sg` selects the nd_range +
-// reqd_sub_group_size(V) launch; otherwise a plain range parallel_for.
+// SYCL ormqr (trans='T', side='L', column-major) on resident device pointers,
+// calling the header's ormqr_slot primitive. `sg` selects the nd_range +
+// reqd_sub_group_size(V) launch; otherwise a plain range parallel_for -- the
+// launch shape is the only thing this wrapper varies.
 template <bool sg>
 static sycl::event sycl_ormqr(sycl::queue &q, int n, int nrhs, int nm, const double *ap,
                               const double *tp, double *bp)
 {
     const int k = n, m = n, ldap = n, ldbp = n, ng = (nm + V - 1) / V;
-    const size_t sa = (size_t)ldap * k * V, st = (size_t)k * V, sb = (size_t)ldbp * nrhs * V;
-    // JB=4 RHS-column register blocking (matches cqr_compact_sycl.cpp::ormqr_slot).
+    // Call the SHIPPED primitive rather than a copy of it. This lambda used to
+    // hand-inline ormqr_slot's JB=4 body; a benchmark that re-implements the
+    // kernel it measures silently stops measuring the real one the moment
+    // either is tuned, so the "SG-implicit" column could drift away from the
+    // code it advertises without any test failing.
     auto body = [=](int g, int v) {
-        const double *As = ap + (size_t)g * sa + v, *Ts = tp + (size_t)g * st + v;
-        double *Bs = bp + (size_t)g * sb + v;
-        auto A = [=](int i, int j) -> const double & { return As[((size_t)j * ldap + i) * V]; };
-        auto B = [=](int i, int j) -> double & { return Bs[((size_t)j * ldbp + i) * V]; };
-        for (int s = 0; s < k; ++s) {
-            const int kk = s;
-            const double t = Ts[(size_t)kk * V];
-            int j = 0;
-            for (; j + 4 <= nrhs; j += 4) {
-                double w0 = B(kk, j), w1 = B(kk, j + 1), w2 = B(kk, j + 2), w3 = B(kk, j + 3);
-                for (int i = kk + 1; i < m; ++i) {
-                    const double av = A(i, kk);
-                    w0 += av * B(i, j); w1 += av * B(i, j + 1);
-                    w2 += av * B(i, j + 2); w3 += av * B(i, j + 3);
-                }
-                B(kk, j) -= t * w0; B(kk, j + 1) -= t * w1;
-                B(kk, j + 2) -= t * w2; B(kk, j + 3) -= t * w3;
-                w0 *= t; w1 *= t; w2 *= t; w3 *= t;
-                for (int i = kk + 1; i < m; ++i) {
-                    const double av = A(i, kk);
-                    B(i, j) -= av * w0; B(i, j + 1) -= av * w1;
-                    B(i, j + 2) -= av * w2; B(i, j + 3) -= av * w3;
-                }
-            }
-            for (; j < nrhs; ++j) {
-                double w = B(kk, j);
-                for (int i = kk + 1; i < m; ++i) w += A(i, kk) * B(i, j);
-                B(kk, j) -= t * w; w *= t;
-                for (int i = kk + 1; i < m; ++i) B(i, j) -= A(i, kk) * w;
-            }
-        }
+        cqr::gpu::ormqr_slot<double, V>(g, v, ap, ldap, tp, bp, ldbp, m, nrhs, k,
+                                        true); // trans: apply Q^T
     };
     if constexpr (sg)
         return q.parallel_for(

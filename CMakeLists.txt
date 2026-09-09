@@ -160,11 +160,38 @@ if(CQR_WITH_SYCL)
       "scripts/install-sycl-toolchain.sh.")
   endif()
 
-  # When built inside a conda (conda-forge dpcpp) environment, bake the SYCL
-  # runtime path into the binaries so they run without a manual LD_LIBRARY_PATH.
+  # Bake the SYCL runtime path into the binaries so they run without a manual
+  # LD_LIBRARY_PATH -- ctest and CI do not inherit an activated shell.
+  #
+  # Ask the driver where its own runtime lives rather than guessing from
+  # CONDA_PREFIX. That variable is set only on the conda-forge route, so the
+  # guess left every other layout (/opt/intel/oneapi via setvars.sh, a tarball,
+  # a module file, a source build) with no rpath at all -- and the omission is
+  # invisible until load time, as "libsycl.so.N: cannot open shared object
+  # file". -print-file-name works on any DPC++ layout.
   set(_cqr_sycl_rpath "")
-  if(DEFINED ENV{CONDA_PREFIX})
-    set(_cqr_sycl_rpath "$ENV{CONDA_PREFIX}/lib")
+  execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=libsycl.so
+    OUTPUT_VARIABLE _cqr_libsycl OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET RESULT_VARIABLE _cqr_libsycl_rc)
+  # A driver that cannot find the library echoes the bare name back.
+  if(_cqr_libsycl_rc EQUAL 0 AND IS_ABSOLUTE "${_cqr_libsycl}")
+    get_filename_component(_cqr_sycl_rpath "${_cqr_libsycl}" DIRECTORY)
+  endif()
+
+  # One carrier for the usage requirements every SYCL target needs. Spelling
+  # them out per target invited exactly the drift they had developed: two
+  # targets were missing an include directory they relied on, and the rpath is
+  # silently optional -- forgetting it configures and builds cleanly, then
+  # fails only when ctest runs outside an activated shell.
+  add_library(cqr_sycl_opts INTERFACE)
+  target_include_directories(cqr_sycl_opts INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
+  target_compile_features(cqr_sycl_opts INTERFACE cxx_std_17)
+  target_compile_options(cqr_sycl_opts INTERFACE -fsycl)
+  target_link_options(cqr_sycl_opts INTERFACE -fsycl)
+  if(_cqr_sycl_rpath)
+    target_link_options(cqr_sycl_opts INTERFACE "-Wl,-rpath,${_cqr_sycl_rpath}")
   endif()
 
   # The backend source is compiled directly into each test so the four C symbols
@@ -174,14 +201,7 @@ if(CQR_WITH_SYCL)
   add_executable(test_ormqr_sycl
     gpu/sycl/test_ormqr_sycl.cpp gpu/sycl/cqr_compact_sycl.cpp)
   foreach(tgt test_geqrf_sycl test_ormqr_sycl)
-    target_include_directories(${tgt} PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
-    target_compile_features(${tgt} PRIVATE cxx_std_17)
-    target_compile_options(${tgt} PRIVATE -fsycl)
-    target_link_options(${tgt} PRIVATE -fsycl)
-    if(_cqr_sycl_rpath)
-      target_link_options(${tgt} PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
-    endif()
+    target_link_libraries(${tgt} PRIVATE cqr_sycl_opts)
     if(CQR_BUILD_TESTS)
       add_test(NAME ${tgt} COMMAND ${tgt})
     endif()
@@ -196,15 +216,8 @@ if(CQR_WITH_SYCL)
   add_executable(test_ormqr_sycl_sg
     gpu/sycl/test_ormqr_sycl.cpp gpu/sycl/cqr_compact_sycl.cpp)
   foreach(tgt test_geqrf_sycl_sg test_ormqr_sycl_sg)
-    target_include_directories(${tgt} PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
-    target_compile_features(${tgt} PRIVATE cxx_std_17)
+    target_link_libraries(${tgt} PRIVATE cqr_sycl_opts)
     target_compile_definitions(${tgt} PRIVATE CQR_SYCL_EXPLICIT_SG)
-    target_compile_options(${tgt} PRIVATE -fsycl)
-    target_link_options(${tgt} PRIVATE -fsycl)
-    if(_cqr_sycl_rpath)
-      target_link_options(${tgt} PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
-    endif()
     if(CQR_BUILD_TESTS)
       add_test(NAME ${tgt} COMMAND ${tgt})
     endif()
@@ -215,14 +228,7 @@ if(CQR_WITH_SYCL)
   # Self-checking against a known solution, so it is also registered as a test
   # (exit 77 -> skipped when the device lacks the required sub-group size).
   add_executable(example_fused_qr_solve gpu/sycl/example_fused_qr_solve.cpp)
-  target_include_directories(example_fused_qr_solve PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
-  target_compile_features(example_fused_qr_solve PRIVATE cxx_std_17)
-  target_compile_options(example_fused_qr_solve PRIVATE -fsycl)
-  target_link_options(example_fused_qr_solve PRIVATE -fsycl)
-  if(_cqr_sycl_rpath)
-    target_link_options(example_fused_qr_solve PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
-  endif()
+  target_link_libraries(example_fused_qr_solve PRIVATE cqr_sycl_opts)
   if(CQR_BUILD_TESTS)
     add_test(NAME example_fused_qr_solve COMMAND example_fused_qr_solve)
     set_tests_properties(example_fused_qr_solve PROPERTIES SKIP_RETURN_CODE 77)
@@ -232,14 +238,7 @@ if(CQR_WITH_SYCL)
   # apply-Q^T / trsm as separate operations (with and without per-call copies).
   # Pure SYCL (no OpenMP); self-checking.
   add_executable(bench_fused_solve gpu/sycl/bench_fused_solve.cpp)
-  target_include_directories(bench_fused_solve PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/sycl")
-  target_compile_features(bench_fused_solve PRIVATE cxx_std_17)
-  target_compile_options(bench_fused_solve PRIVATE -fsycl)
-  target_link_options(bench_fused_solve PRIVATE -fsycl)
-  if(_cqr_sycl_rpath)
-    target_link_options(bench_fused_solve PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
-  endif()
+  target_link_libraries(bench_fused_solve PRIVATE cqr_sycl_opts)
 
   # Optional throughput benchmark: SYCL vs the vector-types ormqr kernel (needs
   # OpenMP for the multi-core vec path). CPU-vs-CPU on the OpenCL CPU device when
@@ -247,13 +246,10 @@ if(CQR_WITH_SYCL)
   find_package(OpenMP QUIET)
   if(OpenMP_CXX_FOUND)
     add_executable(bench_ormqr_sycl_vs_vec gpu/sycl/bench_ormqr_sycl_vs_vec.cpp)
-    target_include_directories(bench_ormqr_sycl_vs_vec PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(bench_ormqr_sycl_vs_vec PRIVATE cqr_sycl_opts)
     if(DEFINED ENV{CONDA_PREFIX})
       target_include_directories(bench_ormqr_sycl_vs_vec PRIVATE "$ENV{CONDA_PREFIX}/include")
     endif()
-    target_compile_features(bench_ormqr_sycl_vs_vec PRIVATE cxx_std_17)
-    target_compile_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
     # Fairness: the vector-types kernel is host code and must target the host's
     # widest SIMD, or it is compared against the SYCL JIT (which uses AVX-512
     # regardless) with one hand tied. The SYCL device code is unaffected by these
@@ -262,10 +258,6 @@ if(CQR_WITH_SYCL)
     check_cxx_compiler_flag("-march=native" CQR_BENCH_HAS_MARCH_NATIVE)
     if(CQR_BENCH_HAS_MARCH_NATIVE)
       target_compile_options(bench_ormqr_sycl_vs_vec PRIVATE -O3 -march=native)
-    endif()
-    target_link_options(bench_ormqr_sycl_vs_vec PRIVATE -fsycl)
-    if(_cqr_sycl_rpath)
-      target_link_options(bench_ormqr_sycl_vs_vec PRIVATE "-Wl,-rpath,${_cqr_sycl_rpath}")
     endif()
     target_link_libraries(bench_ormqr_sycl_vs_vec PRIVATE OpenMP::OpenMP_CXX)
   endif()

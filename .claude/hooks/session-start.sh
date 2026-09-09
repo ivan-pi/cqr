@@ -5,9 +5,15 @@
 # The base image already ships CMake, g++/gcc and GNU Make.
 #
 # cqr requires Intel MKL (see the Prerequisites section of README.md); the
-# distro `libmkl-dev` package supplies it. We use the distro package rather
-# than oneAPI because Intel's own apt repo (apt.repos.intel.com) is blocked
-# by the web network policy.
+# distro `libmkl-dev` package supplies it, from Ubuntu's own archive, with no
+# extra repository to configure.
+#
+# This is a size/simplicity choice, not a reachability one. An earlier version
+# of this comment claimed Intel's apt repo (apt.repos.intel.com) was blocked by
+# the web network policy; that was measured reachable on 2026-09-08. Egress is
+# configured per environment and changes, so do not treat either answer as
+# fixed -- probe if it matters. `intel-oneapi-mkl-devel` is the alternative
+# when a newer MKL is needed.
 set -euo pipefail
 
 # Async: let the session start while MKL installs in the background.

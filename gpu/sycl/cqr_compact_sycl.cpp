@@ -142,8 +142,10 @@ void ormqr_launch(sycl::queue &q, bool use_sg, bool trans, int m, int nrhs, int 
     sycl::free(bp, q);
 }
 
-/* Argument validation, byte-for-byte the CPU dispatch contract (info = -j). */
-template <typename T>
+/* Argument validation, byte-for-byte the CPU dispatch contract (info = -j).
+ * Not templated on the element type: the checks are all on shape and layout,
+ * so a type parameter would only force every call site to pick one for
+ * nothing. */
 int validate_geqrf(char layout, int m, int n, int ldap, int V, int nm, bool &row)
 {
     const bool col = (layout == 'C' || layout == 'c');
@@ -158,7 +160,6 @@ int validate_geqrf(char layout, int m, int n, int ldap, int V, int nm, bool &row
     return 0;
 }
 
-template <typename T>
 int validate_ormqr(char trans, int m, int nrhs, int k, int ldap, int ldbp, int V, int nm)
 {
     const bool trans_ok =
@@ -208,7 +209,7 @@ extern "C" int dgeqrf_compact(char layout, int m, int n, double *ap, int ldap,
                               double *taup, int V, int nm)
 {
     bool row;
-    const int info = validate_geqrf<double>(layout, m, n, ldap, V, nm, row);
+    const int info = validate_geqrf(layout, m, n, ldap, V, nm, row);
     if (info != 0) return info;
     if (m == 0 || n == 0 || nm == 0) return 0;
     geqrf_dispatch<double>(row, m, n, ap, ldap, taup, V, nm);
@@ -219,7 +220,7 @@ extern "C" int sgeqrf_compact(char layout, int m, int n, float *ap, int ldap, fl
                               int V, int nm)
 {
     bool row;
-    const int info = validate_geqrf<float>(layout, m, n, ldap, V, nm, row);
+    const int info = validate_geqrf(layout, m, n, ldap, V, nm, row);
     if (info != 0) return info;
     if (m == 0 || n == 0 || nm == 0) return 0;
     geqrf_dispatch<float>(row, m, n, ap, ldap, taup, V, nm);
@@ -230,7 +231,7 @@ extern "C" int dormqr_compact(char trans, int m, int nrhs, int k, const double *
                               int ldap, const double *taup, double *bp, int ldbp, int V,
                               int nm)
 {
-    const int info = validate_ormqr<double>(trans, m, nrhs, k, ldap, ldbp, V, nm);
+    const int info = validate_ormqr(trans, m, nrhs, k, ldap, ldbp, V, nm);
     if (info != 0) return info;
     if (m == 0 || nrhs == 0 || k == 0 || nm == 0) return 0;
     const bool tr = (trans == 'T' || trans == 't');
@@ -242,7 +243,7 @@ extern "C" int sormqr_compact(char trans, int m, int nrhs, int k, const float *a
                               int ldap, const float *taup, float *bp, int ldbp, int V,
                               int nm)
 {
-    const int info = validate_ormqr<float>(trans, m, nrhs, k, ldap, ldbp, V, nm);
+    const int info = validate_ormqr(trans, m, nrhs, k, ldap, ldbp, V, nm);
     if (info != 0) return info;
     if (m == 0 || nrhs == 0 || k == 0 || nm == 0) return 0;
     const bool tr = (trans == 'T' || trans == 't');
